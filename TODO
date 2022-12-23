@@ -1,0 +1,17 @@
+Actors (might be independant):
+  Actuators:
+    * multiple ports
+    * state?
+
+  sensors:
+    * multiple inputs
+
+  serial lines:
+    * port(s) if applicable
+
+Device:
+  * serials (port identifier string, category, e.g. ap uart)
+  * actuators
+     (identifier, category e.g. power, binary with state, direction)
+  * sensors (identifier, category e.g. temp))
+     e.g. external temperature probes
