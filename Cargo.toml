@@ -12,3 +12,4 @@ features = "0.10.0"
 nix = "0.26.1"
 tokio = { version = "1.23.0", features = ["full"] }
 tokio-serial = "5.4.4"
+vt100 = "0.15.1"

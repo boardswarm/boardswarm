@@ -1,7 +1,51 @@
-use std::os::unix::prelude::AsRawFd;
+use std::{os::unix::prelude::AsRawFd, path::PathBuf};
 
+use clap::Parser;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio_serial::SerialPortBuilderExt;
+
+const INIT: &[u8] = b"\x1b7\x1b[?47h\x1b[2J\x1b[H\x1b[?25h";
+const DEINIT: &[u8] = b"\x1b[?47l\x1b8\x1b[?25h";
+
+struct Terminal {
+    parser: vt100::Parser,
+    stdout: tokio::io::Stdout,
+}
+
+impl Terminal {
+    async fn new(width: u16, height: u16, mut stdout: tokio::io::Stdout) -> Self {
+        let parser = vt100::Parser::new(height, width, 0);
+        stdout.write_all(INIT).await.unwrap();
+        stdout.flush().await.unwrap();
+        Self { parser, stdout }
+    }
+
+    fn process(&mut self, bytes: &[u8]) {
+        self.parser.process(bytes);
+    }
+
+    async fn update(&mut self) {
+        let screen = self.parser.screen();
+        self.stdout
+            .write_all(b"\x1b[?25l\x1b[1;1H\x1b[K TEST 1234\n")
+            .await
+            .unwrap();
+        let rows = screen.rows_formatted(0, 80).enumerate();
+        for (i, row) in rows {
+            self.stdout
+                .write_all(format!("\x1b[{};1H\x1b[K\x1b[m", i + 3).as_bytes())
+                .await
+                .unwrap();
+            self.stdout.write_all(&row).await.unwrap();
+        }
+        let (row, column) = screen.cursor_position();
+        self.stdout
+            .write_all(format!("\x1b[{};{}H\x1b[?25h", row + 3, column + 1).as_bytes())
+            .await
+            .unwrap();
+        self.stdout.flush().await.unwrap();
+    }
+}
 
 struct InputMonitor {
     saw_escape: bool,
@@ -41,9 +85,17 @@ where
     }
 }
 
+#[derive(clap::Parser)]
+struct Opts {
+    path: String,
+    rate: u32,
+}
+
 #[tokio::main]
 async fn main() {
-    let serial = tokio_serial::new("/dev/ttyUSB1", 1_500_000)
+    let opt = Opts::parse();
+
+    let serial = tokio_serial::new(&opt.path, opt.rate)
         .open_native_async()
         .unwrap();
 
@@ -58,40 +110,21 @@ async fn main() {
     let stdin_termios = nix::sys::termios::tcgetattr(stdin_fd).unwrap();
 
     let mut stdin_termios_mod = stdin_termios.clone();
-    stdin_termios_mod
-        .local_flags
-        .remove(nix::sys::termios::LocalFlags::ECHO);
-    stdin_termios_mod
-        .local_flags
-        .remove(nix::sys::termios::LocalFlags::ICANON);
-    stdin_termios_mod
-        .local_flags
-        .remove(nix::sys::termios::LocalFlags::ISIG);
-
-    stdin_termios_mod
-        .input_flags
-        .remove(nix::sys::termios::InputFlags::IXON);
-    stdin_termios_mod
-        .input_flags
-        .remove(nix::sys::termios::InputFlags::ICRNL);
-
-    stdin_termios_mod
-        .output_flags
-        .remove(nix::sys::termios::OutputFlags::OPOST);
-
+    nix::sys::termios::cfmakeraw(&mut stdin_termios_mod);
     nix::sys::termios::tcsetattr(
         stdin_fd,
-        nix::sys::termios::SetArg::TCSAFLUSH,
+        nix::sys::termios::SetArg::TCSANOW,
         &stdin_termios_mod,
     )
     .unwrap();
 
     let _writer = tokio::spawn(async move {
         let mut buffer = [0; 4096];
+        let mut terminal = Terminal::new(80, 24, stdout).await;
         loop {
             let read = rx.read(&mut buffer).await.unwrap();
-            stdout.write_all(&buffer[0..read]).await.unwrap();
-            stdout.flush().await.unwrap();
+            terminal.process(&buffer[0..read]);
+            terminal.update().await;
         }
     });
 
