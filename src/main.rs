@@ -1,23 +1,39 @@
-use std::{os::unix::prelude::AsRawFd, path::PathBuf};
+use std::{os::unix::prelude::AsRawFd, thread};
+
+use crossterm::{
+    event::{DisableMouseCapture, EnableMouseCapture},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use tui::{
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout, Rect},
+    text::{Span, Spans, Text},
+    widgets::{Block, Borders, Paragraph, Wrap},
+    Terminal as TuiTerminal,
+};
 
 use clap::Parser;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio_serial::SerialPortBuilderExt;
 
-const INIT: &[u8] = b"\x1b7\x1b[?47h\x1b[2J\x1b[H\x1b[?25h";
-const DEINIT: &[u8] = b"\x1b[?47l\x1b8\x1b[?25h";
+mod ui_term;
 
 struct Terminal {
     parser: vt100::Parser,
-    stdout: tokio::io::Stdout,
+    tui: TuiTerminal<CrosstermBackend<std::io::Stdout>>,
 }
 
 impl Terminal {
-    async fn new(width: u16, height: u16, mut stdout: tokio::io::Stdout) -> Self {
+    async fn new(
+        width: u16,
+        height: u16,
+        tui: TuiTerminal<CrosstermBackend<std::io::Stdout>>,
+    ) -> Self {
         let parser = vt100::Parser::new(height, width, 0);
-        stdout.write_all(INIT).await.unwrap();
-        stdout.flush().await.unwrap();
-        Self { parser, stdout }
+        let mut this = Self { parser, tui };
+        this.update().await;
+        this
     }
 
     fn process(&mut self, bytes: &[u8]) {
@@ -26,24 +42,46 @@ impl Terminal {
 
     async fn update(&mut self) {
         let screen = self.parser.screen();
-        self.stdout
-            .write_all(b"\x1b[?25l\x1b[1;1H\x1b[K TEST 1234\n")
-            .await
+        let term = ui_term::UiTerm::new(&screen);
+        self.tui
+            .draw(|f| {
+                let size = f.size();
+                let block = Block::default().title(screen.title()).borders(Borders::ALL);
+                let outer = Rect::new(0, 0, 82, 26);
+                let inner = block.inner(outer);
+                f.render_widget(block, outer);
+                f.render_widget(term, inner);
+                if !screen.hide_cursor() {
+                    let cursor = screen.cursor_position();
+                    if cursor.1 < 80 && cursor.0 < 24 {
+                        f.set_cursor(cursor.1 + inner.x, cursor.0 + inner.y);
+                    }
+                }
+
+                let chunks = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([
+                        Constraint::Length(80),
+                        Constraint::Min(10),
+                        Constraint::Min(10),
+                    ])
+                    .split(inner);
+
+                let text: Text = chunks
+                    .iter()
+                    .map(|c| Spans::from(format!("-> {:?} - \n\n b", c)))
+                    .collect::<Vec<_>>()
+                    .into();
+
+                let cursor = screen.cursor_position();
+                let p = Paragraph::new(text).wrap(Wrap { trim: false });
+                f.render_widget(p, Rect::new(0, 27, size.width, size.height - 27));
+            })
             .unwrap();
-        let rows = screen.rows_formatted(0, 80).enumerate();
-        for (i, row) in rows {
-            self.stdout
-                .write_all(format!("\x1b[{};1H\x1b[K\x1b[m", i + 3).as_bytes())
-                .await
-                .unwrap();
-            self.stdout.write_all(&row).await.unwrap();
-        }
-        let (row, column) = screen.cursor_position();
-        self.stdout
-            .write_all(format!("\x1b[{};{}H\x1b[?25h", row + 3, column + 1).as_bytes())
-            .await
-            .unwrap();
-        self.stdout.flush().await.unwrap();
+    }
+
+    fn inner(self) -> TuiTerminal<CrosstermBackend<std::io::Stdout>> {
+        self.tui
     }
 }
 
@@ -92,21 +130,30 @@ struct Opts {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     let opt = Opts::parse();
+
+    enable_raw_mode()?;
 
     let serial = tokio_serial::new(&opt.path, opt.rate)
         .open_native_async()
         .unwrap();
 
-    let (mut rx, mut tx) = tokio::io::split(serial);
+    let mut stdout = std::io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = TuiTerminal::new(backend).unwrap();
 
-    let mut stdout = tokio::io::stdout();
+    terminal.draw(|f| {
+        let size = f.size();
+        let block = Block::default().title("Block").borders(Borders::ALL);
+        f.render_widget(block, size);
+    })?;
+
+    let (mut rx, mut tx) = tokio::io::split(serial);
     let mut stdin = tokio::io::stdin();
 
     let stdin_fd = stdin.as_raw_fd();
-    let _stdout_fd = stdout.as_raw_fd();
-
     let stdin_termios = nix::sys::termios::tcgetattr(stdin_fd).unwrap();
 
     let mut stdin_termios_mod = stdin_termios.clone();
@@ -118,9 +165,9 @@ async fn main() {
     )
     .unwrap();
 
+    let mut terminal = Terminal::new(80, 24, terminal).await;
     let _writer = tokio::spawn(async move {
         let mut buffer = [0; 4096];
-        let mut terminal = Terminal::new(80, 24, stdout).await;
         loop {
             let read = rx.read(&mut buffer).await.unwrap();
             terminal.process(&buffer[0..read]);
@@ -137,4 +184,12 @@ async fn main() {
         &stdin_termios,
     )
     .unwrap();
+
+    // restore terminal
+    disable_raw_mode()?;
+    //let mut terminal = terminal.inner();
+    //execute!(terminal.backend_mut(), LeaveAlternateScreen,)?;
+    //terminal.show_cursor()?;
+
+    Ok(())
 }
