@@ -1,10 +1,12 @@
-use std::{os::unix::prelude::AsRawFd, thread};
+use std::{os::unix::prelude::AsRawFd, task::Poll, thread};
 
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use protocol::protocol::{serial_client::SerialClient, InputRequest, OutputRequest};
+use tokio_util::sync::ReusableBoxFuture;
 use tui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
@@ -14,8 +16,8 @@ use tui::{
 };
 
 use clap::Parser;
+use futures::{ready, Stream, StreamExt};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio_serial::SerialPortBuilderExt;
 
 mod ui_term;
 
@@ -85,13 +87,33 @@ impl Terminal {
     }
 }
 
-struct InputMonitor {
-    saw_escape: bool,
+async fn process_input<R>(mut input: R) -> (Vec<u8>, R)
+where
+    R: AsyncRead + Unpin,
+    //    W: AsyncWrite + Unpin,
+{
+    let mut buffer = [0; 4096];
+    let read = input.read(&mut buffer).await.unwrap();
+    (Vec::from(&buffer[0..read]), input)
 }
 
-impl InputMonitor {
-    fn new() -> Self {
-        Self { saw_escape: false }
+struct InputStream<R> {
+    name: Option<String>,
+    saw_escape: bool,
+    future: tokio_util::sync::ReusableBoxFuture<'static, (Vec<u8>, R)>,
+}
+
+impl<R> InputStream<R>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    fn new(name: String, rx: R) -> Self {
+        let future = ReusableBoxFuture::new(process_input(rx));
+        Self {
+            name: Some(name),
+            saw_escape: false,
+            future,
+        }
     }
 
     fn check_input(&mut self, input: &[u8]) -> bool {
@@ -106,38 +128,47 @@ impl InputMonitor {
     }
 }
 
-async fn input<R, W>(mut input: R, mut output: W)
+impl<R> Stream for InputStream<R>
 where
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
+    R: AsyncRead + Unpin + Send + 'static,
 {
-    let mut buffer = [0; 4096];
-    let mut monitor = InputMonitor::new();
-    loop {
-        let read = input.read(&mut buffer).await.unwrap();
-        if monitor.check_input(&buffer[0..read]) {
-            return;
+    type Item = InputRequest;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let (data, rx) = ready!(self.future.poll(cx));
+        self.future.set(process_input(rx));
+
+        if self.check_input(&data) {
+            Poll::Ready(None)
+        } else {
+            Poll::Ready(Some(InputRequest {
+                name: self.name.take(),
+                data,
+            }))
         }
-        output.write_all(&buffer[0..read]).await.unwrap();
-        output.flush().await.unwrap();
     }
 }
 
 #[derive(clap::Parser)]
 struct Opts {
-    path: String,
-    rate: u32,
+    name: String,
+    //rate: u32,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let opt = Opts::parse();
 
-    enable_raw_mode()?;
+    let mut client = SerialClient::connect("http://[::1]:50051").await?;
+    let request = tonic::Request::new(OutputRequest {
+        name: opt.name.clone(),
+    });
+    let mut response = client.stream_output(request).await?;
 
-    let serial = tokio_serial::new(&opt.path, opt.rate)
-        .open_native_async()
-        .unwrap();
+    enable_raw_mode()?;
 
     let mut stdout = std::io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -150,9 +181,7 @@ async fn main() -> anyhow::Result<()> {
         f.render_widget(block, size);
     })?;
 
-    let (mut rx, mut tx) = tokio::io::split(serial);
     let mut stdin = tokio::io::stdin();
-
     let stdin_fd = stdin.as_raw_fd();
     let stdin_termios = nix::sys::termios::tcgetattr(stdin_fd).unwrap();
 
@@ -167,17 +196,19 @@ async fn main() -> anyhow::Result<()> {
 
     let mut terminal = Terminal::new(80, 24, terminal).await;
     let _writer = tokio::spawn(async move {
-        let mut buffer = [0; 4096];
-        loop {
-            let read = rx.read(&mut buffer).await.unwrap();
-            terminal.process(&buffer[0..read]);
+        while let Some(output) = response.get_mut().next().await {
+            let data = output.unwrap().data;
+            terminal.process(&data);
             terminal.update().await;
         }
     });
 
-    let reader = tokio::spawn(input(stdin, tx));
+    let reader = tokio::spawn(async move {
+        let input = InputStream::new(opt.name, stdin);
+        client.stream_input(input).await
+    });
 
-    reader.await.unwrap();
+    let r = reader.await;
     nix::sys::termios::tcsetattr(
         stdin_fd,
         nix::sys::termios::SetArg::TCSAFLUSH,
@@ -190,6 +221,10 @@ async fn main() -> anyhow::Result<()> {
     //let mut terminal = terminal.inner();
     //execute!(terminal.backend_mut(), LeaveAlternateScreen,)?;
     //terminal.show_cursor()?;
-
-    Ok(())
+    //
+    match r {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(e)) => Err(e.into()),
+        Err(e) => Err(e.into()),
+    }
 }
