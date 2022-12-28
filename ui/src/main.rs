@@ -1,5 +1,6 @@
 use std::{os::unix::prelude::AsRawFd, task::Poll, thread};
 
+use bytes::Bytes;
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
@@ -87,20 +88,20 @@ impl Terminal {
     }
 }
 
-async fn process_input<R>(mut input: R) -> (Vec<u8>, R)
+async fn process_input<R>(mut input: R) -> (Bytes, R)
 where
     R: AsyncRead + Unpin,
     //    W: AsyncWrite + Unpin,
 {
     let mut buffer = [0; 4096];
     let read = input.read(&mut buffer).await.unwrap();
-    (Vec::from(&buffer[0..read]), input)
+    (Bytes::copy_from_slice(&buffer[0..read]), input)
 }
 
 struct InputStream<R> {
     name: Option<String>,
     saw_escape: bool,
-    future: tokio_util::sync::ReusableBoxFuture<'static, (Vec<u8>, R)>,
+    future: tokio_util::sync::ReusableBoxFuture<'static, (Bytes, R)>,
 }
 
 impl<R> InputStream<R>

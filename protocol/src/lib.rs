@@ -2,6 +2,7 @@ use std::pin::Pin;
 use std::task::Poll;
 use std::{collections::HashMap, sync::Arc};
 
+use bytes::Bytes;
 use futures::ready;
 use futures::stream::BoxStream;
 use futures::stream::Stream;
@@ -9,12 +10,12 @@ use protocol::{serial_server::Serial, Output};
 use tonic::Streaming;
 
 #[tonic::async_trait]
-pub trait ConsoleStream: Stream<Item = Vec<u8>> + Send {}
+pub trait ConsoleStream: Stream<Item = Bytes> + Send {}
 
 #[tonic::async_trait]
 pub trait Console: Send + Sync + 'static {
     async fn get_output(&self) -> Pin<Box<dyn ConsoleStream>>;
-    async fn send_input(&self, input: &[u8]);
+    async fn send_input(&self, input: Bytes);
 }
 
 pub mod protocol {
@@ -66,7 +67,7 @@ impl Serial for SerialServer {
                 console = self.consoles.get(&request.name.unwrap());
             }
             if let Some(console) = console {
-                console.send_input(&request.data).await;
+                console.send_input(request.data).await;
             } else {
                 break;
             }
@@ -77,14 +78,14 @@ impl Serial for SerialServer {
 
 struct OutputWrapper<T>
 where
-    T: Stream<Item = Vec<u8>> + Unpin,
+    T: Stream<Item = Bytes> + Unpin,
 {
     inner: T,
 }
 
 impl<T> Stream for OutputWrapper<T>
 where
-    T: Stream<Item = Vec<u8>> + Unpin,
+    T: Stream<Item = Bytes> + Unpin,
 {
     type Item = Result<Output, tonic::Status>;
 

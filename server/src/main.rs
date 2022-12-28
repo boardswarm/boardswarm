@@ -1,3 +1,4 @@
+use bytes::{Bytes, BytesMut};
 use futures::ready;
 use std::{
     net::ToSocketAddrs,
@@ -18,7 +19,7 @@ use tokio_serial::{SerialPortBuilderExt, SerialStream};
 struct SerialPort {
     //read: ReadHalf<SerialStream>,
     write: AsyncMutex<WriteHalf<SerialStream>>,
-    broadcast: broadcast::Sender<Vec<u8>>,
+    broadcast: broadcast::Sender<Bytes>,
 }
 
 impl SerialPort {
@@ -29,15 +30,14 @@ impl SerialPort {
 
         let (mut read, write) = tokio::io::split(port);
         let write = AsyncMutex::new(write);
-        let broadcast = broadcast::channel(4096).0;
+        let broadcast = broadcast::channel(64).0;
         let b_clone = broadcast.clone();
         tokio::spawn(async move {
             loop {
-                let mut data = Vec::new();
-                data.resize(2048, 0);
-                let r = read.read(data.as_mut_slice()).await.unwrap();
+                let mut data = BytesMut::zeroed(1024);
+                let r = read.read(&mut data).await.unwrap();
                 data.truncate(r);
-                let _ = b_clone.send(data);
+                let _ = b_clone.send(data.freeze());
             }
         });
         Ok(SerialPort {
@@ -56,18 +56,18 @@ impl Console for SerialPort {
         Box::pin(SerialPortOutput::new(self.broadcast.subscribe()))
     }
 
-    async fn send_input(&self, input: &[u8]) {
+    async fn send_input(&self, input: Bytes) {
         let mut write = self.write.lock().await;
-        write.write_all(input).await.unwrap();
+        write.write_all(&input).await.unwrap();
     }
 }
 
 struct SerialPortOutput {
-    future: tokio_util::sync::ReusableBoxFuture<'static, (Vec<u8>, broadcast::Receiver<Vec<u8>>)>,
+    future: tokio_util::sync::ReusableBoxFuture<'static, (Bytes, broadcast::Receiver<Bytes>)>,
 }
 
 impl SerialPortOutput {
-    fn new(receiver: broadcast::Receiver<Vec<u8>>) -> Self {
+    fn new(receiver: broadcast::Receiver<Bytes>) -> Self {
         let future = tokio_util::sync::ReusableBoxFuture::new(recv_data(receiver));
         Self { future }
     }
@@ -75,9 +75,7 @@ impl SerialPortOutput {
 
 impl ConsoleStream for SerialPortOutput {}
 
-async fn recv_data(
-    mut rx: broadcast::Receiver<Vec<u8>>,
-) -> (Vec<u8>, broadcast::Receiver<Vec<u8>>) {
+async fn recv_data(mut rx: broadcast::Receiver<Bytes>) -> (Bytes, broadcast::Receiver<Bytes>) {
     loop {
         match rx.recv().await {
             Ok(data) => {
@@ -89,7 +87,7 @@ async fn recv_data(
 }
 
 impl Stream for SerialPortOutput {
-    type Item = Vec<u8>;
+    type Item = Bytes;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let (result, rx) = ready!(self.future.poll(cx));
         self.future.set(recv_data(rx));
