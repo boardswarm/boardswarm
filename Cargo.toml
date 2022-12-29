@@ -2,5 +2,6 @@
 members = [
   "ui",
   "protocol",
-  "server"
+  "server",
+  "pdudaemon-client"
 ]
