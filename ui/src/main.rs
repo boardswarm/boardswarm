@@ -50,35 +50,15 @@ impl Terminal {
             .draw(|f| {
                 let size = f.size();
                 let block = Block::default().title(screen.title()).borders(Borders::ALL);
-                let outer = Rect::new(0, 0, 82, 26);
+
+                let outer = Rect::new(0, 0, 82.min(size.width), 26.min(size.height));
                 let inner = block.inner(outer);
                 f.render_widget(block, outer);
                 f.render_widget(term, inner);
                 if !screen.hide_cursor() {
                     let cursor = screen.cursor_position();
-                    if cursor.1 < 80 && cursor.0 < 24 {
-                        f.set_cursor(cursor.1 + inner.x, cursor.0 + inner.y);
-                    }
+                    f.set_cursor(cursor.1 + inner.x, cursor.0 + inner.y);
                 }
-
-                let chunks = Layout::default()
-                    .direction(Direction::Horizontal)
-                    .constraints([
-                        Constraint::Length(80),
-                        Constraint::Min(10),
-                        Constraint::Min(10),
-                    ])
-                    .split(inner);
-
-                let text: Text = chunks
-                    .iter()
-                    .map(|c| Spans::from(format!("-> {:?} - \n\n b", c)))
-                    .collect::<Vec<_>>()
-                    .into();
-
-                let cursor = screen.cursor_position();
-                let p = Paragraph::new(text).wrap(Wrap { trim: false });
-                f.render_widget(p, Rect::new(0, 27, size.width, size.height - 27));
             })
             .unwrap();
     }
@@ -91,7 +71,6 @@ impl Terminal {
 async fn process_input<R>(mut input: R) -> (Bytes, R)
 where
     R: AsyncRead + Unpin,
-    //    W: AsyncWrite + Unpin,
 {
     let mut buffer = [0; 4096];
     let read = input.read(&mut buffer).await.unwrap();
@@ -156,7 +135,6 @@ where
 #[derive(clap::Parser)]
 struct Opts {
     name: String,
-    //rate: u32,
 }
 
 #[tokio::main]

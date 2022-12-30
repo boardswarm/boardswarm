@@ -60,6 +60,8 @@ impl Serial for SerialServer {
         &self,
         request: tonic::Request<Streaming<protocol::InputRequest>>,
     ) -> Result<tonic::Response<()>, tonic::Status> {
+        eprintln!("{:?}", request.metadata());
+        eprintln!("{:?}", request.extensions());
         let mut rx = request.into_inner();
         let mut console = None;
         while let Ok(Some(request)) = rx.message().await {
