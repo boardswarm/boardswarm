@@ -1,24 +1,22 @@
-use std::{os::unix::prelude::AsRawFd, task::Poll, thread};
+use std::{os::unix::prelude::AsRawFd, task::Poll};
 
 use bytes::Bytes;
 use crossterm::{
-    event::{DisableMouseCapture, EnableMouseCapture},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen},
 };
 use protocol::protocol::{serial_client::SerialClient, InputRequest, OutputRequest};
 use tokio_util::sync::ReusableBoxFuture;
 use tui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Rect},
-    text::{Span, Spans, Text},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    layout::Rect,
+    widgets::{Block, Borders},
     Terminal as TuiTerminal,
 };
 
 use clap::Parser;
 use futures::{ready, Stream, StreamExt};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt};
 
 mod ui_term;
 
@@ -45,7 +43,7 @@ impl Terminal {
 
     async fn update(&mut self) {
         let screen = self.parser.screen();
-        let term = ui_term::UiTerm::new(&screen);
+        let term = ui_term::UiTerm::new(screen);
         self.tui
             .draw(|f| {
                 let size = f.size();
@@ -61,10 +59,6 @@ impl Terminal {
                 }
             })
             .unwrap();
-    }
-
-    fn inner(self) -> TuiTerminal<CrosstermBackend<std::io::Stdout>> {
-        self.tui
     }
 }
 
@@ -160,7 +154,7 @@ async fn main() -> anyhow::Result<()> {
         f.render_widget(block, size);
     })?;
 
-    let mut stdin = tokio::io::stdin();
+    let stdin = tokio::io::stdin();
     let stdin_fd = stdin.as_raw_fd();
     let stdin_termios = nix::sys::termios::tcgetattr(stdin_fd).unwrap();
 
