@@ -139,10 +139,7 @@ impl crate::Console for SerialPort {
         for (k, v) in filter.iter() {
             match self.attributes.get(k) {
                 Some(a_v) if a_v == v => (),
-                a_v => {
-                    info!("no match {}: {} - {:?}", k, v, a_v);
-                    return false;
-                }
+                _ => return false,
             }
         }
         true
