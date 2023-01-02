@@ -3,7 +3,7 @@ use clap::Parser;
 use futures::prelude::*;
 use futures::stream::BoxStream;
 use futures::Sink;
-use protocol::protocol::serial_server;
+use protocol::serial_server;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Mutex;
@@ -161,17 +161,17 @@ impl Server {
 }
 
 #[tonic::async_trait]
-impl protocol::protocol::serial_server::Serial for Server {
+impl protocol::serial_server::Serial for Server {
     type StreamOutputStream =
-        stream::BoxStream<'static, Result<protocol::protocol::Output, tonic::Status>>;
+        stream::BoxStream<'static, Result<protocol::Output, tonic::Status>>;
 
     async fn stream_output(
         &self,
-        request: tonic::Request<protocol::protocol::OutputRequest>,
+        request: tonic::Request<protocol::OutputRequest>,
     ) -> Result<tonic::Response<Self::StreamOutputStream>, tonic::Status> {
         if let Some(console) = self.console_for_device(&request.into_inner().name, "main") {
             let output = console.output().await.unwrap().map(|data| {
-                Ok(protocol::protocol::Output {
+                Ok(protocol::Output {
                     data: data.unwrap(),
                 })
             });
@@ -183,7 +183,7 @@ impl protocol::protocol::serial_server::Serial for Server {
 
     async fn stream_input(
         &self,
-        request: tonic::Request<tonic::Streaming<protocol::protocol::InputRequest>>,
+        request: tonic::Request<tonic::Streaming<protocol::InputRequest>>,
     ) -> Result<tonic::Response<()>, tonic::Status> {
         let mut rx = request.into_inner();
         let mut console = None;

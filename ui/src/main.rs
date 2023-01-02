@@ -5,7 +5,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen},
 };
-use protocol::protocol::{serial_client::SerialClient, InputRequest, OutputRequest};
+use protocol::{serial_client::SerialClient, InputRequest, OutputRequest};
 use tokio_util::sync::ReusableBoxFuture;
 use tui::{
     backend::CrosstermBackend,
