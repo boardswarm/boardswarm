@@ -7,7 +7,6 @@ use std::{
     sync::{Arc, Mutex},
     task::{Context, Poll},
 };
-use tracing::info;
 
 use anyhow::Result;
 use futures::prelude::*;

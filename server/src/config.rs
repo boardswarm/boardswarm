@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use std::path::Path;
+use std::{path::Path, time::Duration};
 
 use anyhow::Result;
 use serde::Deserialize;
@@ -22,11 +22,14 @@ pub struct Provider {
 pub struct Device {
     pub name: String,
     pub consoles: Vec<Console>,
+    pub modes: Vec<Mode>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct Console {
     pub name: String,
+    #[serde(default)]
+    pub default: bool,
     pub parameters: serde_yaml::Value,
     #[serde(rename = "match")]
     pub match_: Match,
@@ -36,6 +39,22 @@ pub struct Console {
 pub struct Match {
     pub provider: String,
     pub filter: serde_yaml::Value,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Mode {
+    pub name: String,
+    pub sequence: Vec<ModeStep>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ModeStep {
+    // name of the mode provider
+    pub name: String,
+    pub parameters: serde_yaml::Value,
+    #[serde(default)]
+    #[serde(with = "humantime_serde")]
+    pub stablelisation: Option<Duration>,
 }
 
 impl Config {

@@ -7,12 +7,13 @@ use protocol::serial_server;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Mutex;
-use std::{collections::HashMap, net::ToSocketAddrs, sync::Arc, time::Duration};
+use std::{net::ToSocketAddrs, sync::Arc};
 use thiserror::Error;
 
-use tracing::info;
+use tracing::{info, warn};
 
 mod config;
+mod pdudaemon;
 mod serial;
 mod udev;
 
@@ -24,35 +25,18 @@ struct Provider {
     name: String,
 }
 
-// TOTRAIT
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-struct Actuator {
-    name: String,
-}
+#[derive(Error, Debug)]
+pub enum ActuatorError {}
 
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-struct Actuation {
-    name: String,
-    controller: String,
-    state: String, /* on, off, flashing */
-    parameters: HashMap<String, String>,
-    stablelisation: Duration,
-}
-
-// Actions to do to put a device in a certain mode
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-struct DeviceMode {
-    name: String,
-    steps: Vec<Actuation>,
+#[async_trait::async_trait]
+trait Actuator: std::fmt::Debug + Send + Sync {
+    fn name(&self) -> &str;
+    async fn set_mode(&self, parameters: serde_yaml::Value) -> Result<(), ActuatorError>;
 }
 
 #[derive(Error, Debug)]
 pub enum ConsoleError {}
 
-// TOTRAIT
 #[async_trait::async_trait]
 trait Console: std::fmt::Debug + Send + Sync {
     fn name(&self) -> &str;
@@ -68,19 +52,18 @@ trait Console: std::fmt::Debug + Send + Sync {
 #[derive(Debug)]
 struct DeviceInner {
     config: config::Device,
-    //consoles: Vec<DeviceConsole>,
-    //modes: Vec<DeviceMode>,
-    // TODO sensors
+    server: Server,
 }
+
 #[derive(Clone, Debug)]
 struct Device {
     inner: Arc<DeviceInner>,
 }
 
 impl Device {
-    fn from_config(config: config::Device) -> Device {
+    fn from_config(config: config::Device, server: Server) -> Device {
         Device {
-            inner: Arc::new(DeviceInner { config }),
+            inner: Arc::new(DeviceInner { config, server }),
         }
     }
 
@@ -95,12 +78,37 @@ impl Device {
             .iter()
             .find(|c| c.name == console)
     }
+
+    pub fn get_default_console(&self) -> Option<&config::Console> {
+        if self.inner.config.consoles.len() == 1 {
+            Some(&self.inner.config.consoles[0])
+        } else {
+            self.inner.config.consoles.iter().find(|c| c.default)
+        }
+    }
+
+    pub async fn set_mode(&self, mode: &str) {
+        if let Some(mode) = self.inner.config.modes.iter().find(|m| m.name == mode) {
+            for step in &mode.sequence {
+                if let Some(provider) = self.inner.server.get_actuator(&step.name) {
+                    provider.set_mode(step.parameters.clone()).await.unwrap();
+                } else {
+                    warn!("Provider {} not found", &step.name);
+                    return;
+                }
+                if let Some(duration) = step.stablelisation {
+                    tokio::time::sleep(duration).await;
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
 struct ServerInner {
     devices: Mutex<Vec<Device>>,
     consoles: Mutex<Vec<Arc<dyn Console>>>,
+    actuators: Mutex<Vec<Arc<dyn Actuator>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -114,8 +122,21 @@ impl Server {
             inner: Arc::new(ServerInner {
                 consoles: Mutex::new(Vec::new()),
                 devices: Mutex::new(Vec::new()),
+                actuators: Mutex::new(Vec::new()),
             }),
         }
+    }
+
+    fn register_actuator(&self, actuator: Arc<dyn Actuator>) {
+        info!("Registering new actuator: {}", actuator.name());
+        let mut actuators = self.inner.actuators.lock().unwrap();
+        actuators.push(actuator)
+    }
+
+    #[allow(dead_code)]
+    fn get_actuator(&self, name: &str) -> Option<Arc<dyn Actuator>> {
+        let actuators = self.inner.actuators.lock().unwrap();
+        actuators.iter().find(|c| c.name() == name).cloned()
     }
 
     fn register_console(&self, console: Arc<dyn Console>) {
@@ -141,9 +162,12 @@ impl Server {
         devices.iter().find(|d| d.name() == name).cloned()
     }
 
-    fn console_for_device(&self, device: &str, console: &str) -> Option<Arc<dyn Console>> {
+    fn console_for_device(&self, device: &str, console: Option<&str>) -> Option<Arc<dyn Console>> {
         let device = self.get_device(device)?;
-        let config_console = device.get_console(console)?;
+        let config_console = match console {
+            Some(console) => device.get_console(console)?,
+            _ => device.get_default_console()?,
+        };
         let device_console = self
             .inner
             .consoles
@@ -162,14 +186,14 @@ impl Server {
 
 #[tonic::async_trait]
 impl protocol::serial_server::Serial for Server {
-    type StreamOutputStream =
-        stream::BoxStream<'static, Result<protocol::Output, tonic::Status>>;
+    type StreamOutputStream = stream::BoxStream<'static, Result<protocol::Output, tonic::Status>>;
 
     async fn stream_output(
         &self,
         request: tonic::Request<protocol::OutputRequest>,
     ) -> Result<tonic::Response<Self::StreamOutputStream>, tonic::Status> {
-        if let Some(console) = self.console_for_device(&request.into_inner().name, "main") {
+        let inner = request.into_inner();
+        if let Some(console) = self.console_for_device(&inner.device, inner.console.as_deref()) {
             let output = console.output().await.unwrap().map(|data| {
                 Ok(protocol::Output {
                     data: data.unwrap(),
@@ -186,19 +210,39 @@ impl protocol::serial_server::Serial for Server {
         request: tonic::Request<tonic::Streaming<protocol::InputRequest>>,
     ) -> Result<tonic::Response<()>, tonic::Status> {
         let mut rx = request.into_inner();
-        let mut console = None;
-        while let Ok(Some(request)) = rx.message().await {
-            if console.is_none() {
-                console = self.console_for_device(&request.name.unwrap(), "main");
-            }
-            if let Some(console) = &console {
-                let mut input = console.input().await.unwrap();
-                input.send(request.data).await.unwrap();
+
+        if let Some(msg) = rx.message().await? {
+            let mut input = if let Some(device) = &msg.device {
+                if let Some(console) = self.console_for_device(device, msg.console.as_deref()) {
+                    console.input().await.unwrap()
+                } else {
+                    return Err(tonic::Status::not_found("No serial console by that name"));
+                }
             } else {
-                break;
+                return Err(tonic::Status::invalid_argument(
+                    "First message must have serial name",
+                ));
+            };
+            input.send(msg.data).await.unwrap();
+
+            while let Some(request) = rx.message().await? {
+                input.send(request.data).await.unwrap();
             }
         }
         Ok(tonic::Response::new(()))
+    }
+
+    async fn change_device_mode(
+        &self,
+        request: tonic::Request<protocol::DeviceModeRequest>,
+    ) -> Result<tonic::Response<()>, tonic::Status> {
+        let request = request.into_inner();
+        if let Some(device) = self.get_device(&request.device) {
+            device.set_mode(&request.mode).await;
+            Ok(tonic::Response::new(()))
+        } else {
+            Err(tonic::Status::not_found("No device by that name"))
+        }
     }
 }
 
@@ -216,7 +260,13 @@ async fn main() -> anyhow::Result<()> {
 
     let server = Server::new();
     for d in config.devices {
-        server.register_device(Device::from_config(d))
+        server.register_device(Device::from_config(d, server.clone()))
+    }
+
+    for p in config.providers {
+        if p.type_ == "pdudaemon" {
+            pdudaemon::start_provider(p.name, p.parameters.unwrap(), server.clone());
+        }
     }
 
     let local = tokio::task::LocalSet::new();

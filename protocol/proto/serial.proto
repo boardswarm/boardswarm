@@ -5,17 +5,25 @@ import "google/protobuf/empty.proto";
 service Serial {
     rpc StreamOutput (OutputRequest) returns (stream Output);
     rpc StreamInput (stream InputRequest) returns (google.protobuf.Empty);
+    rpc ChangeDeviceMode(DeviceModeRequest) returns (google.protobuf.Empty);
 }
 
 message InputRequest {
-   optional string name = 1;
-   bytes data = 2;
+   optional string device = 1;
+   optional string console = 2;
+   bytes data = 3;
 }
 
 message OutputRequest {
-   string name = 1;
+   string device = 1;
+   optional string console = 2;
 }
 
 message Output {
     bytes data = 1;
+}
+
+message DeviceModeRequest {
+  string device = 1;
+  string mode = 2;
 }

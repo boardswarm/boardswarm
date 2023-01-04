@@ -43,7 +43,7 @@ impl PduDaemon {
     }
 
     pub async fn off(&self, hostname: &str, port: u16) -> Result<(), PduDaemonError> {
-        let url = self.build_url("on", hostname, port)?;
+        let url = self.build_url("off", hostname, port)?;
         self.send(url).await
     }
 

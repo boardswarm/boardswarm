@@ -5,7 +5,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen},
 };
-use protocol::{serial_client::SerialClient, InputRequest, OutputRequest};
+use protocol::{serial_client::SerialClient, DeviceModeRequest, InputRequest, OutputRequest};
 use tokio_util::sync::ReusableBoxFuture;
 use tui::{
     backend::CrosstermBackend,
@@ -71,8 +71,13 @@ where
     (Bytes::copy_from_slice(&buffer[0..read]), input)
 }
 
+enum Input {
+    PowerOn,
+    PowerOff,
+    Bytes(Bytes),
+}
+
 struct InputStream<R> {
-    name: Option<String>,
     saw_escape: bool,
     future: tokio_util::sync::ReusableBoxFuture<'static, (Bytes, R)>,
 }
@@ -81,24 +86,25 @@ impl<R> InputStream<R>
 where
     R: AsyncRead + Unpin + Send + 'static,
 {
-    fn new(name: String, rx: R) -> Self {
+    fn new(rx: R) -> Self {
         let future = ReusableBoxFuture::new(process_input(rx));
         Self {
-            name: Some(name),
             saw_escape: false,
             future,
         }
     }
 
-    fn check_input(&mut self, input: &[u8]) -> bool {
-        for i in input {
+    fn check_input(&mut self, input: Bytes) -> Option<Input> {
+        for i in &input {
             match i {
                 0x1 => self.saw_escape = true, /* ^a */
-                b'q' if self.saw_escape => return true,
+                b'q' if self.saw_escape => return None,
+                b'o' if self.saw_escape => return Some(Input::PowerOn),
+                b'f' if self.saw_escape => return Some(Input::PowerOff),
                 _ => self.saw_escape = false,
             }
         }
-        false
+        Some(Input::Bytes(input))
     }
 }
 
@@ -106,7 +112,7 @@ impl<R> Stream for InputStream<R>
 where
     R: AsyncRead + Unpin + Send + 'static,
 {
-    type Item = InputRequest;
+    type Item = Input;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
@@ -115,20 +121,15 @@ where
         let (data, rx) = ready!(self.future.poll(cx));
         self.future.set(process_input(rx));
 
-        if self.check_input(&data) {
-            Poll::Ready(None)
-        } else {
-            Poll::Ready(Some(InputRequest {
-                name: self.name.take(),
-                data,
-            }))
-        }
+        Poll::Ready(self.check_input(data))
     }
 }
 
 #[derive(clap::Parser)]
 struct Opts {
-    name: String,
+    #[clap(short, long)]
+    console: Option<String>,
+    device: String,
 }
 
 #[tokio::main]
@@ -137,7 +138,8 @@ async fn main() -> anyhow::Result<()> {
 
     let mut client = SerialClient::connect("http://[::1]:50051").await?;
     let request = tonic::Request::new(OutputRequest {
-        name: opt.name.clone(),
+        device: opt.device.clone(),
+        console: opt.console.clone(),
     });
     let mut response = client.stream_output(request).await?;
 
@@ -176,9 +178,48 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    let device = opt.device;
+    let console = opt.console;
+
     let reader = tokio::spawn(async move {
-        let input = InputStream::new(opt.name, stdin);
-        client.stream_input(input).await
+        let input = InputStream::new(stdin);
+        let mut s_client = client.clone();
+        s_client
+            .stream_input(input.filter_map(move |i| {
+                let device = device.clone();
+                let console = console.clone();
+                let mut client = client.clone();
+                async move {
+                    match i {
+                        Input::PowerOn => {
+                            client
+                                .change_device_mode(DeviceModeRequest {
+                                    device,
+                                    mode: "on".to_string(),
+                                })
+                                .await
+                                .unwrap();
+                            None
+                        }
+                        Input::PowerOff => {
+                            client
+                                .change_device_mode(DeviceModeRequest {
+                                    device,
+                                    mode: "off".to_string(),
+                                })
+                                .await
+                                .unwrap();
+                            None
+                        }
+                        Input::Bytes(data) => Some(InputRequest {
+                            device: Some(device),
+                            console,
+                            data,
+                        }),
+                    }
+                }
+            }))
+            .await
     });
 
     let r = reader.await;
