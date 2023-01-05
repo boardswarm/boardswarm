@@ -1,4 +1,3 @@
-use boardswarm_protocol::serial_server;
 use bytes::Bytes;
 use clap::Parser;
 use futures::prelude::*;
@@ -185,19 +184,21 @@ impl Server {
 }
 
 #[tonic::async_trait]
-impl boardswarm_protocol::serial_server::Serial for Server {
+impl boardswarm_protocol::device_server::Device for Server {
     type StreamOutputStream =
-        stream::BoxStream<'static, Result<boardswarm_protocol::Output, tonic::Status>>;
+        stream::BoxStream<'static, Result<boardswarm_protocol::ConsoleOutput, tonic::Status>>;
 
     async fn stream_output(
         &self,
-        request: tonic::Request<boardswarm_protocol::OutputRequest>,
+        request: tonic::Request<boardswarm_protocol::DeviceTarget>,
     ) -> Result<tonic::Response<Self::StreamOutputStream>, tonic::Status> {
         let inner = request.into_inner();
         if let Some(console) = self.console_for_device(&inner.device, inner.console.as_deref()) {
             let output = console.output().await.unwrap().map(|data| {
-                Ok(boardswarm_protocol::Output {
-                    data: data.unwrap(),
+                Ok(boardswarm_protocol::ConsoleOutput {
+                    data_or_state: Some(boardswarm_protocol::console_output::DataOrState::Data(
+                        data.unwrap(),
+                    )),
                 })
             });
             Ok(tonic::Response::new(Box::pin(output)))
@@ -208,26 +209,35 @@ impl boardswarm_protocol::serial_server::Serial for Server {
 
     async fn stream_input(
         &self,
-        request: tonic::Request<tonic::Streaming<boardswarm_protocol::InputRequest>>,
+        request: tonic::Request<tonic::Streaming<boardswarm_protocol::DeviceInputRequest>>,
     ) -> Result<tonic::Response<()>, tonic::Status> {
         let mut rx = request.into_inner();
 
-        if let Some(msg) = rx.message().await? {
-            let mut input = if let Some(device) = &msg.device {
-                if let Some(console) = self.console_for_device(device, msg.console.as_deref()) {
-                    console.input().await.unwrap()
-                } else {
-                    return Err(tonic::Status::not_found("No serial console by that name"));
-                }
+        /* First message must select the target */
+        let msg = match rx.message().await? {
+            Some(msg) => msg,
+            None => return Ok(tonic::Response::new(())),
+        };
+        let console =
+            if let Some(boardswarm_protocol::device_input_request::TargetOrData::Target(target)) =
+                msg.target_or_data
+            {
+                self.console_for_device(&target.device, target.console.as_deref())
+                    .ok_or_else(|| tonic::Status::not_found("No serial console by that name"))?
             } else {
                 return Err(tonic::Status::invalid_argument(
-                    "First message must have serial name",
+                    "Target should be set first",
                 ));
             };
-            input.send(msg.data).await.unwrap();
 
-            while let Some(request) = rx.message().await? {
-                input.send(request.data).await.unwrap();
+        let mut input = console.input().await.unwrap();
+
+        while let Some(request) = rx.message().await? {
+            match request.target_or_data {
+                Some(boardswarm_protocol::device_input_request::TargetOrData::Data(data)) => {
+                    input.send(data).await.unwrap()
+                }
+                _ => return Err(tonic::Status::invalid_argument("Target cannot be changed")),
             }
         }
         Ok(tonic::Response::new(()))
@@ -274,7 +284,9 @@ async fn main() -> anyhow::Result<()> {
     local.spawn_local(udev::start_provider("udev".to_string(), server.clone()));
 
     let server = tonic::transport::Server::builder()
-        .add_service(serial_server::SerialServer::new(server))
+        .add_service(boardswarm_protocol::device_server::DeviceServer::new(
+            server,
+        ))
         .serve("[::1]:50051".to_socket_addrs().unwrap().next().unwrap());
     info!("Server listening");
     tokio::join!(local, server).1?;

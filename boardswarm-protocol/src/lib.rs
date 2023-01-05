@@ -1,1 +1,1 @@
-tonic::include_proto!("serial");
+tonic::include_proto!("boardswarm");

@@ -1,7 +1,8 @@
 use std::{os::unix::prelude::AsRawFd, task::Poll};
 
 use boardswarm_protocol::{
-    serial_client::SerialClient, DeviceModeRequest, InputRequest, OutputRequest,
+    device_client::DeviceClient, device_input_request::TargetOrData, DeviceInputRequest,
+    DeviceModeRequest, DeviceTarget,
 };
 use bytes::Bytes;
 use crossterm::{
@@ -138,8 +139,8 @@ struct Opts {
 async fn main() -> anyhow::Result<()> {
     let opt = Opts::parse();
 
-    let mut client = SerialClient::connect("http://[::1]:50051").await?;
-    let request = tonic::Request::new(OutputRequest {
+    let mut client = DeviceClient::connect("http://[::1]:50051").await?;
+    let request = tonic::Request::new(DeviceTarget {
         device: opt.device.clone(),
         console: opt.console.clone(),
     });
@@ -174,9 +175,14 @@ async fn main() -> anyhow::Result<()> {
     let mut terminal = Terminal::new(80, 24, terminal).await;
     let _writer = tokio::spawn(async move {
         while let Some(output) = response.get_mut().next().await {
-            let data = output.unwrap().data;
-            terminal.process(&data);
-            terminal.update().await;
+            match output.unwrap().data_or_state.unwrap() {
+                boardswarm_protocol::console_output::DataOrState::Data(data) => {
+                    terminal.process(&data);
+                    terminal.update().await;
+                }
+
+                _ => (),
+            }
         }
     });
 
@@ -186,41 +192,46 @@ async fn main() -> anyhow::Result<()> {
     let reader = tokio::spawn(async move {
         let input = InputStream::new(stdin);
         let mut s_client = client.clone();
+        let target = DeviceInputRequest {
+            target_or_data: Some(TargetOrData::Target(DeviceTarget {
+                device: device.clone(),
+                console: console.clone(),
+            })),
+        };
         s_client
-            .stream_input(input.filter_map(move |i| {
-                let device = device.clone();
-                let console = console.clone();
-                let mut client = client.clone();
-                async move {
-                    match i {
-                        Input::PowerOn => {
-                            client
-                                .change_device_mode(DeviceModeRequest {
-                                    device,
-                                    mode: "on".to_string(),
-                                })
-                                .await
-                                .unwrap();
-                            None
+            .stream_input(
+                futures::stream::once(async { target }).chain(input.filter_map(move |i| {
+                    let device = device.clone();
+                    let mut client = client.clone();
+                    async move {
+                        match i {
+                            Input::PowerOn => {
+                                client
+                                    .change_device_mode(DeviceModeRequest {
+                                        device,
+                                        mode: "on".to_string(),
+                                    })
+                                    .await
+                                    .unwrap();
+                                None
+                            }
+                            Input::PowerOff => {
+                                client
+                                    .change_device_mode(DeviceModeRequest {
+                                        device,
+                                        mode: "off".to_string(),
+                                    })
+                                    .await
+                                    .unwrap();
+                                None
+                            }
+                            Input::Bytes(data) => Some(DeviceInputRequest {
+                                target_or_data: Some(TargetOrData::Data(data)),
+                            }),
                         }
-                        Input::PowerOff => {
-                            client
-                                .change_device_mode(DeviceModeRequest {
-                                    device,
-                                    mode: "off".to_string(),
-                                })
-                                .await
-                                .unwrap();
-                            None
-                        }
-                        Input::Bytes(data) => Some(InputRequest {
-                            device: Some(device),
-                            console,
-                            data,
-                        }),
                     }
-                }
-            }))
+                })),
+            )
             .await
     });
 
