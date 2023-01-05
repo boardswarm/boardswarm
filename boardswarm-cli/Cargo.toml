@@ -1,5 +1,5 @@
 [package]
-name = "serial-thing"
+name = "boardswarm-cli"
 version = "0.1.0"
 edition = "2021"
 
@@ -15,7 +15,7 @@ features = "0.10.0"
 futures = "0.3.25"
 mprocs-vt100 = "0.1.1"
 nix = "0.26.1"
-protocol = { version = "0.1.0", path = "../protocol" }
+boardswarm-protocol = { version = "0.1.0", path = "../boardswarm-protocol" }
 tokio = { version = "1.23.0", features = ["full"] }
 tokio-util = "0.7.4"
 tonic = "0.8.3"

@@ -1,9 +1,9 @@
+use boardswarm_protocol::serial_server;
 use bytes::Bytes;
 use clap::Parser;
 use futures::prelude::*;
 use futures::stream::BoxStream;
 use futures::Sink;
-use protocol::serial_server;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Mutex;
@@ -185,17 +185,18 @@ impl Server {
 }
 
 #[tonic::async_trait]
-impl protocol::serial_server::Serial for Server {
-    type StreamOutputStream = stream::BoxStream<'static, Result<protocol::Output, tonic::Status>>;
+impl boardswarm_protocol::serial_server::Serial for Server {
+    type StreamOutputStream =
+        stream::BoxStream<'static, Result<boardswarm_protocol::Output, tonic::Status>>;
 
     async fn stream_output(
         &self,
-        request: tonic::Request<protocol::OutputRequest>,
+        request: tonic::Request<boardswarm_protocol::OutputRequest>,
     ) -> Result<tonic::Response<Self::StreamOutputStream>, tonic::Status> {
         let inner = request.into_inner();
         if let Some(console) = self.console_for_device(&inner.device, inner.console.as_deref()) {
             let output = console.output().await.unwrap().map(|data| {
-                Ok(protocol::Output {
+                Ok(boardswarm_protocol::Output {
                     data: data.unwrap(),
                 })
             });
@@ -207,7 +208,7 @@ impl protocol::serial_server::Serial for Server {
 
     async fn stream_input(
         &self,
-        request: tonic::Request<tonic::Streaming<protocol::InputRequest>>,
+        request: tonic::Request<tonic::Streaming<boardswarm_protocol::InputRequest>>,
     ) -> Result<tonic::Response<()>, tonic::Status> {
         let mut rx = request.into_inner();
 
@@ -234,7 +235,7 @@ impl protocol::serial_server::Serial for Server {
 
     async fn change_device_mode(
         &self,
-        request: tonic::Request<protocol::DeviceModeRequest>,
+        request: tonic::Request<boardswarm_protocol::DeviceModeRequest>,
     ) -> Result<tonic::Response<()>, tonic::Status> {
         let request = request.into_inner();
         if let Some(device) = self.get_device(&request.device) {

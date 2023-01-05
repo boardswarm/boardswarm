@@ -1,6 +1,7 @@
 syntax = "proto3";
-package serial;
 import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
+package serial;
 
 service Serial {
     rpc StreamOutput (OutputRequest) returns (stream Output);
@@ -15,12 +16,12 @@ message InputRequest {
 }
 
 message OutputRequest {
-   string device = 1;
-   optional string console = 2;
+  string device = 1;
+  optional string console = 2;
 }
 
 message Output {
-    bytes data = 1;
+  bytes data = 1;
 }
 
 message DeviceModeRequest {

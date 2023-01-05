@@ -1,0 +1,90 @@
+syntax = "proto3";
+import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
+package badget;
+
+service server {
+  rpc ListConsoles(google.protobuf.Empty) returns (ConsoleList);
+  rpc ListActuators(google.protobuf.Empty) returns (ActuatorList);
+  rpc ListDevices(google.protobuf.Empty) returns (DeviceList);
+}
+
+message ConsoleList {
+  repeated string console = 1;
+}
+
+message ActuatorList {
+  repeated string actuator = 1;
+}
+
+message DeviceList {
+  repeated string device = 1;
+}
+
+service Device {
+  rpc StreamOutput (DeviceTarget) returns (stream ConsoleOutput);
+  rpc StreamInput (stream DeviceInputRequest) returns (google.protobuf.Empty);
+  rpc ChangeDeviceMode(DeviceModeRequest) returns (google.protobuf.Empty);
+}
+
+message DeviceInputRequest {
+   oneof TargetOrData {
+     DeviceTarget target = 1;
+     bytes data = 2;
+   }
+}
+
+message DeviceTarget {
+   string device = 1;
+   optional string console = 2;
+}
+
+message DeviceModeRequest {
+  string device = 1;
+  string mode = 2;
+}
+
+service Console {
+  rpc Configure (ConsoleConfigureRequest) returns (google.protobuf.Empty);
+  rpc StreamOutput (ConsoleOutputRequest) returns (stream ConsoleOutput);
+  rpc StreamInput (stream ConsoleInputRequest) returns (google.protobuf.Empty);
+}
+
+message ConsoleConfigureRequest {
+  string console = 1;
+  google.protobuf.Struct parameters = 2;
+}
+
+message ConsoleInputRequest {
+  oneof TargetOrData {
+    string console = 1;
+    bytes data = 2;
+  }
+}
+
+message ConsoleOutputRequest {
+   string console = 1;
+}
+
+message ConsoleOutput {
+  oneof DataOrState {
+    bytes data = 1;
+    ConsoleStatus status = 2;
+  }
+}
+
+message ConsoleStatus {
+  enum Status {
+    CONNECTED = 0;
+    DISCONNECTED = 1;
+  }
+}
+
+service Actuator {
+    rpc ChangeMode(ActuatorModeRequest) returns (google.protobuf.Empty);
+}
+
+message ActuatorModeRequest {
+  string actuator = 1;
+  google.protobuf.Struct parameters = 2;
+}

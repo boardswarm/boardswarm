@@ -1,11 +1,13 @@
 use std::{os::unix::prelude::AsRawFd, task::Poll};
 
+use boardswarm_protocol::{
+    serial_client::SerialClient, DeviceModeRequest, InputRequest, OutputRequest,
+};
 use bytes::Bytes;
 use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen},
 };
-use protocol::{serial_client::SerialClient, DeviceModeRequest, InputRequest, OutputRequest};
 use tokio_util::sync::ReusableBoxFuture;
 use tui::{
     backend::CrosstermBackend,

@@ -1,5 +1,5 @@
 [package]
-name = "server"
+name = "boardswarm"
 version = "0.1.0"
 edition = "2021"
 
@@ -13,7 +13,7 @@ clap = { version = "4.0.32", features = ["derive"] }
 futures = "0.3.25"
 humantime-serde = "1.1.1"
 pdudaemon-client = { version = "0.1.0", path = "../pdudaemon-client" }
-protocol = { version = "0.1.0", path = "../protocol" }
+boardswarm-protocol = { version = "0.1.0", path = "../boardswarm-protocol" }
 serde = { version = "1.0.152", features = ["derive"] }
 serde_yaml = "0.9.16"
 thiserror = "1.0.38"
