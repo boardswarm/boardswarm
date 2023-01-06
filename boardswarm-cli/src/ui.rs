@@ -1,9 +1,5 @@
 use std::{os::unix::prelude::AsRawFd, task::Poll};
 
-use boardswarm_protocol::{
-    device_input_request::TargetOrData, devices_client::DevicesClient, DeviceInputRequest,
-    DeviceModeRequest, DeviceTarget,
-};
 use bytes::Bytes;
 use crossterm::{
     execute,
@@ -17,7 +13,7 @@ use tui::{
     Terminal as TuiTerminal,
 };
 
-use futures::{ready, Stream, StreamExt};
+use futures::{pin_mut, ready, Stream, StreamExt};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 struct Terminal {
@@ -126,12 +122,7 @@ where
 }
 
 pub async fn run_ui(url: String, device: String, console: Option<String>) -> anyhow::Result<()> {
-    let mut client = DevicesClient::connect(url).await?;
-    let request = tonic::Request::new(DeviceTarget {
-        device: device.clone(),
-        console: console.clone(),
-    });
-    let mut response = client.stream_output(request).await?;
+    let mut devices = crate::client::Devices::connect(url).await?;
 
     enable_raw_mode()?;
 
@@ -160,61 +151,44 @@ pub async fn run_ui(url: String, device: String, console: Option<String>) -> any
     .unwrap();
 
     let mut terminal = Terminal::new(80, 24, terminal).await;
+    let output = devices
+        .stream_output(device.clone(), console.clone())
+        .await?;
     let _writer = tokio::spawn(async move {
-        while let Some(output) = response.get_mut().next().await {
-            match output.unwrap().data_or_state.unwrap() {
-                boardswarm_protocol::console_output::DataOrState::Data(data) => {
-                    terminal.process(&data);
-                    terminal.update().await;
-                }
-
-                _ => (),
-            }
+        pin_mut!(output);
+        while let Some(data) = output.next().await {
+            terminal.process(&data);
+            terminal.update().await;
         }
     });
 
     let reader = tokio::spawn(async move {
         let input = InputStream::new(stdin);
-        let mut s_client = client.clone();
-        let target = DeviceInputRequest {
-            target_or_data: Some(TargetOrData::Target(DeviceTarget {
-                device: device.clone(),
-                console: console.clone(),
-            })),
-        };
-        s_client
+        let mut s_devices = devices.clone();
+        s_devices
             .stream_input(
-                futures::stream::once(async { target }).chain(input.filter_map(move |i| {
+                device.clone(),
+                console,
+                input.filter_map(move |i| {
                     let device = device.clone();
-                    let mut client = client.clone();
+                    let mut devices = devices.clone();
                     async move {
                         match i {
                             Input::PowerOn => {
-                                client
-                                    .change_mode(DeviceModeRequest {
-                                        device,
-                                        mode: "on".to_string(),
-                                    })
-                                    .await
-                                    .unwrap();
+                                devices.change_mode(device, "on".to_string()).await.unwrap();
                                 None
                             }
                             Input::PowerOff => {
-                                client
-                                    .change_mode(DeviceModeRequest {
-                                        device,
-                                        mode: "off".to_string(),
-                                    })
+                                devices
+                                    .change_mode(device, "off".to_string())
                                     .await
                                     .unwrap();
                                 None
                             }
-                            Input::Bytes(data) => Some(DeviceInputRequest {
-                                target_or_data: Some(TargetOrData::Data(data)),
-                            }),
+                            Input::Bytes(data) => Some(data),
                         }
                     }
-                })),
+                }),
             )
             .await
     });
