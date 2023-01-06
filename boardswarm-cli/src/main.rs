@@ -2,40 +2,47 @@ mod client;
 mod ui;
 mod ui_term;
 
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use clap::{Args, Parser, Subcommand};
-use futures::{pin_mut, FutureExt, StreamExt};
+use futures::{pin_mut, FutureExt, Stream, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-async fn copy_output_to_stdout(
-    devices: &mut client::Devices,
-    device: String,
-    console: Option<String>,
-) -> anyhow::Result<()> {
-    let output = devices.stream_output(device, console).await?;
+async fn copy_output_to_stdout<O>(output: O) -> anyhow::Result<()>
+where
+    O: Stream<Item = Bytes>,
+{
     pin_mut!(output);
     let mut stdout = tokio::io::stdout();
     while let Some(data) = output.next().await {
         stdout.write_all(&data).await?;
+        stdout.flush().await?;
     }
     Ok(())
 }
 
-async fn copy_stdin_to_input(
-    devices: &mut client::Devices,
-    device: String,
-    console: Option<String>,
-) -> anyhow::Result<()> {
+fn input_stream() -> impl Stream<Item = Bytes> {
     let stdin = tokio::io::stdin();
-    let input = futures::stream::unfold(stdin, |mut stdin| async move {
+    futures::stream::unfold(stdin, |mut stdin| async move {
         let mut data = BytesMut::zeroed(64);
         let r = stdin.read(&mut data).await.ok()?;
         data.truncate(r);
         Some((data.into(), stdin))
-    });
+    })
+}
 
-    devices.stream_input(device, console, input).await?;
-    Ok(())
+#[derive(Debug, Args)]
+struct ConsoleArgs {
+    console: String,
+}
+
+#[derive(Debug, Subcommand)]
+enum ConsoleCommand {
+    /// List devices known to the server
+    List,
+    /// Tail the output of a device console
+    Tail(ConsoleArgs),
+    /// Connect input and output to a device console
+    Connect(ConsoleArgs),
 }
 
 #[derive(Debug, Args)]
@@ -65,9 +72,13 @@ enum DeviceCommand {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    Consoles {
+        #[command(subcommand)]
+        command: ConsoleCommand,
+    },
     Devices {
         #[command(subcommand)]
-        device_command: DeviceCommand,
+        command: DeviceCommand,
     },
     Ui(DeviceConsoleArgs),
 }
@@ -85,10 +96,35 @@ async fn main() -> anyhow::Result<()> {
     let opt = Opts::parse();
 
     match opt.command {
-        Command::Ui(ui) => ui::run_ui(opt.uri, ui.device, ui.console).await,
-        Command::Devices { device_command } => {
+        Command::Consoles { command } => {
+            let mut consoles = client::Consoles::connect(opt.uri).await?;
+            match command {
+                ConsoleCommand::List => {
+                    println!("Consoles:");
+                    for c in consoles.list().await? {
+                        println!("* {}", c);
+                    }
+                }
+                ConsoleCommand::Tail(c) => {
+                    let output = consoles.stream_output(c.console).await?;
+                    copy_output_to_stdout(output).await?;
+                }
+                ConsoleCommand::Connect(c) => {
+                    let out =
+                        copy_output_to_stdout(consoles.stream_output(c.console.clone()).await?);
+                    let in_ = consoles.stream_input(c.console, input_stream());
+                    futures::select! {
+                        in_ = in_.fuse() => in_?,
+                        out = out.fuse() => out?,
+                    }
+                }
+            }
+
+            Ok(())
+        }
+        Command::Devices { command } => {
             let mut devices = client::Devices::connect(opt.uri).await?;
-            match device_command {
+            match command {
                 DeviceCommand::List => {
                     println!("Devices:");
                     for d in devices.list().await? {
@@ -96,13 +132,17 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
                 DeviceCommand::Tail(d) => {
-                    copy_output_to_stdout(&mut devices, d.device, d.console).await?;
+                    let output = devices.stream_output(d.device, d.console).await?;
+                    copy_output_to_stdout(output).await?;
                 }
                 DeviceCommand::Connect(d) => {
-                    let mut devices_in = devices.clone();
-                    let out =
-                        copy_output_to_stdout(&mut devices, d.device.clone(), d.console.clone());
-                    let in_ = copy_stdin_to_input(&mut devices_in, d.device, d.console);
+                    let out = copy_output_to_stdout(
+                        devices
+                            .stream_output(d.device.clone(), d.console.clone())
+                            .await?,
+                    );
+                    let in_ = devices.stream_input(d.device, d.console, input_stream());
+
                     futures::select! {
                         in_ = in_.fuse() => in_?,
                         out = out.fuse() => out?,
@@ -112,5 +152,6 @@ async fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
+        Command::Ui(ui) => ui::run_ui(opt.uri, ui.device, ui.console).await,
     }
 }

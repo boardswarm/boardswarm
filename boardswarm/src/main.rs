@@ -1,3 +1,6 @@
+use boardswarm_protocol::{
+    console_input_request, ConsoleConfigureRequest, ConsoleInputRequest, ConsoleOutputRequest,
+};
 use bytes::Bytes;
 use clap::Parser;
 use futures::prelude::*;
@@ -8,6 +11,7 @@ use std::pin::Pin;
 use std::sync::Mutex;
 use std::{net::ToSocketAddrs, sync::Arc};
 use thiserror::Error;
+use tonic::Streaming;
 
 use tracing::{info, warn};
 
@@ -47,6 +51,24 @@ trait Console: std::fmt::Debug + Send + Sync {
         -> Result<BoxStream<'static, Result<Bytes, ConsoleError>>, ConsoleError>;
     fn matches(&self, filter: serde_yaml::Value) -> bool;
 }
+
+type ConsoleOutputStream =
+    stream::BoxStream<'static, Result<boardswarm_protocol::ConsoleOutput, tonic::Status>>;
+
+#[async_trait::async_trait]
+trait ConsoleExt: Console {
+    async fn output_stream(&self) -> ConsoleOutputStream {
+        Box::pin(self.output().await.unwrap().map(|data| {
+            Ok(boardswarm_protocol::ConsoleOutput {
+                data_or_state: Some(boardswarm_protocol::console_output::DataOrState::Data(
+                    data.unwrap(),
+                )),
+            })
+        }))
+    }
+}
+
+impl<C> ConsoleExt for C where C: Console + ?Sized {}
 
 #[derive(Debug)]
 struct DeviceInner {
@@ -184,9 +206,76 @@ impl Server {
 }
 
 #[tonic::async_trait]
+impl boardswarm_protocol::consoles_server::Consoles for Server {
+    type StreamOutputStream = ConsoleOutputStream;
+
+    async fn list(
+        &self,
+        _request: tonic::Request<()>,
+    ) -> Result<tonic::Response<boardswarm_protocol::ConsoleList>, tonic::Status> {
+        let consoles = self.inner.consoles.lock().unwrap();
+        Ok(tonic::Response::new(boardswarm_protocol::ConsoleList {
+            consoles: consoles.iter().map(|d| d.name().to_string()).collect(),
+        }))
+    }
+
+    async fn configure(
+        &self,
+        _request: tonic::Request<ConsoleConfigureRequest>,
+    ) -> Result<tonic::Response<()>, tonic::Status> {
+        Err(tonic::Status::unimplemented("Not yet implemented"))
+    }
+
+    async fn stream_output(
+        &self,
+        request: tonic::Request<ConsoleOutputRequest>,
+    ) -> Result<tonic::Response<Self::StreamOutputStream>, tonic::Status> {
+        let inner = request.into_inner();
+        if let Some(console) = self.get_console(&inner.console) {
+            Ok(tonic::Response::new(console.output_stream().await))
+        } else {
+            Err(tonic::Status::invalid_argument("Can't find output console"))
+        }
+    }
+
+    async fn stream_input(
+        &self,
+        request: tonic::Request<Streaming<ConsoleInputRequest>>,
+    ) -> Result<tonic::Response<()>, tonic::Status> {
+        let mut rx = request.into_inner();
+
+        /* First message must select the target */
+        let msg = match rx.message().await? {
+            Some(msg) => msg,
+            None => return Ok(tonic::Response::new(())),
+        };
+        let console = if let Some(console_input_request::TargetOrData::Console(console)) =
+            msg.target_or_data
+        {
+            self.get_console(&console)
+                .ok_or_else(|| tonic::Status::not_found("No serial console by that name"))?
+        } else {
+            return Err(tonic::Status::invalid_argument(
+                "Target should be set first",
+            ));
+        };
+
+        let mut input = console.input().await.unwrap();
+        while let Some(request) = rx.message().await? {
+            match request.target_or_data {
+                Some(console_input_request::TargetOrData::Data(data)) => {
+                    input.send(data).await.unwrap()
+                }
+                _ => return Err(tonic::Status::invalid_argument("Target cannot be changed")),
+            }
+        }
+        Ok(tonic::Response::new(()))
+    }
+}
+
+#[tonic::async_trait]
 impl boardswarm_protocol::devices_server::Devices for Server {
-    type StreamOutputStream =
-        stream::BoxStream<'static, Result<boardswarm_protocol::ConsoleOutput, tonic::Status>>;
+    type StreamOutputStream = ConsoleOutputStream;
 
     async fn stream_output(
         &self,
@@ -194,14 +283,7 @@ impl boardswarm_protocol::devices_server::Devices for Server {
     ) -> Result<tonic::Response<Self::StreamOutputStream>, tonic::Status> {
         let inner = request.into_inner();
         if let Some(console) = self.console_for_device(&inner.device, inner.console.as_deref()) {
-            let output = console.output().await.unwrap().map(|data| {
-                Ok(boardswarm_protocol::ConsoleOutput {
-                    data_or_state: Some(boardswarm_protocol::console_output::DataOrState::Data(
-                        data.unwrap(),
-                    )),
-                })
-            });
-            Ok(tonic::Response::new(Box::pin(output)))
+            Ok(tonic::Response::new(console.output_stream().await))
         } else {
             Err(tonic::Status::invalid_argument("Can't find output console"))
         }
@@ -295,6 +377,9 @@ async fn main() -> anyhow::Result<()> {
 
     let server = tonic::transport::Server::builder()
         .add_service(boardswarm_protocol::devices_server::DevicesServer::new(
+            server.clone(),
+        ))
+        .add_service(boardswarm_protocol::consoles_server::ConsolesServer::new(
             server,
         ))
         .serve("[::1]:50051".to_socket_addrs().unwrap().next().unwrap());

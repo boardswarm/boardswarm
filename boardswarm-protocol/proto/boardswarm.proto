@@ -32,14 +32,14 @@ message DeviceModeRequest {
 }
 
 service Consoles {
-  rpc ListConsoles(google.protobuf.Empty) returns (ConsoleList);
+  rpc List(google.protobuf.Empty) returns (ConsoleList);
   rpc Configure (ConsoleConfigureRequest) returns (google.protobuf.Empty);
   rpc StreamOutput (ConsoleOutputRequest) returns (stream ConsoleOutput);
   rpc StreamInput (stream ConsoleInputRequest) returns (google.protobuf.Empty);
 }
 
 message ConsoleList {
-  repeated string console = 1;
+  repeated string consoles = 1;
 }
 
 message ConsoleConfigureRequest {
@@ -73,7 +73,7 @@ message ConsoleStatus {
 }
 
 service Actuators {
-  rpc ListActuators(google.protobuf.Empty) returns (ActuatorList);
+  rpc List(google.protobuf.Empty) returns (ActuatorList);
   rpc ChangeMode(ActuatorModeRequest) returns (google.protobuf.Empty);
 }
 

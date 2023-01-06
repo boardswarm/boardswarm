@@ -1,5 +1,6 @@
 use boardswarm_protocol::{
-    console_output, device_input_request, devices_client::DevicesClient, DeviceInputRequest,
+    console_input_request, console_output, consoles_client::ConsolesClient, device_input_request,
+    devices_client::DevicesClient, ConsoleInputRequest, ConsoleOutputRequest, DeviceInputRequest,
     DeviceModeRequest, DeviceTarget,
 };
 use bytes::Bytes;
@@ -73,4 +74,58 @@ impl Devices {
             .await?;
         Ok(())
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct Consoles {
+    client: ConsolesClient<tonic::transport::Channel>,
+}
+
+impl Consoles {
+    pub async fn connect(url: String) -> Result<Self, tonic::transport::Error> {
+        let client = ConsolesClient::connect(url).await?;
+        Ok(Self { client })
+    }
+
+    pub async fn list(&mut self) -> Result<Vec<String>, tonic::Status> {
+        let consoles = self.client.list(()).await?;
+        Ok(consoles.into_inner().consoles)
+    }
+
+    pub async fn stream_input<I>(&mut self, console: String, input: I) -> Result<(), tonic::Status>
+    where
+        I: Stream<Item = Bytes> + Send + 'static,
+    {
+        self.client
+            .stream_input(
+                stream::once(async move {
+                    ConsoleInputRequest {
+                        target_or_data: Some(console_input_request::TargetOrData::Console(console)),
+                    }
+                })
+                .chain(input.map(|i| ConsoleInputRequest {
+                    target_or_data: Some(console_input_request::TargetOrData::Data(i)),
+                })),
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn stream_output(
+        &mut self,
+        console: String,
+    ) -> Result<impl Stream<Item = Bytes>, tonic::Status> {
+        let request = tonic::Request::new(ConsoleOutputRequest { console });
+        let response = self.client.stream_output(request).await?;
+        let stream = response.into_inner();
+        Ok(stream.filter_map(|output| async {
+            let output = output.ok()?;
+            match output.data_or_state? {
+                console_output::DataOrState::Data(data) => Some(data),
+                _ => None,
+            }
+        }))
+    }
+
+    // TODO configure
 }
