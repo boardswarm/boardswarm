@@ -3,7 +3,7 @@ import "google/protobuf/empty.proto";
 import "google/protobuf/struct.proto";
 package boardswarm;
 
-service Device {
+service Devices {
   rpc ListDevices(google.protobuf.Empty) returns (DeviceList);
   rpc StreamOutput (DeviceTarget) returns (stream ConsoleOutput);
   rpc StreamInput (stream DeviceInputRequest) returns (google.protobuf.Empty);
@@ -31,7 +31,7 @@ message DeviceModeRequest {
   string mode = 2;
 }
 
-service Console {
+service Consoles {
   rpc ListConsoles(google.protobuf.Empty) returns (ConsoleList);
   rpc Configure (ConsoleConfigureRequest) returns (google.protobuf.Empty);
   rpc StreamOutput (ConsoleOutputRequest) returns (stream ConsoleOutput);
@@ -72,7 +72,7 @@ message ConsoleStatus {
   }
 }
 
-service Actuator {
+service Actuators {
   rpc ListActuators(google.protobuf.Empty) returns (ActuatorList);
   rpc ChangeMode(ActuatorModeRequest) returns (google.protobuf.Empty);
 }

@@ -1,19 +1,19 @@
 use boardswarm_protocol::{
-    console_output, device_client::DeviceClient, device_input_request, DeviceInputRequest,
+    console_output, device_input_request, devices_client::DevicesClient, DeviceInputRequest,
     DeviceTarget,
 };
 use bytes::Bytes;
 use futures::{stream, Stream, StreamExt};
 
 #[derive(Clone, Debug)]
-pub struct Device {
-    client: DeviceClient<tonic::transport::Channel>,
+pub struct Devices {
+    client: DevicesClient<tonic::transport::Channel>,
 }
 
-impl Device {
+impl Devices {
     pub async fn connect(url: String) -> Result<Self, tonic::transport::Error> {
-        let client = DeviceClient::connect(url).await?;
-        Ok(Device { client })
+        let client = DevicesClient::connect(url).await?;
+        Ok(Self { client })
     }
 
     pub async fn list_devices(&mut self) -> Result<Vec<String>, tonic::Status> {

@@ -1,7 +1,7 @@
 use std::{os::unix::prelude::AsRawFd, task::Poll};
 
 use boardswarm_protocol::{
-    device_client::DeviceClient, device_input_request::TargetOrData, DeviceInputRequest,
+    device_input_request::TargetOrData, devices_client::DevicesClient, DeviceInputRequest,
     DeviceModeRequest, DeviceTarget,
 };
 use bytes::Bytes;
@@ -126,7 +126,7 @@ where
 }
 
 pub async fn run_ui(url: String, device: String, console: Option<String>) -> anyhow::Result<()> {
-    let mut client = DeviceClient::connect(url).await?;
+    let mut client = DevicesClient::connect(url).await?;
     let request = tonic::Request::new(DeviceTarget {
         device: device.clone(),
         console: console.clone(),

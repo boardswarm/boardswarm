@@ -184,7 +184,7 @@ impl Server {
 }
 
 #[tonic::async_trait]
-impl boardswarm_protocol::device_server::Device for Server {
+impl boardswarm_protocol::devices_server::Devices for Server {
     type StreamOutputStream =
         stream::BoxStream<'static, Result<boardswarm_protocol::ConsoleOutput, tonic::Status>>;
 
@@ -255,6 +255,13 @@ impl boardswarm_protocol::device_server::Device for Server {
             Err(tonic::Status::not_found("No device by that name"))
         }
     }
+
+    async fn list_devices(
+        &self,
+        _request: tonic::Request<()>,
+    ) -> Result<tonic::Response<boardswarm_protocol::DeviceList>, tonic::Status> {
+        todo!()
+    }
 }
 
 #[derive(Debug, clap::Parser)]
@@ -284,7 +291,7 @@ async fn main() -> anyhow::Result<()> {
     local.spawn_local(udev::start_provider("udev".to_string(), server.clone()));
 
     let server = tonic::transport::Server::builder()
-        .add_service(boardswarm_protocol::device_server::DeviceServer::new(
+        .add_service(boardswarm_protocol::devices_server::DevicesServer::new(
             server,
         ))
         .serve("[::1]:50051".to_socket_addrs().unwrap().next().unwrap());

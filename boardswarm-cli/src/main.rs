@@ -8,7 +8,7 @@ use futures::{pin_mut, FutureExt, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 async fn copy_output_to_stdout(
-    devices: &mut client::Device,
+    devices: &mut client::Devices,
     device: String,
     console: Option<String>,
 ) -> anyhow::Result<()> {
@@ -22,7 +22,7 @@ async fn copy_output_to_stdout(
 }
 
 async fn copy_stdin_to_input(
-    devices: &mut client::Device,
+    devices: &mut client::Devices,
     device: String,
     console: Option<String>,
 ) -> anyhow::Result<()> {
@@ -79,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
     match opt.command {
         Command::Ui(ui) => ui::run_ui(opt.uri, ui.device, ui.console).await,
         Command::Devices { device_command } => {
-            let mut devices = client::Device::connect(opt.uri).await?;
+            let mut devices = client::Devices::connect(opt.uri).await?;
             match device_command {
                 DeviceCommand::List => {
                     println!("Devices:");
