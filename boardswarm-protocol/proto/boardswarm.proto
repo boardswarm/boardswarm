@@ -11,7 +11,7 @@ service Devices {
 }
 
 message DeviceList {
-  repeated string device = 1;
+  repeated string devices = 1;
 }
 
 message DeviceInputRequest {

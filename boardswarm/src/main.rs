@@ -260,7 +260,10 @@ impl boardswarm_protocol::devices_server::Devices for Server {
         &self,
         _request: tonic::Request<()>,
     ) -> Result<tonic::Response<boardswarm_protocol::DeviceList>, tonic::Status> {
-        todo!()
+        let devices = self.inner.devices.lock().unwrap();
+        Ok(tonic::Response::new(boardswarm_protocol::DeviceList {
+            devices: devices.iter().map(|d| d.name().to_string()).collect(),
+        }))
     }
 }
 

@@ -18,7 +18,7 @@ impl Devices {
 
     pub async fn list(&mut self) -> Result<Vec<String>, tonic::Status> {
         let devices = self.client.list(()).await?;
-        Ok(devices.into_inner().device)
+        Ok(devices.into_inner().devices)
     }
 
     pub async fn stream_input<I>(
