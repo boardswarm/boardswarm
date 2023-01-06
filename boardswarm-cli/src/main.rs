@@ -45,6 +45,12 @@ struct DeviceConsoleArgs {
     device: String,
 }
 
+#[derive(Debug, Args)]
+struct DeviceModeArgs {
+    device: String,
+    mode: String,
+}
+
 #[derive(Debug, Subcommand)]
 enum DeviceCommand {
     /// List devices known to the server
@@ -53,6 +59,8 @@ enum DeviceCommand {
     Tail(DeviceConsoleArgs),
     /// Connect input and output to a device console
     Connect(DeviceConsoleArgs),
+    /// Change device mode
+    Mode(DeviceModeArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -83,7 +91,7 @@ async fn main() -> anyhow::Result<()> {
             match device_command {
                 DeviceCommand::List => {
                     println!("Devices:");
-                    for d in devices.list_devices().await? {
+                    for d in devices.list().await? {
                         println!("* {}", d);
                     }
                 }
@@ -100,6 +108,7 @@ async fn main() -> anyhow::Result<()> {
                         out = out.fuse() => out?,
                     }
                 }
+                DeviceCommand::Mode(d) => devices.change_mode(d.device, d.mode).await?,
             }
             Ok(())
         }

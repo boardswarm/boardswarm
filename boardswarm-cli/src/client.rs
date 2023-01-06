@@ -1,6 +1,6 @@
 use boardswarm_protocol::{
     console_output, device_input_request, devices_client::DevicesClient, DeviceInputRequest,
-    DeviceTarget,
+    DeviceModeRequest, DeviceTarget,
 };
 use bytes::Bytes;
 use futures::{stream, Stream, StreamExt};
@@ -16,8 +16,8 @@ impl Devices {
         Ok(Self { client })
     }
 
-    pub async fn list_devices(&mut self) -> Result<Vec<String>, tonic::Status> {
-        let devices = self.client.list_devices(()).await?;
+    pub async fn list(&mut self) -> Result<Vec<String>, tonic::Status> {
+        let devices = self.client.list(()).await?;
         Ok(devices.into_inner().device)
     }
 
@@ -65,5 +65,12 @@ impl Devices {
                 _ => None,
             }
         }))
+    }
+
+    pub async fn change_mode(&mut self, device: String, mode: String) -> Result<(), tonic::Status> {
+        self.client
+            .change_mode(DeviceModeRequest { device, mode })
+            .await?;
+        Ok(())
     }
 }

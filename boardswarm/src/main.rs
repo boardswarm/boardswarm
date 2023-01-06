@@ -243,7 +243,7 @@ impl boardswarm_protocol::devices_server::Devices for Server {
         Ok(tonic::Response::new(()))
     }
 
-    async fn change_device_mode(
+    async fn change_mode(
         &self,
         request: tonic::Request<boardswarm_protocol::DeviceModeRequest>,
     ) -> Result<tonic::Response<()>, tonic::Status> {
@@ -256,7 +256,7 @@ impl boardswarm_protocol::devices_server::Devices for Server {
         }
     }
 
-    async fn list_devices(
+    async fn list(
         &self,
         _request: tonic::Request<()>,
     ) -> Result<tonic::Response<boardswarm_protocol::DeviceList>, tonic::Status> {

@@ -191,7 +191,7 @@ pub async fn run_ui(url: String, device: String, console: Option<String>) -> any
                         match i {
                             Input::PowerOn => {
                                 client
-                                    .change_device_mode(DeviceModeRequest {
+                                    .change_mode(DeviceModeRequest {
                                         device,
                                         mode: "on".to_string(),
                                     })
@@ -201,7 +201,7 @@ pub async fn run_ui(url: String, device: String, console: Option<String>) -> any
                             }
                             Input::PowerOff => {
                                 client
-                                    .change_device_mode(DeviceModeRequest {
+                                    .change_mode(DeviceModeRequest {
                                         device,
                                         mode: "off".to_string(),
                                     })

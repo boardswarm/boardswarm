@@ -4,10 +4,10 @@ import "google/protobuf/struct.proto";
 package boardswarm;
 
 service Devices {
-  rpc ListDevices(google.protobuf.Empty) returns (DeviceList);
+  rpc List(google.protobuf.Empty) returns (DeviceList);
   rpc StreamOutput (DeviceTarget) returns (stream ConsoleOutput);
   rpc StreamInput (stream DeviceInputRequest) returns (google.protobuf.Empty);
-  rpc ChangeDeviceMode(DeviceModeRequest) returns (google.protobuf.Empty);
+  rpc ChangeMode(DeviceModeRequest) returns (google.protobuf.Empty);
 }
 
 message DeviceList {
