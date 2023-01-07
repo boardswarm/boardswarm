@@ -55,12 +55,15 @@ impl crate::Actuator for PduDaemonActuator {
         &self.name
     }
 
-    async fn set_mode(&self, parameters: serde_yaml::Value) -> Result<(), crate::ActuatorError> {
+    async fn set_mode(
+        &self,
+        parameters: Box<dyn erased_serde::Deserializer<'static> + Send>,
+    ) -> Result<(), crate::ActuatorError> {
         #[derive(Deserialize)]
         struct ModeParameters {
             mode: String,
         }
-        let parameters: ModeParameters = serde_yaml::from_value(parameters).unwrap();
+        let parameters = ModeParameters::deserialize(parameters).unwrap();
         match parameters.mode.as_str() {
             "on" => self.daemon.on(&self.hostname, self.port).await.unwrap(),
             "off" => self.daemon.off(&self.hostname, self.port).await.unwrap(),

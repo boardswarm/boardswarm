@@ -31,6 +31,20 @@ fn input_stream() -> impl Stream<Item = Bytes> {
 }
 
 #[derive(Debug, Args)]
+struct ActuatorMode {
+    actuator: String,
+    mode: String,
+}
+
+#[derive(Debug, Subcommand)]
+enum ActuatorCommand {
+    /// List actuators known to the server
+    List,
+    /// Change actuator mode
+    ChangeMode(ActuatorMode),
+}
+
+#[derive(Debug, Args)]
 struct ConsoleArgs {
     console: String,
 }
@@ -80,6 +94,10 @@ enum DeviceCommand {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    Actuators {
+        #[command(subcommand)]
+        command: ActuatorCommand,
+    },
     Consoles {
         #[command(subcommand)]
         command: ConsoleCommand,
@@ -104,6 +122,23 @@ async fn main() -> anyhow::Result<()> {
     let opt = Opts::parse();
 
     match opt.command {
+        Command::Actuators { command } => {
+            let mut actuators = client::Actuators::connect(opt.uri).await?;
+            match command {
+                ActuatorCommand::List => {
+                    println!("Actuators:");
+                    for c in actuators.list().await? {
+                        println!("* {}", c);
+                    }
+                }
+                ActuatorCommand::ChangeMode(c) => {
+                    let p = serde_json::from_str(&c.mode)?;
+                    actuators.change_mode(c.actuator, p).await?;
+                }
+            }
+
+            Ok(())
+        }
         Command::Consoles { command } => {
             let mut consoles = client::Consoles::connect(opt.uri).await?;
             match command {

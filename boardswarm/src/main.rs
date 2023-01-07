@@ -34,7 +34,10 @@ pub enum ActuatorError {}
 #[async_trait::async_trait]
 trait Actuator: std::fmt::Debug + Send + Sync {
     fn name(&self) -> &str;
-    async fn set_mode(&self, parameters: serde_yaml::Value) -> Result<(), ActuatorError>;
+    async fn set_mode(
+        &self,
+        parameters: Box<dyn erased_serde::Deserializer<'static> + Send>,
+    ) -> Result<(), ActuatorError>;
 }
 
 #[derive(Error, Debug)]
@@ -115,7 +118,12 @@ impl Device {
         if let Some(mode) = self.inner.config.modes.iter().find(|m| m.name == mode) {
             for step in &mode.sequence {
                 if let Some(provider) = self.inner.server.get_actuator(&step.name) {
-                    provider.set_mode(step.parameters.clone()).await.unwrap();
+                    provider
+                        .set_mode(Box::new(<dyn erased_serde::Deserializer>::erase(
+                            step.parameters.clone(),
+                        )))
+                        .await
+                        .unwrap();
                 } else {
                     warn!("Provider {} not found", &step.name);
                     return;
@@ -364,6 +372,37 @@ impl boardswarm_protocol::devices_server::Devices for Server {
     }
 }
 
+#[tonic::async_trait]
+impl boardswarm_protocol::actuators_server::Actuators for Server {
+    async fn list(
+        &self,
+        _request: tonic::Request<()>,
+    ) -> Result<tonic::Response<boardswarm_protocol::ActuatorList>, tonic::Status> {
+        let actuators = self.inner.actuators.lock().unwrap();
+        Ok(tonic::Response::new(boardswarm_protocol::ActuatorList {
+            actuators: actuators.iter().map(|d| d.name().to_string()).collect(),
+        }))
+    }
+
+    async fn change_mode(
+        &self,
+        request: tonic::Request<boardswarm_protocol::ActuatorModeRequest>,
+    ) -> Result<tonic::Response<()>, tonic::Status> {
+        let inner = request.into_inner();
+        if let Some(actuator) = self.get_actuator(&inner.actuator) {
+            actuator
+                .set_mode(Box::new(<dyn erased_serde::Deserializer>::erase(
+                    inner.parameters.unwrap(),
+                )))
+                .await
+                .unwrap();
+            Ok(tonic::Response::new(()))
+        } else {
+            Err(tonic::Status::invalid_argument("Can't find console"))
+        }
+    }
+}
+
 #[derive(Debug, clap::Parser)]
 struct Opts {
     config: PathBuf,
@@ -395,6 +434,9 @@ async fn main() -> anyhow::Result<()> {
             server.clone(),
         ))
         .add_service(boardswarm_protocol::consoles_server::ConsolesServer::new(
+            server.clone(),
+        ))
+        .add_service(boardswarm_protocol::actuators_server::ActuatorsServer::new(
             server,
         ))
         .serve("[::1]:50051".to_socket_addrs().unwrap().next().unwrap());

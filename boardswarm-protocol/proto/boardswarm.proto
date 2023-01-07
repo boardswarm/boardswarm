@@ -83,6 +83,6 @@ message ActuatorModeRequest {
 }
 
 message ActuatorList {
-  repeated string actuator = 1;
+  repeated string actuators = 1;
 }
 

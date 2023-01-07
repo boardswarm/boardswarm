@@ -1,7 +1,8 @@
 use boardswarm_protocol::{
-    console_input_request, console_output, consoles_client::ConsolesClient, device_input_request,
-    devices_client::DevicesClient, ConsoleConfigureRequest, ConsoleInputRequest,
-    ConsoleOutputRequest, DeviceInputRequest, DeviceModeRequest, DeviceTarget,
+    actuators_client::ActuatorsClient, console_input_request, console_output,
+    consoles_client::ConsolesClient, device_input_request, devices_client::DevicesClient,
+    ActuatorModeRequest, ConsoleConfigureRequest, ConsoleInputRequest, ConsoleOutputRequest,
+    DeviceInputRequest, DeviceModeRequest, DeviceTarget,
 };
 use bytes::Bytes;
 use futures::{stream, Stream, StreamExt};
@@ -137,6 +138,36 @@ impl Consoles {
             parameters: Some(parameters),
         };
         self.client.configure(configure).await?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Actuators {
+    client: ActuatorsClient<tonic::transport::Channel>,
+}
+
+impl Actuators {
+    pub async fn connect(url: String) -> Result<Self, tonic::transport::Error> {
+        let client = ActuatorsClient::connect(url).await?;
+        Ok(Self { client })
+    }
+
+    pub async fn list(&mut self) -> Result<Vec<String>, tonic::Status> {
+        let actuators = self.client.list(()).await?;
+        Ok(actuators.into_inner().actuators)
+    }
+
+    pub async fn change_mode(
+        &mut self,
+        actuator: String,
+        parameters: boardswarm_protocol::Parameters,
+    ) -> Result<(), tonic::Status> {
+        let mode = ActuatorModeRequest {
+            actuator,
+            parameters: Some(parameters),
+        };
+        self.client.change_mode(mode).await?;
         Ok(())
     }
 }
