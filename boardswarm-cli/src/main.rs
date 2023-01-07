@@ -35,10 +35,18 @@ struct ConsoleArgs {
     console: String,
 }
 
+#[derive(Debug, Args)]
+struct ConsoleConfigure {
+    console: String,
+    configuration: String,
+}
+
 #[derive(Debug, Subcommand)]
 enum ConsoleCommand {
     /// List devices known to the server
     List,
+    /// Configure a console
+    Configure(ConsoleConfigure),
     /// Tail the output of a device console
     Tail(ConsoleArgs),
     /// Connect input and output to a device console
@@ -104,6 +112,10 @@ async fn main() -> anyhow::Result<()> {
                     for c in consoles.list().await? {
                         println!("* {}", c);
                     }
+                }
+                ConsoleCommand::Configure(c) => {
+                    let p = serde_json::from_str(&c.configuration)?;
+                    consoles.configure(c.console, p).await?;
                 }
                 ConsoleCommand::Tail(c) => {
                     let output = consoles.stream_output(c.console).await?;

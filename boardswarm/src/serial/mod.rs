@@ -1,6 +1,7 @@
 // Local serial port
 use bytes::{Bytes, BytesMut};
 use futures::ready;
+use serde::Deserialize;
 use std::{
     collections::HashMap,
     pin::Pin,
@@ -95,12 +96,15 @@ impl crate::Console for SerialPort {
         &self.name
     }
 
-    fn configure(&self, parameters: serde_yaml::Value) -> Result<(), crate::ConsoleError> {
+    fn configure(
+        &self,
+        parameters: Box<dyn erased_serde::Deserializer>,
+    ) -> Result<(), crate::ConsoleError> {
         #[derive(serde::Deserialize)]
         struct Config {
             rate: u32,
         }
-        let config: Config = serde_yaml::from_value(parameters).unwrap();
+        let config = Config::deserialize(parameters).unwrap();
         let mut r = self.rate.lock().unwrap();
         *r = config.rate;
         Ok(())

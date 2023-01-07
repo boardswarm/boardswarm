@@ -43,7 +43,10 @@ pub enum ConsoleError {}
 #[async_trait::async_trait]
 trait Console: std::fmt::Debug + Send + Sync {
     fn name(&self) -> &str;
-    fn configure(&self, parameters: serde_yaml::Value) -> Result<(), ConsoleError>;
+    fn configure(
+        &self,
+        parameters: Box<dyn erased_serde::Deserializer>,
+    ) -> Result<(), ConsoleError>;
     async fn input(
         &self,
     ) -> Result<Pin<Box<dyn Sink<Bytes, Error = ConsoleError> + Send>>, ConsoleError>;
@@ -198,7 +201,9 @@ impl Server {
             .find(|c| c.matches(config_console.match_.filter.clone()))?
             .clone();
         device_console
-            .configure(config_console.parameters.clone())
+            .configure(Box::new(<dyn erased_serde::Deserializer>::erase(
+                config_console.parameters.clone(),
+            )))
             .ok()?;
 
         Some(device_console)
@@ -221,9 +226,19 @@ impl boardswarm_protocol::consoles_server::Consoles for Server {
 
     async fn configure(
         &self,
-        _request: tonic::Request<ConsoleConfigureRequest>,
+        request: tonic::Request<ConsoleConfigureRequest>,
     ) -> Result<tonic::Response<()>, tonic::Status> {
-        Err(tonic::Status::unimplemented("Not yet implemented"))
+        let inner = request.into_inner();
+        if let Some(console) = self.get_console(&inner.console) {
+            console
+                .configure(Box::new(<dyn erased_serde::Deserializer>::erase(
+                    inner.parameters.unwrap(),
+                )))
+                .unwrap();
+            Ok(tonic::Response::new(()))
+        } else {
+            Err(tonic::Status::invalid_argument("Can't find console"))
+        }
     }
 
     async fn stream_output(

@@ -1,7 +1,7 @@
 use boardswarm_protocol::{
     console_input_request, console_output, consoles_client::ConsolesClient, device_input_request,
-    devices_client::DevicesClient, ConsoleInputRequest, ConsoleOutputRequest, DeviceInputRequest,
-    DeviceModeRequest, DeviceTarget,
+    devices_client::DevicesClient, ConsoleConfigureRequest, ConsoleInputRequest,
+    ConsoleOutputRequest, DeviceInputRequest, DeviceModeRequest, DeviceTarget,
 };
 use bytes::Bytes;
 use futures::{stream, Stream, StreamExt};
@@ -127,5 +127,16 @@ impl Consoles {
         }))
     }
 
-    // TODO configure
+    pub async fn configure(
+        &mut self,
+        console: String,
+        parameters: boardswarm_protocol::Parameters,
+    ) -> Result<(), tonic::Status> {
+        let configure = ConsoleConfigureRequest {
+            console,
+            parameters: Some(parameters),
+        };
+        self.client.configure(configure).await?;
+        Ok(())
+    }
 }
