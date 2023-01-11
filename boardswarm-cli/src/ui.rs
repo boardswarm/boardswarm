@@ -27,10 +27,26 @@ impl Terminal {
         height: u16,
         tui: TuiTerminal<CrosstermBackend<std::io::Stdout>>,
     ) -> Self {
-        let parser = vt100::Parser::new(height, width, 0);
+        let parser = vt100::Parser::new(height, width, height as usize * 128);
         let mut this = Self { parser, tui };
         this.update().await;
         this
+    }
+
+    fn scroll_up(&mut self) {
+        let offset = self.parser.screen().scrollback();
+        self.parser.set_scrollback(offset + 1)
+    }
+
+    fn scroll_down(&mut self) {
+        let offset = self.parser.screen().scrollback();
+        if offset > 0 {
+            self.parser.set_scrollback(offset - 1)
+        }
+    }
+
+    fn scroll_reset(&mut self) {
+        self.parser.set_scrollback(0)
     }
 
     fn process(&mut self, bytes: &[u8]) {
@@ -49,7 +65,7 @@ impl Terminal {
                 let inner = block.inner(outer);
                 f.render_widget(block, outer);
                 f.render_widget(term, inner);
-                if !screen.hide_cursor() {
+                if !screen.hide_cursor() && screen.scrollback() == 0 {
                     let cursor = screen.cursor_position();
                     f.set_cursor(cursor.1 + inner.x, cursor.0 + inner.y);
                 }
@@ -67,9 +83,13 @@ where
     (Bytes::copy_from_slice(&buffer[0..read]), input)
 }
 
+#[derive(Debug, Clone)]
 enum Input {
     PowerOn,
     PowerOff,
+    Up,
+    Down,
+    ScrollReset,
     Bytes(Bytes),
 }
 
@@ -97,6 +117,11 @@ where
                 b'q' if self.saw_escape => return None,
                 b'o' if self.saw_escape => return Some(Input::PowerOn),
                 b'f' if self.saw_escape => return Some(Input::PowerOff),
+                b'k' if self.saw_escape => return Some(Input::Up),
+                b'j' if self.saw_escape => return Some(Input::Down),
+                // FIXME enter doesn't work
+                b'\n' if self.saw_escape => return Some(Input::ScrollReset),
+                b'0' if self.saw_escape => return Some(Input::ScrollReset),
                 _ => self.saw_escape = false,
             }
         }
@@ -154,10 +179,28 @@ pub async fn run_ui(url: String, device: String, console: Option<String>) -> any
     let output = devices
         .stream_output(device.clone(), console.clone())
         .await?;
+    let (input_tx, input_rx) = tokio::sync::mpsc::channel(16);
     let _writer = tokio::spawn(async move {
         pin_mut!(output);
-        while let Some(data) = output.next().await {
-            terminal.process(&data);
+        pin_mut!(input_rx);
+        loop {
+            tokio::select! {
+                data = output.next() => {
+                    if let Some(data) = &data {
+                        terminal.process(&data);
+                    } else {
+                        break
+                    }
+                }
+                Some(input) = input_rx.recv() => {
+                    match input {
+                        Input::Up => { terminal.scroll_up(); },
+                        Input::Down => { terminal.scroll_down(); },
+                        Input::ScrollReset => { terminal.scroll_reset(); },
+                        _ => (),
+                    }
+                }
+            }
             terminal.update().await;
         }
     });
@@ -172,6 +215,7 @@ pub async fn run_ui(url: String, device: String, console: Option<String>) -> any
                 input.filter_map(move |i| {
                     let device = device.clone();
                     let mut devices = devices.clone();
+                    let input_tx = input_tx.clone();
                     async move {
                         match i {
                             Input::PowerOn => {
@@ -183,6 +227,10 @@ pub async fn run_ui(url: String, device: String, console: Option<String>) -> any
                                     .change_mode(device, "off".to_string())
                                     .await
                                     .unwrap();
+                                None
+                            }
+                            Input::Up | Input::Down | Input::ScrollReset => {
+                                input_tx.send(i).await.unwrap();
                                 None
                             }
                             Input::Bytes(data) => Some(data),
