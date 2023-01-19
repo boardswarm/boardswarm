@@ -128,7 +128,7 @@ impl Device {
                     warn!("Provider {} not found", &step.name);
                     return;
                 }
-                if let Some(duration) = step.stablelisation {
+                if let Some(duration) = step.stabilisation {
                     tokio::time::sleep(duration).await;
                 }
             }
