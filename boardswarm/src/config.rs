@@ -54,7 +54,7 @@ pub struct ModeStep {
     pub parameters: serde_yaml::Value,
     #[serde(default)]
     #[serde(with = "humantime_serde")]
-    pub stablelisation: Option<Duration>,
+    pub stabilisation: Option<Duration>,
 }
 
 impl Config {
