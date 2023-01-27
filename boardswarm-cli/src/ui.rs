@@ -187,7 +187,7 @@ pub async fn run_ui(url: String, device: String, console: Option<String>) -> any
             tokio::select! {
                 data = output.next() => {
                     if let Some(data) = &data {
-                        terminal.process(&data);
+                        terminal.process(data);
                     } else {
                         break
                     }

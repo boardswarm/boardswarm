@@ -23,6 +23,8 @@ pub struct Device {
     pub name: String,
     pub consoles: Vec<Console>,
     pub modes: Vec<Mode>,
+    #[serde(default)]
+    pub uploaders: Vec<Uploader>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -31,6 +33,13 @@ pub struct Console {
     #[serde(default)]
     pub default: bool,
     pub parameters: serde_yaml::Value,
+    #[serde(rename = "match")]
+    pub match_: Match,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Uploader {
+    pub name: String,
     #[serde(rename = "match")]
     pub match_: Match,
 }

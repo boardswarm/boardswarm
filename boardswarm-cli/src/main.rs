@@ -2,9 +2,11 @@ mod client;
 mod ui;
 mod ui_term;
 
+use std::path::PathBuf;
+
 use bytes::{Bytes, BytesMut};
 use clap::{Args, Parser, Subcommand};
-use futures::{pin_mut, FutureExt, Stream, StreamExt};
+use futures::{pin_mut, stream, FutureExt, Stream, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 async fn copy_output_to_stdout<O>(output: O) -> anyhow::Result<()>
@@ -68,6 +70,23 @@ enum ConsoleCommand {
 }
 
 #[derive(Debug, Args)]
+struct UploadArgs {
+    uploader: String,
+    target: String,
+    file: PathBuf,
+}
+
+#[derive(Debug, Subcommand)]
+enum UploadCommand {
+    /// List uploaders known to the server
+    List,
+    /// Upload file to uploader target
+    Upload(UploadArgs),
+    /// Commit upload
+    Commit { uploader: String },
+}
+
+#[derive(Debug, Args)]
 struct DeviceConsoleArgs {
     #[clap(short, long)]
     console: Option<String>,
@@ -80,6 +99,14 @@ struct DeviceModeArgs {
     mode: String,
 }
 
+#[derive(Debug, Args)]
+struct DeviceUploadArgs {
+    device: String,
+    uploader: String,
+    target: String,
+    file: PathBuf,
+}
+
 #[derive(Debug, Subcommand)]
 enum DeviceCommand {
     /// List devices known to the server
@@ -90,6 +117,10 @@ enum DeviceCommand {
     Connect(DeviceConsoleArgs),
     /// Change device mode
     Mode(DeviceModeArgs),
+    /// Upload file to uploader target
+    Upload(DeviceUploadArgs),
+    /// Commit upload
+    Commit { device: String, uploader: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -101,6 +132,10 @@ enum Command {
     Consoles {
         #[command(subcommand)]
         command: ConsoleCommand,
+    },
+    Uploaders {
+        #[command(subcommand)]
+        command: UploadCommand,
     },
     Devices {
         #[command(subcommand)]
@@ -169,6 +204,39 @@ async fn main() -> anyhow::Result<()> {
 
             Ok(())
         }
+        Command::Uploaders { command } => {
+            let mut uploaders = client::Uploaders::connect(opt.uri).await?;
+            match command {
+                UploadCommand::List => {
+                    println!("Uploaders:");
+                    for u in uploaders.list().await? {
+                        println!(" {}", u);
+                    }
+                }
+                UploadCommand::Upload(upload) => {
+                    let f = tokio::fs::File::open(upload.file).await?;
+                    let m = f.metadata().await?;
+                    let data = stream::unfold(f, |mut f| async move {
+                        let mut data = BytesMut::zeroed(4096);
+                        let r = f.read(&mut data).await.unwrap();
+                        if r == 0 {
+                            None
+                        } else {
+                            data.truncate(r);
+                            Some((data.freeze(), f))
+                        }
+                    });
+
+                    uploaders
+                        .upload(upload.uploader, upload.target, data, m.len())
+                        .await?;
+                }
+                UploadCommand::Commit { uploader } => {
+                    uploaders.commit(uploader).await?;
+                }
+            }
+            Ok(())
+        }
         Command::Devices { command } => {
             let mut devices = client::Devices::connect(opt.uri).await?;
             match command {
@@ -196,6 +264,27 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
                 DeviceCommand::Mode(d) => devices.change_mode(d.device, d.mode).await?,
+                DeviceCommand::Upload(upload) => {
+                    let f = tokio::fs::File::open(upload.file).await?;
+                    let m = f.metadata().await?;
+                    let data = stream::unfold(f, |mut f| async move {
+                        let mut data = BytesMut::zeroed(4096);
+                        let r = f.read(&mut data).await.unwrap();
+                        if r == 0 {
+                            None
+                        } else {
+                            data.truncate(r);
+                            Some((data.freeze(), f))
+                        }
+                    });
+
+                    devices
+                        .upload(upload.device, upload.uploader, upload.target, data, m.len())
+                        .await?;
+                }
+                DeviceCommand::Commit { device, uploader } => {
+                    devices.commit(device, uploader).await?;
+                }
             }
             Ok(())
         }

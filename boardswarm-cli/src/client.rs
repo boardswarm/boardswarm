@@ -1,11 +1,13 @@
 use boardswarm_protocol::{
     actuators_client::ActuatorsClient, console_input_request, console_output,
-    consoles_client::ConsolesClient, device_input_request, devices_client::DevicesClient,
+    consoles_client::ConsolesClient, device_input_request, device_upload_request,
+    devices_client::DevicesClient, upload_request, uploaders_client::UploadersClient,
     ActuatorModeRequest, ConsoleConfigureRequest, ConsoleInputRequest, ConsoleOutputRequest,
-    DeviceInputRequest, DeviceModeRequest, DeviceTarget,
+    DeviceInputRequest, DeviceModeRequest, DeviceTarget, DeviceUploadRequest, DeviceUploadTarget,
+    DeviceUploaderRequest, UploadRequest, UploadTarget, UploaderRequest,
 };
 use bytes::Bytes;
-use futures::{stream, Stream, StreamExt};
+use futures::{stream, Stream, StreamExt, TryStreamExt};
 
 #[derive(Clone, Debug)]
 pub struct Devices {
@@ -73,6 +75,50 @@ impl Devices {
         self.client
             .change_mode(DeviceModeRequest { device, mode })
             .await?;
+        Ok(())
+    }
+
+    pub async fn upload<S>(
+        &mut self,
+        device: String,
+        uploader: String,
+        target: String,
+        data: S,
+        length: u64,
+    ) -> Result<(), tonic::Status>
+    where
+        S: Stream<Item = Bytes> + Send + 'static,
+    {
+        let progress = self
+            .client
+            .upload(
+                stream::once(async move {
+                    DeviceUploadRequest {
+                        target_or_data: Some(device_upload_request::TargetOrData::Target(
+                            DeviceUploadTarget {
+                                device,
+                                uploader,
+                                target,
+                                length,
+                            },
+                        )),
+                    }
+                })
+                .chain(data.map(|d| DeviceUploadRequest {
+                    target_or_data: Some(device_upload_request::TargetOrData::Data(d)),
+                })),
+            )
+            .await?;
+        let mut progress = progress.into_inner();
+        while let Some(p) = progress.try_next().await? {
+            dbg!(p);
+        }
+        Ok(())
+    }
+
+    pub async fn commit(&mut self, device: String, uploader: String) -> Result<(), tonic::Status> {
+        let request = tonic::Request::new(DeviceUploaderRequest { device, uploader });
+        self.client.upload_commit(request).await?;
         Ok(())
     }
 }
@@ -168,6 +214,63 @@ impl Actuators {
             parameters: Some(parameters),
         };
         self.client.change_mode(mode).await?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Uploaders {
+    client: UploadersClient<tonic::transport::Channel>,
+}
+
+impl Uploaders {
+    pub async fn connect(url: String) -> Result<Self, tonic::transport::Error> {
+        let client = UploadersClient::connect(url).await?;
+        Ok(Self { client })
+    }
+
+    pub async fn list(&mut self) -> Result<Vec<String>, tonic::Status> {
+        let uploaders = self.client.list(()).await?;
+        Ok(uploaders.into_inner().uploaders)
+    }
+
+    pub async fn upload<S>(
+        &mut self,
+        uploader: String,
+        target: String,
+        data: S,
+        length: u64,
+    ) -> Result<(), tonic::Status>
+    where
+        S: Stream<Item = Bytes> + Send + 'static,
+    {
+        let progress = self
+            .client
+            .upload(
+                stream::once(async move {
+                    UploadRequest {
+                        target_or_data: Some(upload_request::TargetOrData::Target(UploadTarget {
+                            uploader,
+                            target,
+                            length,
+                        })),
+                    }
+                })
+                .chain(data.map(|d| UploadRequest {
+                    target_or_data: Some(upload_request::TargetOrData::Data(d)),
+                })),
+            )
+            .await?;
+        let mut progress = progress.into_inner();
+        while let Some(p) = progress.try_next().await? {
+            dbg!(p);
+        }
+        Ok(())
+    }
+
+    pub async fn commit(&mut self, uploader: String) -> Result<(), tonic::Status> {
+        let request = tonic::Request::new(UploaderRequest { uploader });
+        self.client.commit(request).await?;
         Ok(())
     }
 }

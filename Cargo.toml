@@ -5,3 +5,6 @@ members = [
   "boardswarm-cli",
   "pdudaemon-client"
 ]
+
+[patch.crates-io]
+dfu-core = { path = "../dfu-core" }

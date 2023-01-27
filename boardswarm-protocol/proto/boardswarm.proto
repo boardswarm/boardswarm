@@ -8,14 +8,15 @@ service Devices {
   rpc StreamOutput (DeviceTarget) returns (stream ConsoleOutput);
   rpc StreamInput (stream DeviceInputRequest) returns (google.protobuf.Empty);
   rpc ChangeMode(DeviceModeRequest) returns (google.protobuf.Empty);
+  rpc Upload (stream DeviceUploadRequest) returns (stream UploadStatus);
+  rpc UploadCommit(DeviceUploaderRequest) returns (google.protobuf.Empty);
 }
 
 message DeviceList {
   repeated string devices = 1;
 }
 
-message DeviceInputRequest {
-   oneof TargetOrData {
+message DeviceInputRequest { oneof TargetOrData {
      DeviceTarget target = 1;
      bytes data = 2;
    }
@@ -29,6 +30,25 @@ message DeviceTarget {
 message DeviceModeRequest {
   string device = 1;
   string mode = 2;
+}
+
+message DeviceUploaderRequest {
+  string device = 1;
+  string uploader = 2;
+}
+
+message DeviceUploadTarget {
+  string device = 1;
+  string uploader = 2;
+  string target  = 3;
+  uint64 length = 4;
+}
+
+message DeviceUploadRequest {
+  oneof TargetOrData {
+     DeviceUploadTarget target = 1;
+     bytes data = 2;
+  }
 }
 
 service Consoles {
@@ -86,3 +106,34 @@ message ActuatorList {
   repeated string actuators = 1;
 }
 
+service Uploaders {
+  rpc List(google.protobuf.Empty) returns (UploaderList);
+  rpc Upload (stream UploadRequest) returns (stream UploadStatus);
+  rpc Commit(UploaderRequest) returns (google.protobuf.Empty);
+}
+
+message UploaderRequest {
+  string uploader = 1;
+}
+
+message UploaderList {
+  repeated string uploaders = 1;
+}
+
+
+message UploadRequest {
+  oneof TargetOrData {
+     UploadTarget target = 1;
+     bytes data = 2;
+  }
+}
+
+message UploadTarget {
+  string uploader = 1;
+  string target  = 2;
+  uint64 length = 3;
+}
+
+message UploadStatus {
+string progress = 1;
+}
