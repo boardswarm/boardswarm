@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use std::{path::Path, time::Duration};
+use std::{collections::HashMap, path::Path, time::Duration};
 
 use anyhow::Result;
 use serde::Deserialize;
@@ -34,32 +34,27 @@ pub struct Console {
     pub default: bool,
     pub parameters: serde_yaml::Value,
     #[serde(rename = "match")]
-    pub match_: Match,
+    pub match_: HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct Uploader {
     pub name: String,
     #[serde(rename = "match")]
-    pub match_: Match,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Match {
-    pub provider: String,
-    pub filter: serde_yaml::Value,
+    pub match_: HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct Mode {
     pub name: String,
+    pub depends: Option<String>,
     pub sequence: Vec<ModeStep>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ModeStep {
-    // name of the mode provider
-    pub name: String,
+    #[serde(rename = "match")]
+    pub match_: HashMap<String, String>,
     pub parameters: serde_yaml::Value,
     #[serde(default)]
     #[serde(with = "humantime_serde")]

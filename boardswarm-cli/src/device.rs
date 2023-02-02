@@ -1,0 +1,287 @@
+use std::sync::{Arc, Mutex};
+
+use boardswarm_protocol::UploaderInfoMsg;
+use bytes::Bytes;
+use futures::{pin_mut, Stream, StreamExt};
+use tokio::{select, sync::broadcast};
+use tracing::info;
+
+use crate::client::{Boardswarm, UploadProgress};
+
+#[derive(Debug, Clone)]
+pub struct DeviceBuilder {
+    client: Boardswarm,
+}
+
+impl DeviceBuilder {
+    pub async fn new(url: String) -> Result<Self, tonic::transport::Error> {
+        let client = Boardswarm::connect(url).await?;
+        Ok(Self::from_client(client))
+    }
+
+    pub fn from_client(client: Boardswarm) -> Self {
+        DeviceBuilder { client }
+    }
+
+    pub async fn by_id(self, id: u64) -> Result<Device, tonic::Status> {
+        Device::new(self.client, id).await
+    }
+
+    pub async fn by_name(mut self, name: &str) -> Result<Option<Device>, tonic::Status> {
+        let devices = self
+            .client
+            .list(boardswarm_protocol::ItemType::Device)
+            .await?;
+        let id = match devices.iter().find(|i| i.name == name) {
+            Some(i) => i.id,
+            None => return Ok(None),
+        };
+        Ok(Some(self.by_id(id).await?))
+    }
+}
+
+#[derive(Clone)]
+pub struct DeviceUploader {
+    device: Device,
+    uploader: String,
+}
+
+impl DeviceUploader {
+    fn new(device: Device, uploader: String) -> Self {
+        Self { device, uploader }
+    }
+
+    // todo differention between console no (longer) available
+    fn get_id(&self) -> Option<u64> {
+        let d = self.device.inner.device.lock().unwrap();
+        d.uploaders
+            .iter()
+            .find(|u| u.name == self.uploader)
+            .and_then(|u| u.id)
+    }
+
+    pub fn available(&self) -> bool {
+        self.get_id().is_some()
+    }
+
+    /// Wait for the uploader to become available again
+    pub async fn wait(&self) {
+        let mut watch = self.device.watch();
+        while !self.available() {
+            watch.changed().await;
+        }
+    }
+
+    pub async fn info(&mut self) -> Result<UploaderInfoMsg, tonic::Status> {
+        if let Some(id) = self.get_id() {
+            self.device.client.uploader_info(id).await
+        } else {
+            Err(tonic::Status::unavailable(
+                "Uploader currently not available",
+            ))
+        }
+    }
+
+    pub async fn upload<S, T>(
+        &mut self,
+        target: T,
+        data: S,
+        length: u64,
+    ) -> Result<UploadProgress, tonic::Status>
+    where
+        S: Stream<Item = Bytes> + Send + 'static,
+        T: Into<String>,
+    {
+        if let Some(id) = self.get_id() {
+            self.device
+                .client
+                .uploader_upload(id, target.into(), data, length)
+                .await
+        } else {
+            Err(tonic::Status::unavailable(
+                "Uploader currently not available",
+            ))
+        }
+    }
+
+    pub async fn commit(&mut self) -> Result<(), tonic::Status> {
+        if let Some(id) = self.get_id() {
+            self.device.client.uploader_commit(id).await
+        } else {
+            Err(tonic::Status::unavailable(
+                "Uploader currently not available",
+            ))
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct DeviceConsole {
+    device: Device,
+    console: String,
+}
+
+impl DeviceConsole {
+    fn new(device: Device, console: String) -> Self {
+        Self { device, console }
+    }
+
+    // todo differention between console no (longer) available
+    fn get_id(&self) -> Option<u64> {
+        let d = self.device.inner.device.lock().unwrap();
+        d.consoles
+            .iter()
+            .find(|c| c.name == self.console)
+            .and_then(|c| c.id)
+    }
+
+    pub fn available(&self) -> bool {
+        self.get_id().is_some()
+    }
+
+    pub async fn stream_input<I>(&mut self, input: I) -> Result<(), tonic::Status>
+    where
+        I: Stream<Item = Bytes> + Send + 'static,
+    {
+        if let Some(id) = self.get_id() {
+            self.device.client.console_stream_input(id, input).await
+        } else {
+            Err(tonic::Status::unavailable(
+                "Console currently not available",
+            ))
+        }
+    }
+
+    pub async fn stream_output(&mut self) -> Result<impl Stream<Item = Bytes>, tonic::Status> {
+        if let Some(id) = self.get_id() {
+            self.device.client.console_stream_output(id).await
+        } else {
+            Err(tonic::Status::unavailable(
+                "Console currently not available",
+            ))
+        }
+    }
+}
+
+struct DeviceWatcher {
+    watch: tokio::sync::watch::Receiver<()>,
+}
+
+impl DeviceWatcher {
+    async fn changed(&mut self) {
+        let _ = self.watch.changed().await;
+    }
+}
+
+struct DeviceInner {
+    notifier: tokio::sync::watch::Sender<()>,
+    device: Mutex<boardswarm_protocol::Device>,
+}
+
+#[derive(Clone)]
+pub struct Device {
+    client: Boardswarm,
+    id: u64,
+    _shutdown: broadcast::Sender<()>,
+    inner: Arc<DeviceInner>,
+}
+
+impl Device {
+    pub async fn new(mut client: Boardswarm, id: u64) -> Result<Self, tonic::Status> {
+        let mut monitor = client.device_info(id).await?;
+
+        let device = match monitor.next().await {
+            Some(v) => v,
+            None => Err(tonic::Status::not_found("bla")),
+        }?;
+        let device = Mutex::new(device);
+        let (shutdown, rx) = broadcast::channel(1);
+        let notifier = tokio::sync::watch::channel(()).0;
+
+        let inner = Arc::new(DeviceInner { notifier, device });
+        tokio::spawn(Self::monitor(monitor, rx, inner.clone()));
+        Ok(Self {
+            client,
+            id,
+            _shutdown: shutdown,
+            inner,
+        })
+    }
+
+    fn watch(&self) -> DeviceWatcher {
+        DeviceWatcher {
+            watch: self.inner.notifier.subscribe(),
+        }
+    }
+
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    pub async fn change_mode<S: Into<String>>(&self, mode: S) -> Result<(), tonic::Status> {
+        let mut client = self.client.clone();
+        client.device_change_mode(self.id, mode.into()).await?;
+        Ok(())
+    }
+
+    /// Get the default console
+    pub fn console(&self) -> Option<DeviceConsole> {
+        let d = self.inner.device.lock().unwrap();
+        d.consoles
+            .first()
+            .map(|c| DeviceConsole::new(self.clone(), c.name.clone()))
+    }
+
+    pub fn consoles(&self) -> Vec<DeviceConsole> {
+        let d = self.inner.device.lock().unwrap();
+        d.consoles
+            .iter()
+            .map(|c| DeviceConsole::new(self.clone(), c.name.clone()))
+            .collect()
+    }
+
+    pub fn console_by_name(&self, name: &str) -> Option<DeviceConsole> {
+        let d = self.inner.device.lock().unwrap();
+        d.consoles
+            .iter()
+            .find(|c| c.name == name)
+            .map(|c| DeviceConsole::new(self.clone(), c.name.clone()))
+    }
+
+    pub fn uploaders(&self) -> Vec<DeviceUploader> {
+        let d = self.inner.device.lock().unwrap();
+        d.uploaders
+            .iter()
+            .map(|u| DeviceUploader::new(self.clone(), u.name.clone()))
+            .collect()
+    }
+
+    pub fn uploader_by_name(&self, name: &str) -> Option<DeviceUploader> {
+        let d = self.inner.device.lock().unwrap();
+        d.uploaders
+            .iter()
+            .find(|u| u.name == name)
+            .map(|u| DeviceUploader::new(self.clone(), u.name.clone()))
+    }
+
+    async fn monitor<M>(monitor: M, mut shutdown: broadcast::Receiver<()>, inner: Arc<DeviceInner>)
+    where
+        M: futures::Stream<Item = Result<boardswarm_protocol::Device, tonic::Status>> + 'static,
+    {
+        pin_mut!(monitor);
+        loop {
+            select! {
+                _ = shutdown.recv() => { break },
+                update = monitor.next() => {
+                    if let Some(Ok(update))  = update {
+                        info!("=> {:#?}", update);
+                        *inner.device.lock().unwrap() = update;
+                        let _ = inner.notifier.send(());
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}

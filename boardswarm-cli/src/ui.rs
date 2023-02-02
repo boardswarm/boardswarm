@@ -59,15 +59,11 @@ impl Terminal {
         self.tui
             .draw(|f| {
                 let size = f.size();
-                let block = Block::default().title(screen.title()).borders(Borders::ALL);
-
-                let outer = Rect::new(0, 0, 82.min(size.width), 26.min(size.height));
-                let inner = block.inner(outer);
-                f.render_widget(block, outer);
-                f.render_widget(term, inner);
+                let term_area = Rect::new(0, 0, 80.min(size.width), 24.min(size.height));
+                f.render_widget(term, term_area);
                 if !screen.hide_cursor() && screen.scrollback() == 0 {
                     let cursor = screen.cursor_position();
-                    f.set_cursor(cursor.1 + inner.x, cursor.0 + inner.y);
+                    f.set_cursor(cursor.1 + term_area.x, cursor.0 + term_area.y);
                 }
             })
             .unwrap();
@@ -146,9 +142,7 @@ where
     }
 }
 
-pub async fn run_ui(url: String, device: String, console: Option<String>) -> anyhow::Result<()> {
-    let mut devices = crate::client::Devices::connect(url).await?;
-
+pub async fn run_ui(device: crate::device::Device, console: Option<String>) -> anyhow::Result<()> {
     enable_raw_mode()?;
 
     let mut stdout = std::io::stdout();
@@ -176,9 +170,15 @@ pub async fn run_ui(url: String, device: String, console: Option<String>) -> any
     .unwrap();
 
     let mut terminal = Terminal::new(80, 24, terminal).await;
-    let output = devices
-        .stream_output(device.clone(), console.clone())
-        .await?;
+    let mut console = match console {
+        Some(console) => device.console_by_name(&console),
+        None => device.console(),
+    }
+    .ok_or_else(|| anyhow::anyhow!("Console not available"))?;
+
+    let mut output_console = console.clone();
+    let output = output_console.stream_output().await?;
+
     let (input_tx, input_rx) = tokio::sync::mpsc::channel(16);
     let _writer = tokio::spawn(async move {
         pin_mut!(output);
@@ -207,37 +207,28 @@ pub async fn run_ui(url: String, device: String, console: Option<String>) -> any
 
     let reader = tokio::spawn(async move {
         let input = InputStream::new(stdin);
-        let mut s_devices = devices.clone();
-        s_devices
-            .stream_input(
-                device.clone(),
-                console,
-                input.filter_map(move |i| {
-                    let device = device.clone();
-                    let mut devices = devices.clone();
-                    let input_tx = input_tx.clone();
-                    async move {
-                        match i {
-                            Input::PowerOn => {
-                                devices.change_mode(device, "on".to_string()).await.unwrap();
-                                None
-                            }
-                            Input::PowerOff => {
-                                devices
-                                    .change_mode(device, "off".to_string())
-                                    .await
-                                    .unwrap();
-                                None
-                            }
-                            Input::Up | Input::Down | Input::ScrollReset => {
-                                input_tx.send(i).await.unwrap();
-                                None
-                            }
-                            Input::Bytes(data) => Some(data),
+        console
+            .stream_input(input.filter_map(move |i| {
+                let device = device.clone();
+                let input_tx = input_tx.clone();
+                async move {
+                    match i {
+                        Input::PowerOn => {
+                            device.change_mode("on").await.unwrap();
+                            None
                         }
+                        Input::PowerOff => {
+                            device.change_mode("off").await.unwrap();
+                            None
+                        }
+                        Input::Up | Input::Down | Input::ScrollReset => {
+                            input_tx.send(i).await.unwrap();
+                            None
+                        }
+                        Input::Bytes(data) => Some(data),
                     }
-                }),
-            )
+                }
+            }))
             .await
     });
 
@@ -256,8 +247,9 @@ pub async fn run_ui(url: String, device: String, console: Option<String>) -> any
     //terminal.show_cursor()?;
     //
     match r {
-        Ok(Ok(_)) => Ok(()),
-        Ok(Err(e)) => Err(e.into()),
+        Ok(_) => Ok(()),
+        //Ok(Ok(_)) => Ok(()),
+        //Ok(Err(e)) => Err(e.into()),
         Err(e) => Err(e.into()),
     }
 }

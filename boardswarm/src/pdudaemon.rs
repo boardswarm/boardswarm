@@ -1,9 +1,7 @@
-use std::sync::Arc;
-
 use pdudaemon_client::PduDaemon;
 use serde::Deserialize;
 
-use crate::Server;
+use crate::{registry::Properties, Server};
 
 #[derive(Deserialize, Debug)]
 struct Pdu {
@@ -24,24 +22,23 @@ pub fn start_provider(name: String, parameters: serde_yaml::Value, server: Serve
     for pdu in parameters.pdus {
         for i in 1..=pdu.ports {
             let name = format!("{}.{}.port-{}", name, pdu.name, i);
-            let actuator = PduDaemonActuator::new(name, daemon.clone(), pdu.name.clone(), i);
-            server.register_actuator(Arc::new(actuator));
+            let properties = Properties::new(name);
+            let actuator = PduDaemonActuator::new(daemon.clone(), pdu.name.clone(), i);
+            server.register_actuator(properties, actuator);
         }
     }
 }
 
 #[derive(Debug)]
 struct PduDaemonActuator {
-    name: String,
     daemon: PduDaemon,
     hostname: String,
     port: u16,
 }
 
 impl PduDaemonActuator {
-    fn new(name: String, daemon: PduDaemon, hostname: String, port: u16) -> Self {
+    fn new(daemon: PduDaemon, hostname: String, port: u16) -> Self {
         Self {
-            name,
             daemon,
             hostname,
             port,
@@ -51,10 +48,6 @@ impl PduDaemonActuator {
 
 #[async_trait::async_trait]
 impl crate::Actuator for PduDaemonActuator {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
     async fn set_mode(
         &self,
         parameters: Box<dyn erased_serde::Deserializer<'static> + Send>,

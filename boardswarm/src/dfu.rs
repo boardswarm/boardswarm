@@ -3,53 +3,32 @@ use std::{collections::HashMap, io::Read};
 use anyhow::bail;
 use bytes::{Buf, Bytes};
 use futures::{stream::BoxStream, StreamExt};
-use tokio::sync::mpsc::{self, Receiver};
+use tokio::sync::{
+    mpsc::{self, Receiver},
+    oneshot,
+};
 use tracing::{info, warn};
 
 use crate::{UploadProgress, Uploader, UploaderError};
 
 #[derive(Debug)]
 pub struct Dfu {
-    devnode: String,
     device: DfuDevice,
-    attributes: HashMap<String, String>,
+    targets: Vec<String>,
 }
 
 impl Dfu {
-    pub fn new(
-        devnode: String,
-        busnum: u8,
-        address: u8,
-        attributes: HashMap<String, String>,
-    ) -> Self {
+    pub async fn new(busnum: u8, address: u8) -> Self {
         let device = DfuDevice::new(busnum, address);
-        Self {
-            devnode,
-            device,
-            attributes,
-        }
-    }
-
-    pub fn devnode(&self) -> &str {
-        &self.devnode
+        let targets = device.targets().await;
+        Self { device, targets }
     }
 }
 
 #[async_trait::async_trait]
 impl Uploader for Dfu {
-    fn name(&self) -> &str {
-        self.devnode()
-    }
-
-    fn matches(&self, filter: serde_yaml::Value) -> bool {
-        let filter: HashMap<String, String> = serde_yaml::from_value(filter).unwrap();
-        for (k, v) in filter.iter() {
-            match self.attributes.get(k) {
-                Some(a_v) if a_v == v => (),
-                _ => return false,
-            }
-        }
-        true
+    fn targets(&self) -> &[String] {
+        self.targets.as_slice()
     }
 
     async fn upload(
@@ -63,11 +42,10 @@ impl Uploader for Dfu {
         let device = self.device.clone();
         let target = target.to_string();
 
-        progress.update("Badgers".to_string());
         let mut updates = device.start_download(target, data, length as u32).await;
 
-        while let Ok(_) = updates.changed().await {
-            progress.update(format!("Written: {}", *updates.borrow_and_update()));
+        while updates.changed().await.is_ok() {
+            progress.update(*updates.borrow_and_update() as u64);
         }
 
         Ok(())
@@ -123,7 +101,7 @@ impl Read for DfuRead {
 
 #[derive(Debug)]
 enum DfuCommand {
-    Interfaces,
+    Targets(oneshot::Sender<Vec<String>>),
     Download {
         target: String,
         length: u32,
@@ -140,6 +118,12 @@ impl DfuDevice {
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         std::thread::spawn(move || dfu_thread(bus, dev, rx));
         Self(tx)
+    }
+
+    async fn targets(&self) -> Vec<String> {
+        let (tx, rx) = oneshot::channel();
+        let _ = self.0.send(DfuCommand::Targets(tx)).await;
+        rx.await.unwrap_or_default()
     }
 
     async fn start_download(
@@ -289,7 +273,9 @@ fn dfu_thread(bus: u8, dev: u8, mut control: mpsc::Receiver<DfuCommand>) {
 
     while let Some(command) = control.blocking_recv() {
         match command {
-            DfuCommand::Interfaces => todo!(),
+            DfuCommand::Targets(tx) => {
+                let _ = tx.send(device.interfaces.keys().cloned().collect());
+            }
             DfuCommand::Download {
                 target,
                 length,

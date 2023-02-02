@@ -1,26 +1,35 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
-use crate::{dfu::Dfu, Server};
+use crate::{registry::Properties, Server};
 use futures::StreamExt;
 use tracing::info;
 
-pub async fn add_serial(server: &Server, device: tokio_udev::Device) {
-    let name = device.devnode().unwrap().to_str().unwrap().to_owned();
-    let properties = device
-        .properties()
-        .map(|a| {
-            (
-                a.name().to_string_lossy().into_owned(),
-                a.value().to_string_lossy().into_owned(),
-            )
-        })
-        .collect();
+fn properties_from_device(name: String, device: &tokio_udev::Device) -> Properties {
+    let mut properties = Properties::new(name);
+    for p in device.properties() {
+        let key = format!("udev.{}", p.name().to_string_lossy());
+        let value = p.value().to_string_lossy();
+        properties.insert(key, value);
+    }
 
-    let port = crate::serial::SerialPort::new(name, properties);
-    server.register_console(Arc::new(port));
+    properties
+}
+
+pub async fn add_serial(server: &Server, device: &tokio_udev::Device) -> Option<u64> {
+    if let Some(node) = device.devnode() {
+        if let Some(name) = node.file_name() {
+            let name = name.to_string_lossy().into_owned();
+            let path = node.to_string_lossy().into_owned();
+            let properties = properties_from_device(name, device);
+            let port = crate::serial::SerialPort::new(path);
+            return Some(server.register_console(properties, port));
+        }
+    }
+    None
 }
 
 pub async fn monitor_serial(server: Server) {
+    let mut serial_devices = HashMap::new();
     let monitor = tokio_udev::MonitorBuilder::new()
         .unwrap()
         .match_subsystem("tty")
@@ -37,12 +46,30 @@ pub async fn monitor_serial(server: Server) {
         if d.parent().is_none() {
             continue;
         }
-        add_serial(&server, d).await;
+        if let Some(devnode) = d.devnode() {
+            if let Some(id) = add_serial(&server, &d).await {
+                serial_devices.insert(devnode.to_path_buf(), id);
+            }
+        }
     }
 
     while let Some(Ok(event)) = monitor.next().await {
         match event.event_type() {
-            tokio_udev::EventType::Add => add_serial(&server, event.device()).await,
+            tokio_udev::EventType::Add => {
+                let device = event.device();
+                if let Some(devnode) = device.devnode() {
+                    if let Some(id) = add_serial(&server, &device).await {
+                        serial_devices.insert(devnode.to_path_buf(), id);
+                    }
+                }
+            }
+            tokio_udev::EventType::Remove => {
+                if let Some(path) = event.device().devnode() {
+                    if let Some(id) = serial_devices.remove(path) {
+                        server.unregister_console(id);
+                    }
+                }
+            }
             _ => info!(
                 "Udev event: {:?} {:?}",
                 event.event_type(),
@@ -52,40 +79,34 @@ pub async fn monitor_serial(server: Server) {
     }
 }
 
-pub async fn add_dfu(server: &Server, device: tokio_udev::Device) -> Option<Arc<Dfu>> {
+pub async fn add_dfu(server: &Server, device: &tokio_udev::Device) -> Option<u64> {
     let interface = device.property_value("ID_USB_INTERFACES")?;
     if interface != ":fe0102:" {
         return None;
     }
 
-    let name = device.devnode().unwrap().to_str().unwrap().to_owned();
-    let properties = device
-        .properties()
-        .map(|a| {
-            (
-                a.name().to_string_lossy().into_owned(),
-                a.value().to_string_lossy().into_owned(),
-            )
-        })
-        .collect();
+    if let Some(node) = device.devnode() {
+        let path = node.to_string_lossy().into_owned();
+        let properties = properties_from_device(path.clone(), device);
 
-    let busnum = device
-        .property_value("BUSNUM")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .parse()
-        .unwrap();
-    let devnum = device
-        .property_value("DEVNUM")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .parse()
-        .unwrap();
-    let dfu = Arc::new(crate::dfu::Dfu::new(name, busnum, devnum, properties));
-    server.register_uploader(dfu.clone());
-    Some(dfu)
+        let busnum = device
+            .property_value("BUSNUM")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let devnum = device
+            .property_value("DEVNUM")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let dfu = crate::dfu::Dfu::new(busnum, devnum).await;
+        return Some(server.register_uploader(properties, dfu));
+    }
+    None
 }
 
 pub async fn monitor_dfu(server: Server) {
@@ -103,23 +124,27 @@ pub async fn monitor_dfu(server: Server) {
     enumerator.match_subsystem("usb").unwrap();
     let devices = enumerator.scan_devices().unwrap();
     for d in devices {
-        if let Some(dfu) = add_dfu(&server, d).await {
-            dfu_devices.insert(dfu.devnode().to_string(), dfu);
+        if let Some(devnode) = d.devnode() {
+            if let Some(id) = add_dfu(&server, &d).await {
+                dfu_devices.insert(devnode.to_path_buf(), id);
+            }
         }
     }
 
     while let Some(Ok(event)) = monitor.next().await {
         match event.event_type() {
             tokio_udev::EventType::Add => {
-                if let Some(dfu) = add_dfu(&server, event.device()).await {
-                    dfu_devices.insert(dfu.devnode().to_string(), dfu);
+                let device = event.device();
+                if let Some(devnode) = device.devnode() {
+                    if let Some(id) = add_dfu(&server, &device).await {
+                        dfu_devices.insert(devnode.to_path_buf(), id);
+                    }
                 }
             }
             tokio_udev::EventType::Remove => {
                 if let Some(path) = event.device().devnode() {
-                    let name = path.to_str().unwrap().to_owned();
-                    if let Some(dfu) = dfu_devices.remove(&name) {
-                        server.unregister_uploader(dfu.as_ref() as &dyn crate::Uploader);
+                    if let Some(dfu) = dfu_devices.remove(path) {
+                        server.unregister_uploader(dfu);
                     }
                 }
             }

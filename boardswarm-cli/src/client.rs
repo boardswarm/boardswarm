@@ -1,150 +1,98 @@
 use boardswarm_protocol::{
-    actuators_client::ActuatorsClient, console_input_request, console_output,
-    consoles_client::ConsolesClient, device_input_request, device_upload_request,
-    devices_client::DevicesClient, upload_request, uploaders_client::UploadersClient,
+    boardswarm_client::BoardswarmClient, console_input_request, upload_request,
     ActuatorModeRequest, ConsoleConfigureRequest, ConsoleInputRequest, ConsoleOutputRequest,
-    DeviceInputRequest, DeviceModeRequest, DeviceTarget, DeviceUploadRequest, DeviceUploadTarget,
-    DeviceUploaderRequest, UploadRequest, UploadTarget, UploaderRequest,
+    DeviceModeRequest, DeviceRequest, Item, ItemType, ItemTypeRequest, UploadRequest, UploadTarget,
+    UploaderInfoMsg, UploaderRequest,
 };
 use bytes::Bytes;
-use futures::{stream, Stream, StreamExt, TryStreamExt};
+use futures::{stream, Stream, StreamExt};
+use tokio::sync::watch::Receiver;
 
-#[derive(Clone, Debug)]
-pub struct Devices {
-    client: DevicesClient<tonic::transport::Channel>,
+pub enum ItemEvent {
+    Added(Vec<Item>),
+    Removed(u64),
 }
 
-impl Devices {
+#[derive(Clone, Debug)]
+pub struct Boardswarm {
+    client: BoardswarmClient<tonic::transport::Channel>,
+}
+
+impl Boardswarm {
     pub async fn connect(url: String) -> Result<Self, tonic::transport::Error> {
-        let client = DevicesClient::connect(url).await?;
+        let client = BoardswarmClient::connect(url).await?;
         Ok(Self { client })
     }
 
-    pub async fn list(&mut self) -> Result<Vec<String>, tonic::Status> {
-        let devices = self.client.list(()).await?;
-        Ok(devices.into_inner().devices)
+    pub async fn list(&mut self, type_: ItemType) -> Result<Vec<Item>, tonic::Status> {
+        let items = self
+            .client
+            .list(ItemTypeRequest {
+                r#type: type_.into(),
+            })
+            .await?;
+
+        Ok(items.into_inner().item)
     }
 
-    pub async fn stream_input<I>(
+    pub async fn monitor(
         &mut self,
-        device: String,
-        console: Option<String>,
+        type_: ItemType,
+    ) -> Result<impl Stream<Item = Result<ItemEvent, tonic::Status>>, tonic::Status> {
+        let items = self
+            .client
+            .monitor(ItemTypeRequest {
+                r#type: type_.into(),
+            })
+            .await?
+            .into_inner();
+
+        Ok(items.filter_map(|event| async {
+            event
+                .map(|event| {
+                    event.event.map(|event| match event {
+                        boardswarm_protocol::item_event::Event::Add(added) => {
+                            ItemEvent::Added(added.item)
+                        }
+                        boardswarm_protocol::item_event::Event::Remove(removed) => {
+                            ItemEvent::Removed(removed)
+                        }
+                    })
+                })
+                .transpose()
+        }))
+    }
+
+    pub async fn device_info(
+        &mut self,
+        device: u64,
+    ) -> Result<impl Stream<Item = Result<boardswarm_protocol::Device, tonic::Status>>, tonic::Status>
+    {
+        let r = self.client.device_info(DeviceRequest { device }).await?;
+        Ok(r.into_inner())
+    }
+
+    pub async fn device_change_mode(
+        &mut self,
+        device: u64,
+        mode: String,
+    ) -> Result<(), tonic::Status> {
+        self.client
+            .device_change_mode(DeviceModeRequest { device, mode })
+            .await?;
+        Ok(())
+    }
+
+    pub async fn console_stream_input<I>(
+        &mut self,
+        console: u64,
         input: I,
     ) -> Result<(), tonic::Status>
     where
         I: Stream<Item = Bytes> + Send + 'static,
     {
         self.client
-            .stream_input(
-                stream::once(async move {
-                    DeviceInputRequest {
-                        target_or_data: Some(device_input_request::TargetOrData::Target(
-                            DeviceTarget { device, console },
-                        )),
-                    }
-                })
-                .chain(input.map(|i| DeviceInputRequest {
-                    target_or_data: Some(device_input_request::TargetOrData::Data(i)),
-                })),
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn stream_output(
-        &mut self,
-        device: String,
-        console: Option<String>,
-    ) -> Result<impl Stream<Item = Bytes>, tonic::Status> {
-        let request = tonic::Request::new(DeviceTarget {
-            device: device.clone(),
-            console: console.clone(),
-        });
-        let response = self.client.stream_output(request).await?;
-        let stream = response.into_inner();
-        Ok(stream.filter_map(|output| async {
-            let output = output.ok()?;
-            match output.data_or_state? {
-                console_output::DataOrState::Data(data) => Some(data),
-                _ => None,
-            }
-        }))
-    }
-
-    pub async fn change_mode(&mut self, device: String, mode: String) -> Result<(), tonic::Status> {
-        self.client
-            .change_mode(DeviceModeRequest { device, mode })
-            .await?;
-        Ok(())
-    }
-
-    pub async fn upload<S>(
-        &mut self,
-        device: String,
-        uploader: String,
-        target: String,
-        data: S,
-        length: u64,
-    ) -> Result<(), tonic::Status>
-    where
-        S: Stream<Item = Bytes> + Send + 'static,
-    {
-        let progress = self
-            .client
-            .upload(
-                stream::once(async move {
-                    DeviceUploadRequest {
-                        target_or_data: Some(device_upload_request::TargetOrData::Target(
-                            DeviceUploadTarget {
-                                device,
-                                uploader,
-                                target,
-                                length,
-                            },
-                        )),
-                    }
-                })
-                .chain(data.map(|d| DeviceUploadRequest {
-                    target_or_data: Some(device_upload_request::TargetOrData::Data(d)),
-                })),
-            )
-            .await?;
-        let mut progress = progress.into_inner();
-        while let Some(p) = progress.try_next().await? {
-            dbg!(p);
-        }
-        Ok(())
-    }
-
-    pub async fn commit(&mut self, device: String, uploader: String) -> Result<(), tonic::Status> {
-        let request = tonic::Request::new(DeviceUploaderRequest { device, uploader });
-        self.client.upload_commit(request).await?;
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct Consoles {
-    client: ConsolesClient<tonic::transport::Channel>,
-}
-
-impl Consoles {
-    pub async fn connect(url: String) -> Result<Self, tonic::transport::Error> {
-        let client = ConsolesClient::connect(url).await?;
-        Ok(Self { client })
-    }
-
-    pub async fn list(&mut self) -> Result<Vec<String>, tonic::Status> {
-        let consoles = self.client.list(()).await?;
-        Ok(consoles.into_inner().consoles)
-    }
-
-    pub async fn stream_input<I>(&mut self, console: String, input: I) -> Result<(), tonic::Status>
-    where
-        I: Stream<Item = Bytes> + Send + 'static,
-    {
-        self.client
-            .stream_input(
+            .console_stream_input(
                 stream::once(async move {
                     ConsoleInputRequest {
                         target_or_data: Some(console_input_request::TargetOrData::Console(console)),
@@ -158,53 +106,33 @@ impl Consoles {
         Ok(())
     }
 
-    pub async fn stream_output(
+    pub async fn console_stream_output(
         &mut self,
-        console: String,
+        console: u64,
     ) -> Result<impl Stream<Item = Bytes>, tonic::Status> {
         let request = tonic::Request::new(ConsoleOutputRequest { console });
-        let response = self.client.stream_output(request).await?;
+        let response = self.client.console_stream_output(request).await?;
         let stream = response.into_inner();
         Ok(stream.filter_map(|output| async {
             let output = output.ok()?;
-            match output.data_or_state? {
-                console_output::DataOrState::Data(data) => Some(data),
-                _ => None,
-            }
+            Some(output.data)
         }))
     }
 
-    pub async fn configure(
+    pub async fn console_configure(
         &mut self,
-        console: String,
+        console: u64,
         parameters: boardswarm_protocol::Parameters,
     ) -> Result<(), tonic::Status> {
         let configure = ConsoleConfigureRequest {
             console,
             parameters: Some(parameters),
         };
-        self.client.configure(configure).await?;
+        self.client.console_configure(configure).await?;
         Ok(())
     }
-}
 
-#[derive(Clone, Debug)]
-pub struct Actuators {
-    client: ActuatorsClient<tonic::transport::Channel>,
-}
-
-impl Actuators {
-    pub async fn connect(url: String) -> Result<Self, tonic::transport::Error> {
-        let client = ActuatorsClient::connect(url).await?;
-        Ok(Self { client })
-    }
-
-    pub async fn list(&mut self) -> Result<Vec<String>, tonic::Status> {
-        let actuators = self.client.list(()).await?;
-        Ok(actuators.into_inner().actuators)
-    }
-
-    pub async fn change_mode(
+    pub async fn actuator_change_mode(
         &mut self,
         actuator: String,
         parameters: boardswarm_protocol::Parameters,
@@ -213,40 +141,29 @@ impl Actuators {
             actuator,
             parameters: Some(parameters),
         };
-        self.client.change_mode(mode).await?;
+        self.client.actuator_change_mode(mode).await?;
         Ok(())
     }
-}
 
-#[derive(Clone, Debug)]
-pub struct Uploaders {
-    client: UploadersClient<tonic::transport::Channel>,
-}
-
-impl Uploaders {
-    pub async fn connect(url: String) -> Result<Self, tonic::transport::Error> {
-        let client = UploadersClient::connect(url).await?;
-        Ok(Self { client })
+    pub async fn uploader_info(&mut self, uploader: u64) -> Result<UploaderInfoMsg, tonic::Status> {
+        let request = tonic::Request::new(UploaderRequest { uploader });
+        let r = self.client.uploader_info(request).await?;
+        Ok(r.into_inner())
     }
 
-    pub async fn list(&mut self) -> Result<Vec<String>, tonic::Status> {
-        let uploaders = self.client.list(()).await?;
-        Ok(uploaders.into_inner().uploaders)
-    }
-
-    pub async fn upload<S>(
+    pub async fn uploader_upload<S>(
         &mut self,
-        uploader: String,
+        uploader: u64,
         target: String,
         data: S,
         length: u64,
-    ) -> Result<(), tonic::Status>
+    ) -> Result<UploadProgress, tonic::Status>
     where
         S: Stream<Item = Bytes> + Send + 'static,
     {
         let progress = self
             .client
-            .upload(
+            .uploader_upload(
                 stream::once(async move {
                     UploadRequest {
                         target_or_data: Some(upload_request::TargetOrData::Target(UploadTarget {
@@ -261,16 +178,74 @@ impl Uploaders {
                 })),
             )
             .await?;
-        let mut progress = progress.into_inner();
-        while let Some(p) = progress.try_next().await? {
-            dbg!(p);
-        }
-        Ok(())
+        Ok(UploadProgress::new(progress.into_inner()))
     }
 
-    pub async fn commit(&mut self, uploader: String) -> Result<(), tonic::Status> {
+    pub async fn uploader_commit(&mut self, uploader: u64) -> Result<(), tonic::Status> {
         let request = tonic::Request::new(UploaderRequest { uploader });
-        self.client.commit(request).await?;
+        self.client.uploader_commit(request).await?;
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum UploadProgressState {
+    Writing(u64),
+    Succeeded,
+    Failed(tonic::Status),
+}
+
+pub struct UploadProgress {
+    watch: Receiver<UploadProgressState>,
+}
+
+impl UploadProgress {
+    fn new<P>(progress: P) -> Self
+    where
+        P: Stream<Item = Result<boardswarm_protocol::UploadProgress, tonic::Status>>
+            + Send
+            + 'static,
+    {
+        let (notifier, watch) = tokio::sync::watch::channel(UploadProgressState::Writing(0));
+        tokio::spawn(async move {
+            futures::pin_mut!(progress);
+            while let Some(progress) = progress.next().await {
+                match progress {
+                    Ok(progress) => {
+                        notifier.send_replace(UploadProgressState::Writing(progress.written));
+                    }
+                    Err(e) => {
+                        notifier.send_replace(UploadProgressState::Failed(e));
+                        return;
+                    }
+                }
+            }
+            notifier.send_replace(UploadProgressState::Succeeded);
+        });
+
+        UploadProgress { watch }
+    }
+
+    pub fn finished(&self) -> Option<Result<(), tonic::Status>> {
+        match &*self.watch.borrow() {
+            UploadProgressState::Succeeded => Some(Ok(())),
+            UploadProgressState::Failed(status) => Some(Err(status.to_owned())),
+            UploadProgressState::Writing(_) => None,
+        }
+    }
+
+    // Wait for upload to finish
+    pub async fn finish(&mut self) -> Result<(), tonic::Status> {
+        loop {
+            if let Some(f) = self.finished() {
+                return f;
+            } else {
+                let _ = self.watch.changed().await;
+            }
+        }
+    }
+
+    pub fn stream(&self) -> impl Stream<Item = UploadProgressState> {
+        tokio_stream::wrappers::WatchStream::new(self.watch.clone())
     }
 }

@@ -3,7 +3,6 @@ use bytes::{Bytes, BytesMut};
 use futures::ready;
 use serde::Deserialize;
 use std::{
-    collections::HashMap,
     pin::Pin,
     sync::{Arc, Mutex},
     task::{Context, Poll},
@@ -26,29 +25,23 @@ struct SerialOpen {
 
 #[derive(Debug)]
 pub(crate) struct SerialPort {
-    name: String,
+    path: String,
     rate: Mutex<u32>,
-    attributes: HashMap<String, String>,
     open: AsyncMutex<Option<SerialOpen>>,
 }
 use crate::ConsoleError;
 
 impl SerialPort {
-    pub fn new(name: String, attributes: HashMap<String, String>) -> Self {
+    pub fn new(path: String) -> Self {
         let open = AsyncMutex::new(None);
         let rate = Mutex::new(115_200);
-        SerialPort {
-            name,
-            attributes,
-            rate,
-            open,
-        }
+        SerialPort { path, rate, open }
     }
 
     pub async fn open(&self) -> Result<()> {
         let rate = *self.rate.lock().unwrap();
         let mut open = self.open.lock().await;
-        let port = tokio_serial::new(&self.name, rate).open_native_async()?;
+        let port = tokio_serial::new(&self.path, rate).open_native_async()?;
 
         let (mut read, write) = tokio::io::split(port);
 
@@ -92,10 +85,6 @@ impl SerialPort {
 
 #[async_trait::async_trait]
 impl crate::Console for SerialPort {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
     fn configure(
         &self,
         parameters: Box<dyn erased_serde::Deserializer>,
@@ -135,17 +124,6 @@ impl crate::Console for SerialPort {
         crate::ConsoleError,
     > {
         Ok(Box::pin(SerialPortOutput::new(self.get_reader().await)))
-    }
-
-    fn matches(&self, filter: serde_yaml::Value) -> bool {
-        let filter: HashMap<String, String> = serde_yaml::from_value(filter).unwrap();
-        for (k, v) in filter.iter() {
-            match self.attributes.get(k) {
-                Some(a_v) if a_v == v => (),
-                _ => return false,
-            }
-        }
-        true
     }
 }
 
