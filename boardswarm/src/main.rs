@@ -1,7 +1,8 @@
 use boardswarm_protocol::item_event::Event;
 use boardswarm_protocol::{
     console_input_request, upload_request, ConsoleConfigureRequest, ConsoleInputRequest,
-    ConsoleOutputRequest, ItemEvent, ItemList, ItemTypeRequest, UploaderInfoMsg, UploaderRequest,
+    ConsoleOutputRequest, ItemEvent, ItemList, ItemPropertiesMsg, ItemPropertiesRequest,
+    ItemTypeRequest, Property, UploaderInfoMsg, UploaderRequest,
 };
 use bytes::Bytes;
 use clap::Parser;
@@ -700,6 +701,57 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
             boardswarm_protocol::ItemType::Uploader => to_item_stream(&self.inner.uploaders),
         };
         Ok(tonic::Response::new(response))
+    }
+
+    async fn item_properties(
+        &self,
+        request: tonic::Request<ItemPropertiesRequest>,
+    ) -> Result<tonic::Response<ItemPropertiesMsg>, tonic::Status> {
+        let request = request.into_inner();
+        let type_ = boardswarm_protocol::ItemType::from_i32(request.r#type)
+            .ok_or_else(|| tonic::Status::invalid_argument("Unknown item type "))?;
+        let properties = match type_ {
+            boardswarm_protocol::ItemType::Actuator => {
+                self.inner
+                    .actuators
+                    .lookup(request.item)
+                    .ok_or_else(|| tonic::Status::not_found("Item not found"))?
+                    .0
+            }
+            boardswarm_protocol::ItemType::Device => {
+                self.inner
+                    .devices
+                    .lookup(request.item)
+                    .ok_or_else(|| tonic::Status::not_found("Item not found"))?
+                    .0
+            }
+            boardswarm_protocol::ItemType::Console => {
+                self.inner
+                    .consoles
+                    .lookup(request.item)
+                    .ok_or_else(|| tonic::Status::not_found("Item not found"))?
+                    .0
+            }
+            boardswarm_protocol::ItemType::Uploader => {
+                self.inner
+                    .uploaders
+                    .lookup(request.item)
+                    .ok_or_else(|| tonic::Status::not_found("Item not found"))?
+                    .0
+            }
+        };
+
+        let properties = properties
+            .iter()
+            .map(|(k, v)| Property {
+                key: k.clone(),
+                value: v.clone(),
+            })
+            .collect();
+
+        Ok(tonic::Response::new(ItemPropertiesMsg {
+            property: properties,
+        }))
     }
 
     async fn console_configure(

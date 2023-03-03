@@ -51,6 +51,10 @@ impl Properties {
     {
         self.properties.insert(key.into(), value.into());
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &String)> {
+        self.properties.iter()
+    }
 }
 
 #[derive(Clone)]

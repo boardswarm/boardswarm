@@ -245,6 +245,11 @@ enum Command {
         #[arg(value_parser = parse_item)]
         type_: ItemType,
     },
+    Properties {
+        #[arg(value_parser = parse_item)]
+        type_: ItemType,
+        item: u64,
+    },
 }
 
 #[derive(clap::Parser)]
@@ -282,6 +287,13 @@ async fn main() -> anyhow::Result<()> {
                     }
                     ItemEvent::Removed(removed) => println!("Removed: {}", removed),
                 }
+            }
+            Ok(())
+        }
+        Command::Properties { type_, item } => {
+            let properties = boardswarm.properties(type_, item).await?;
+            for (k, v) in properties {
+                println!(r#""{}" => "{}""#, k, v);
             }
             Ok(())
         }
@@ -363,6 +375,7 @@ async fn main() -> anyhow::Result<()> {
                     }
                     let progress = uploader.upload(target, data, length).await?;
                     watch_upload_progress(progress, length).await?;
+                    println!("{} uploaded", file.display());
                     if commit {
                         uploader.commit().await?;
                     }

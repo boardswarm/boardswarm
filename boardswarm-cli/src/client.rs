@@ -1,8 +1,10 @@
+use std::collections::HashMap;
+
 use boardswarm_protocol::{
     boardswarm_client::BoardswarmClient, console_input_request, upload_request,
     ActuatorModeRequest, ConsoleConfigureRequest, ConsoleInputRequest, ConsoleOutputRequest,
-    DeviceModeRequest, DeviceRequest, Item, ItemType, ItemTypeRequest, UploadRequest, UploadTarget,
-    UploaderInfoMsg, UploaderRequest,
+    DeviceModeRequest, DeviceRequest, Item, ItemPropertiesRequest, ItemType, ItemTypeRequest,
+    UploadRequest, UploadTarget, UploaderInfoMsg, UploaderRequest,
 };
 use bytes::Bytes;
 use futures::{stream, Stream, StreamExt};
@@ -33,6 +35,26 @@ impl Boardswarm {
             .await?;
 
         Ok(items.into_inner().item)
+    }
+
+    pub async fn properties(
+        &mut self,
+        type_: ItemType,
+        item: u64,
+    ) -> Result<HashMap<String, String>, tonic::Status> {
+        let properties = self
+            .client
+            .item_properties(ItemPropertiesRequest {
+                r#type: type_.into(),
+                item,
+            })
+            .await?
+            .into_inner();
+        Ok(properties
+            .property
+            .into_iter()
+            .map(|v| (v.key, v.value))
+            .collect())
     }
 
     pub async fn monitor(

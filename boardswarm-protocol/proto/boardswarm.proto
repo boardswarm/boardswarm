@@ -6,6 +6,7 @@ package boardswarm;
 service Boardswarm {
   rpc List(ItemTypeRequest) returns (ItemList);
   rpc Monitor(ItemTypeRequest) returns (stream ItemEvent);
+  rpc ItemProperties(ItemPropertiesRequest) returns (ItemPropertiesMsg);
 
   rpc DeviceInfo (DeviceRequest) returns (stream Device);
   rpc DeviceChangeMode(DeviceModeRequest) returns (google.protobuf.Empty);
@@ -47,6 +48,20 @@ message ItemEvent {
      ItemList add = 1;
      uint64 remove = 2;
    }
+}
+
+message ItemPropertiesRequest {
+  ItemType type = 1;
+  uint64 item = 2;
+}
+
+message Property {
+  string key = 1;
+  string value = 2;
+}
+
+message ItemPropertiesMsg {
+   repeated Property property = 1;
 }
 
 message DeviceRequest {
