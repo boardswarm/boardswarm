@@ -57,20 +57,46 @@ impl Properties {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct Item<T> {
+    properties: Arc<Properties>,
+    item: T,
+}
+
+impl<T> Item<T> {
+    pub fn new(properties: Properties, item: T) -> Self {
+        Item {
+            properties: Arc::new(properties),
+            item,
+        }
+    }
+    pub fn name(&self) -> &str {
+        self.properties.name()
+    }
+
+    pub fn properties(&self) -> Arc<Properties> {
+        self.properties.clone()
+    }
+
+    pub fn inner(&self) -> &T {
+        &self.item
+    }
+
+    pub fn into_inner(self) -> T {
+        self.item
+    }
+}
+
 #[derive(Clone)]
 pub enum RegistryChange<T> {
-    Added {
-        id: u64,
-        properties: Arc<Properties>,
-        item: T,
-    },
+    Added { id: u64, item: Item<T> },
     Removed(u64),
 }
 
 #[derive(Debug)]
 struct RegistryInner<T> {
     next: u64,
-    contents: BTreeMap<u64, (Arc<Properties>, T)>,
+    contents: BTreeMap<u64, Item<T>>,
 }
 
 #[derive(Debug)]
@@ -94,18 +120,12 @@ where
     }
 
     pub fn add(&self, properties: Properties, item: T) -> u64 {
-        let properties = Arc::new(properties);
+        let item = Item::new(properties, item);
         let mut inner = self.inner.write().unwrap();
         inner.next += 1;
         let id = inner.next;
-        inner
-            .contents
-            .insert(id, (properties.clone(), item.clone()));
-        let _ = self.monitor.send(RegistryChange::Added {
-            id,
-            properties,
-            item,
-        });
+        inner.contents.insert(id, item.clone());
+        let _ = self.monitor.send(RegistryChange::Added { id, item });
         id
     }
 
@@ -116,9 +136,9 @@ where
         }
     }
 
-    pub fn lookup(&self, id: u64) -> Option<(Arc<Properties>, T)> {
+    pub fn lookup(&self, id: u64) -> Option<Item<T>> {
         let inner = self.inner.read().unwrap();
-        inner.contents.get(&id).map(|(p, i)| (p.clone(), i.clone()))
+        inner.contents.get(&id).cloned()
     }
 
     #[allow(dead_code)]
@@ -127,16 +147,16 @@ where
         inner.contents.keys().copied().collect()
     }
 
-    pub fn contents(&self) -> Vec<(u64, Arc<Properties>, T)> {
+    pub fn contents(&self) -> Vec<(u64, Item<T>)> {
         let inner = self.inner.read().unwrap();
         inner
             .contents
             .iter()
-            .map(|(&id, (p, t))| (id, p.clone(), t.clone()))
+            .map(|(&id, item)| (id, item.clone()))
             .collect()
     }
 
-    pub fn find<'a, K, V, I>(&self, matches: &'a I) -> Option<(u64, Arc<Properties>, T)>
+    pub fn find<'a, K, V, I>(&self, matches: &'a I) -> Option<(u64, Item<T>)>
     where
         K: AsRef<str>,
         V: AsRef<str>,
@@ -146,17 +166,17 @@ where
         inner
             .contents
             .iter()
-            .find(|(&_id, (properties, _item))| properties.matches(matches))
-            .map(|(&id, (properties, item))| (id, properties.clone(), item.clone()))
+            .find(|(&_id, item)| item.properties.matches(matches))
+            .map(|(&id, item)| (id, item.clone()))
     }
 
-    pub fn find_by_name(&self, name: &str) -> Option<(u64, Arc<Properties>, T)> {
+    pub fn find_by_name(&self, name: &str) -> Option<(u64, Item<T>)> {
         let inner = self.inner.read().unwrap();
         inner
             .contents
             .iter()
-            .find(|(&_id, (properties, _item))| properties.name() == name)
-            .map(|(&id, (properties, item))| (id, properties.clone(), item.clone()))
+            .find(|(&_id, item)| item.properties.name() == name)
+            .map(|(&id, item)| (id, item.clone()))
     }
 
     pub fn monitor(&self) -> Receiver<RegistryChange<T>> {

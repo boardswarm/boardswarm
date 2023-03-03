@@ -384,33 +384,28 @@ impl Device {
     }
 
     async fn monitor_items(&self) {
-        fn add_item_with<'a, C, I, F, IT>(
-            items: I,
-            id: u64,
-            properties: &Properties,
-            item: IT,
-            f: F,
-        ) -> bool
+        fn add_item_with<'a, C, I, F, IT>(items: I, id: u64, item: registry::Item<IT>, f: F) -> bool
         where
             C: DeviceConfigItem + 'a,
             I: Iterator<Item = &'a DeviceItem<C>>,
             F: Fn(&DeviceItem<C>, &IT),
         {
             items.fold(false, |changed, i| {
-                if i.set_if_matches(id, properties) {
-                    f(i, &item);
+                if i.set_if_matches(id, &item.properties()) {
+                    f(i, item.inner());
                     true
                 } else {
                     changed
                 }
             })
         }
-        fn add_item<'a, C: DeviceConfigItem + 'a, I: Iterator<Item = &'a DeviceItem<C>>>(
-            items: I,
-            id: u64,
-            properties: &Properties,
-        ) -> bool {
-            add_item_with(items, id, properties, (), |_, _| {})
+
+        fn add_item<'a, T, C, I>(items: I, id: u64, item: registry::Item<T>) -> bool
+        where
+            C: DeviceConfigItem + 'a,
+            I: Iterator<Item = &'a DeviceItem<C>>,
+        {
+            add_item_with(items, id, item, |_, _| {})
         }
 
         fn change_with<'a, T, C, I, F>(items: I, change: RegistryChange<T>, f: F) -> bool
@@ -420,11 +415,7 @@ impl Device {
             F: Fn(&DeviceItem<C>, &T),
         {
             match change {
-                registry::RegistryChange::Added {
-                    id,
-                    properties,
-                    item,
-                } => add_item_with(items, id, &properties, item, f),
+                registry::RegistryChange::Added { id, item } => add_item_with(items, id, item, f),
                 registry::RegistryChange::Removed(id) => {
                     items.fold(false, |changed, c| c.unset_if_matches(id) || changed)
                 }
@@ -449,26 +440,20 @@ impl Device {
         let mut uploader_monitor = self.inner.server.inner.uploaders.monitor();
         let mut changed = false;
 
-        for (id, properties, ..) in self.inner.server.inner.actuators.contents() {
+        for (id, item) in self.inner.server.inner.actuators.contents() {
             changed |= add_item(
                 self.inner.modes.iter().flat_map(|m| m.sequence.iter()),
                 id,
-                &properties,
-            );
-        }
-
-        for (id, properties, item) in self.inner.server.inner.consoles.contents() {
-            changed |= add_item_with(
-                self.inner.consoles.iter(),
-                id,
-                &properties,
                 item,
-                setup_console,
             );
         }
 
-        for (id, properties, ..) in self.inner.server.inner.uploaders.contents() {
-            changed |= add_item(self.inner.uploaders.iter(), id, &properties);
+        for (id, item) in self.inner.server.inner.consoles.contents() {
+            changed |= add_item_with(self.inner.consoles.iter(), id, item, setup_console);
+        }
+
+        for (id, item) in self.inner.server.inner.uploaders.contents() {
+            changed |= add_item(self.inner.uploaders.iter(), id, item);
         }
 
         if changed {
@@ -519,9 +504,9 @@ fn to_item_list<T: Clone>(registry: &Registry<T>) -> ItemList {
     let item = registry
         .contents()
         .into_iter()
-        .map(|content| boardswarm_protocol::Item {
-            id: content.0,
-            name: content.1.name().to_string(),
+        .map(|(id, item)| boardswarm_protocol::Item {
+            id,
+            name: item.properties().name().to_string(),
         })
         .collect();
     ItemList { item }
@@ -558,7 +543,7 @@ impl Server {
         self.inner
             .actuators
             .find_by_name(name)
-            .map(|(_, _, actuator)| actuator)
+            .map(|(_, item)| item.into_inner())
     }
 
     fn find_actuator<'a, K, V, I>(&self, matches: &'a I) -> Option<Arc<dyn Actuator>>
@@ -570,7 +555,7 @@ impl Server {
         self.inner
             .actuators
             .find(matches)
-            .map(|(_, _, actuator)| actuator)
+            .map(|(_, item)| item.inner().clone())
     }
 
     fn register_console<C>(&self, properties: Properties, console: C) -> u64
@@ -584,14 +569,17 @@ impl Server {
     }
 
     fn unregister_console(&self, id: u64) {
-        if let Some((p, _)) = self.inner.consoles.lookup(id) {
-            info!("Unregistering console: {} - {}", id, p.name());
+        if let Some(item) = self.inner.consoles.lookup(id) {
+            info!("Unregistering console: {} - {}", id, item.name(),);
             self.inner.consoles.remove(id);
         }
     }
 
     fn get_console(&self, id: u64) -> Option<Arc<dyn Console>> {
-        self.inner.consoles.lookup(id).map(|(_, console)| console)
+        self.inner
+            .consoles
+            .lookup(id)
+            .map(|item| item.inner().clone())
     }
 
     fn register_uploader<U>(&self, properties: Properties, uploader: U) -> u64
@@ -605,8 +593,8 @@ impl Server {
     }
 
     fn unregister_uploader(&self, id: u64) {
-        if let Some((p, _)) = self.inner.uploaders.lookup(id) {
-            info!("Unregistering uploader: {} - {}", id, p.name());
+        if let Some(item) = self.inner.uploaders.lookup(id) {
+            info!("Unregistering uploader: {} - {}", id, item.name());
             self.inner.uploaders.remove(id);
         }
     }
@@ -615,7 +603,7 @@ impl Server {
         self.inner
             .uploaders
             .lookup(id)
-            .map(|(_, uploader)| uploader)
+            .map(registry::Item::into_inner)
     }
 
     fn register_device(&self, device: Device) {
@@ -625,7 +613,10 @@ impl Server {
     }
 
     fn get_device(&self, id: u64) -> Option<Device> {
-        self.inner.devices.lookup(id).map(|(_, d)| d)
+        self.inner
+            .devices
+            .lookup(id)
+            .map(registry::Item::into_inner)
     }
 
     fn item_list_for(&self, type_: boardswarm_protocol::ItemType) -> ItemList {
@@ -673,12 +664,12 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
                 .chain(stream::unfold(monitor, |mut monitor| async move {
                     let event = monitor.recv().await.ok()?;
                     match event {
-                        registry::RegistryChange::Added { id, properties, .. } => Some((
+                        registry::RegistryChange::Added { id, item } => Some((
                             Ok(ItemEvent {
                                 event: Some(Event::Add(ItemList {
                                     item: vec![boardswarm_protocol::Item {
                                         id,
-                                        name: properties.name().to_string(),
+                                        name: item.name().to_string(),
                                     }],
                                 })),
                             }),
@@ -711,34 +702,30 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         let type_ = boardswarm_protocol::ItemType::from_i32(request.r#type)
             .ok_or_else(|| tonic::Status::invalid_argument("Unknown item type "))?;
         let properties = match type_ {
-            boardswarm_protocol::ItemType::Actuator => {
-                self.inner
-                    .actuators
-                    .lookup(request.item)
-                    .ok_or_else(|| tonic::Status::not_found("Item not found"))?
-                    .0
-            }
-            boardswarm_protocol::ItemType::Device => {
-                self.inner
-                    .devices
-                    .lookup(request.item)
-                    .ok_or_else(|| tonic::Status::not_found("Item not found"))?
-                    .0
-            }
-            boardswarm_protocol::ItemType::Console => {
-                self.inner
-                    .consoles
-                    .lookup(request.item)
-                    .ok_or_else(|| tonic::Status::not_found("Item not found"))?
-                    .0
-            }
-            boardswarm_protocol::ItemType::Uploader => {
-                self.inner
-                    .uploaders
-                    .lookup(request.item)
-                    .ok_or_else(|| tonic::Status::not_found("Item not found"))?
-                    .0
-            }
+            boardswarm_protocol::ItemType::Actuator => self
+                .inner
+                .actuators
+                .lookup(request.item)
+                .ok_or_else(|| tonic::Status::not_found("Item not found"))?
+                .properties(),
+            boardswarm_protocol::ItemType::Device => self
+                .inner
+                .devices
+                .lookup(request.item)
+                .ok_or_else(|| tonic::Status::not_found("Item not found"))?
+                .properties(),
+            boardswarm_protocol::ItemType::Console => self
+                .inner
+                .consoles
+                .lookup(request.item)
+                .ok_or_else(|| tonic::Status::not_found("Item not found"))?
+                .properties(),
+            boardswarm_protocol::ItemType::Uploader => self
+                .inner
+                .uploaders
+                .lookup(request.item)
+                .ok_or_else(|| tonic::Status::not_found("Item not found"))?
+                .properties(),
         };
 
         let properties = properties
@@ -824,7 +811,8 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         request: tonic::Request<boardswarm_protocol::DeviceRequest>,
     ) -> Result<tonic::Response<Self::DeviceInfoStream>, tonic::Status> {
         let request = request.into_inner();
-        if let Some((_, device)) = self.inner.devices.lookup(request.device) {
+        if let Some(item) = self.inner.devices.lookup(request.device) {
+            let device = item.into_inner();
             let info = (&device).into();
             let monitor = device.updates();
             let stream = Box::pin(stream::once(async move { Ok(info) }).chain(stream::unfold(
@@ -902,7 +890,7 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
                 .inner
                 .uploaders
                 .lookup(target.uploader)
-                .map(|(_, u)| u)
+                .map(registry::Item::into_inner)
                 .ok_or_else(|| tonic::Status::not_found("No uploader console by that name"))?;
 
             let data = stream::unfold(rx, |mut rx| async move {
