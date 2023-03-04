@@ -118,7 +118,7 @@ message ConsoleOutput {
 }
 
 message ActuatorModeRequest {
-  string actuator = 1;
+  uint64 actuator = 1;
   google.protobuf.Struct parameters = 2;
 }
 

@@ -541,11 +541,11 @@ impl Server {
         id
     }
 
-    fn get_actuator(&self, name: &str) -> Option<Arc<dyn Actuator>> {
+    fn get_actuator(&self, id: u64) -> Option<Arc<dyn Actuator>> {
         self.inner
             .actuators
-            .find_by_name(name)
-            .map(|(_, item)| item.into_inner())
+            .lookup(id)
+            .map(|item| item.inner().clone())
     }
 
     fn find_actuator<'a, K, V, I>(&self, matches: &'a I) -> Option<Arc<dyn Actuator>>
@@ -863,7 +863,7 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         request: tonic::Request<boardswarm_protocol::ActuatorModeRequest>,
     ) -> Result<tonic::Response<()>, tonic::Status> {
         let inner = request.into_inner();
-        if let Some(actuator) = self.get_actuator(&inner.actuator) {
+        if let Some(actuator) = self.get_actuator(inner.actuator) {
             actuator
                 .set_mode(Box::new(<dyn erased_serde::Deserializer>::erase(
                     inner.parameters.unwrap(),

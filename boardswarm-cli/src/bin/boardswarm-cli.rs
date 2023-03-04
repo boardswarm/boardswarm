@@ -84,7 +84,7 @@ async fn watch_upload_progress(
 
 #[derive(Debug, Args)]
 struct ActuatorMode {
-    actuator: String,
+    actuator: u64,
     mode: String,
 }
 

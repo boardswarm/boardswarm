@@ -160,7 +160,7 @@ impl Boardswarm {
 
     pub async fn actuator_change_mode(
         &mut self,
-        actuator: String,
+        actuator: u64,
         parameters: boardswarm_protocol::Parameters,
     ) -> Result<(), tonic::Status> {
         let mode = ActuatorModeRequest {

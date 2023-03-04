@@ -175,15 +175,6 @@ where
             .map(|(&id, item)| (id, item.clone()))
     }
 
-    pub fn find_by_name(&self, name: &str) -> Option<(u64, Item<T>)> {
-        let inner = self.inner.read().unwrap();
-        inner
-            .contents
-            .iter()
-            .find(|(&_id, item)| item.properties.name() == name)
-            .map(|(&id, item)| (id, item.clone()))
-    }
-
     pub fn monitor(&self) -> Receiver<RegistryChange<T>> {
         self.monitor.subscribe()
     }
