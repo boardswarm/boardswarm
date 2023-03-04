@@ -24,6 +24,7 @@ use tracing::{info, warn};
 
 use crate::registry::RegistryChange;
 
+mod boardswarm_provider;
 mod config;
 mod dfu;
 mod gpio;
@@ -536,9 +537,8 @@ impl Server {
     where
         A: Actuator + 'static,
     {
-        let name = properties.name().to_owned();
-        let id = self.inner.actuators.add(properties, Arc::new(actuator));
-        info!("Registered actuator: {} - {}", id, name);
+        let (id, item) = self.inner.actuators.add(properties, Arc::new(actuator));
+        info!("Registered actuator: {} - {}", id, item);
         id
     }
 
@@ -561,19 +561,25 @@ impl Server {
             .map(|(_, item)| item.inner().clone())
     }
 
+    fn unregister_actuator(&self, id: u64) {
+        if let Some(item) = self.inner.actuators.lookup(id) {
+            info!("Unregistering actuator: {} - {}", id, item);
+            self.inner.actuators.remove(id);
+        }
+    }
+
     fn register_console<C>(&self, properties: Properties, console: C) -> u64
     where
         C: Console + 'static,
     {
-        let name = properties.name().to_owned();
-        let id = self.inner.consoles.add(properties, Arc::new(console));
-        info!("Registered console: {} - {}", id, name);
+        let (id, item) = self.inner.consoles.add(properties, Arc::new(console));
+        info!("Registered console: {} - {}", id, item);
         id
     }
 
     fn unregister_console(&self, id: u64) {
         if let Some(item) = self.inner.consoles.lookup(id) {
-            info!("Unregistering console: {} - {}", id, item.name(),);
+            info!("Unregistering console: {} - {}", id, item);
             self.inner.consoles.remove(id);
         }
     }
@@ -589,9 +595,8 @@ impl Server {
     where
         U: Uploader + 'static,
     {
-        let name = properties.name().to_owned();
-        let id = self.inner.uploaders.add(properties, Arc::new(uploader));
-        info!("Registered uploader: {} - {}", id, name);
+        let (id, item) = self.inner.uploaders.add(properties, Arc::new(uploader));
+        info!("Registered uploader: {} - {}", id, item);
         id
     }
 
@@ -611,8 +616,8 @@ impl Server {
 
     fn register_device(&self, device: Device) {
         let properties = Properties::new(device.name());
-        let id = self.inner.devices.add(properties, device.clone());
-        info!("Registered device: {} - {}", id, device.name());
+        let (id, item) = self.inner.devices.add(properties, device);
+        info!("Registered device: {} - {}", id, item);
     }
 
     fn get_device(&self, id: u64) -> Option<Device> {
@@ -1014,6 +1019,9 @@ async fn main() -> anyhow::Result<()> {
         match p.type_.as_str() {
             "gpio" => gpio::start_provider(p.name, p.parameters.unwrap(), server.clone()),
             "pdudaemon" => pdudaemon::start_provider(p.name, p.parameters.unwrap(), server.clone()),
+            "boardswarm" => {
+                boardswarm_provider::start_provider(p.name, p.parameters.unwrap(), server.clone())
+            }
             t => warn!("Unknown provider type: {t}"),
         }
     }

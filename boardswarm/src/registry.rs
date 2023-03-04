@@ -62,10 +62,26 @@ impl Properties {
     }
 }
 
+impl From<HashMap<String, String>> for Properties {
+    fn from(properties: HashMap<String, String>) -> Self {
+        Properties { properties }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Item<T> {
     properties: Arc<Properties>,
     item: T,
+}
+
+impl<T> std::fmt::Display for Item<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(instance) = self.instance() {
+            write!(f, "{} on {}", self.name(), instance)
+        } else {
+            write!(f, "{}", self.name())
+        }
+    }
 }
 
 impl<T> Item<T> {
@@ -77,6 +93,10 @@ impl<T> Item<T> {
     }
     pub fn name(&self) -> &str {
         self.properties.name()
+    }
+
+    pub fn instance(&self) -> Option<&str> {
+        self.properties.instance()
     }
 
     pub fn properties(&self) -> Arc<Properties> {
@@ -124,14 +144,17 @@ where
         }
     }
 
-    pub fn add(&self, properties: Properties, item: T) -> u64 {
+    pub fn add(&self, properties: Properties, item: T) -> (u64, Item<T>) {
         let item = Item::new(properties, item);
         let mut inner = self.inner.write().unwrap();
         inner.next += 1;
         let id = inner.next;
         inner.contents.insert(id, item.clone());
-        let _ = self.monitor.send(RegistryChange::Added { id, item });
-        id
+        let _ = self.monitor.send(RegistryChange::Added {
+            id,
+            item: item.clone(),
+        });
+        (id, item)
     }
 
     pub fn remove(&self, id: u64) {
