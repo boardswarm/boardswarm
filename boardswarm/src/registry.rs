@@ -6,7 +6,8 @@ use std::sync::RwLock;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::Receiver;
 
-const NAME: &str = "name";
+pub const NAME: &str = "boardswarm.name";
+pub const INSTANCE: &str = "boardswarm.instance";
 
 #[derive(Clone, Debug)]
 pub struct Properties {
@@ -23,6 +24,10 @@ impl Properties {
 
     pub fn name(&self) -> &str {
         self.get(NAME).unwrap_or_default()
+    }
+
+    pub fn instance(&self) -> Option<&str> {
+        self.get(INSTANCE)
     }
 
     pub fn get(&self, prop: &str) -> Option<&str> {

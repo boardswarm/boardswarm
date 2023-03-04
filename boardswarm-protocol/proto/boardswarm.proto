@@ -37,6 +37,7 @@ message ItemTypeRequest {
 message Item {
   uint64 id = 1;
   string name = 2;
+  optional string instance = 3;
 }
 
 message ItemList {

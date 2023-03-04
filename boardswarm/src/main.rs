@@ -507,6 +507,7 @@ fn to_item_list<T: Clone>(registry: &Registry<T>) -> ItemList {
         .map(|(id, item)| boardswarm_protocol::Item {
             id,
             name: item.properties().name().to_string(),
+            instance: item.properties().instance().map(ToOwned::to_owned),
         })
         .collect();
     ItemList { item }
@@ -670,6 +671,10 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
                                     item: vec![boardswarm_protocol::Item {
                                         id,
                                         name: item.name().to_string(),
+                                        instance: item
+                                            .properties()
+                                            .instance()
+                                            .map(ToOwned::to_owned),
                                     }],
                                 })),
                             }),

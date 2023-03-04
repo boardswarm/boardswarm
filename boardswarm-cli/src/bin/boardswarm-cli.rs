@@ -260,6 +260,15 @@ struct Opts {
     command: Command,
 }
 
+fn print_item(i: boardswarm_protocol::Item) {
+    print!("{} {}", i.id, i.name);
+    if let Some(instance) = i.instance {
+        println!(" on {instance}");
+    } else {
+        println!();
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let opt = Opts::parse();
@@ -269,7 +278,7 @@ async fn main() -> anyhow::Result<()> {
         Command::List { type_ } => {
             println!("{:?}s: ", type_);
             for i in boardswarm.list(type_).await? {
-                println!("{} {}", i.id, i.name);
+                print_item(i);
             }
             Ok(())
         }
@@ -282,7 +291,7 @@ async fn main() -> anyhow::Result<()> {
                 match event {
                     ItemEvent::Added(items) => {
                         for i in items {
-                            println!("Added: {} {}", i.id, i.name);
+                            print_item(i)
                         }
                     }
                     ItemEvent::Removed(removed) => println!("Removed: {}", removed),
