@@ -202,27 +202,18 @@ mod test {
         assert_eq!(props.name(), "test");
 
         let mut t = HashMap::new();
-        t.insert("name".to_string(), "test".to_string());
+        t.insert(NAME.to_string(), "test".to_string());
         assert_eq!(props.matches(&t), true);
 
-        assert_eq!(props.matches([("name", "test")]), true);
+        assert_eq!(props.matches([(NAME, "test")]), true);
         assert_eq!(props.matches([("udev.BADGER", "5")]), true);
 
-        assert_eq!(props.matches([("name", "no")]), false);
+        assert_eq!(props.matches([(NAME, "no")]), false);
         assert_eq!(props.matches([("udev.BADGER", "7")]), false);
         assert_eq!(props.matches([("udev.SNAKE", "7")]), false);
 
-        assert_eq!(
-            props.matches([("name", "test"), ("udev.BADGER", "5")]),
-            true
-        );
-        assert_eq!(
-            props.matches([("name", "test"), ("udev.BADGER", "7")]),
-            false
-        );
-        assert_eq!(
-            props.matches([("name", "test"), ("udev.SNAKE", "5")]),
-            false
-        );
+        assert_eq!(props.matches([(NAME, "test"), ("udev.BADGER", "5")]), true);
+        assert_eq!(props.matches([(NAME, "test"), ("udev.BADGER", "7")]), false);
+        assert_eq!(props.matches([(NAME, "test"), ("udev.SNAKE", "5")]), false);
     }
 }
