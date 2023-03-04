@@ -26,6 +26,7 @@ use crate::registry::RegistryChange;
 
 mod config;
 mod dfu;
+mod gpio;
 mod pdudaemon;
 mod registry;
 mod serial;
@@ -1010,8 +1011,10 @@ async fn main() -> anyhow::Result<()> {
     }
 
     for p in config.providers {
-        if p.type_ == "pdudaemon" {
-            pdudaemon::start_provider(p.name, p.parameters.unwrap(), server.clone());
+        match p.type_.as_str() {
+            "gpio" => gpio::start_provider(p.name, p.parameters.unwrap(), server.clone()),
+            "pdudaemon" => pdudaemon::start_provider(p.name, p.parameters.unwrap(), server.clone()),
+            t => warn!("Unknown provider type: {t}"),
         }
     }
 

@@ -4,7 +4,7 @@ use crate::{registry::Properties, Server};
 use futures::StreamExt;
 use tracing::info;
 
-fn properties_from_device(name: String, device: &tokio_udev::Device) -> Properties {
+pub fn properties_from_device(name: String, device: &tokio_udev::Device) -> Properties {
     let mut properties = Properties::new(name);
     for p in device.properties() {
         let key = format!("udev.{}", p.name().to_string_lossy());
