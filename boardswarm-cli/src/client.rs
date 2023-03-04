@@ -21,7 +21,11 @@ pub struct Boardswarm {
 }
 
 impl Boardswarm {
-    pub async fn connect(url: String) -> Result<Self, tonic::transport::Error> {
+    pub async fn connect<D>(url: D) -> Result<Self, tonic::transport::Error>
+    where
+        D: TryInto<tonic::transport::Endpoint>,
+        D::Error: Into<tonic::codegen::StdError>,
+    {
         let client = BoardswarmClient::connect(url).await?;
         Ok(Self { client })
     }

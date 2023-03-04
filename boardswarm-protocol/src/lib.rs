@@ -2,6 +2,9 @@ use serde::de::value::{MapDeserializer, SeqDeserializer};
 
 tonic::include_proto!("boardswarm");
 
+/// Default port for boardswarm servers
+pub const DEFAULT_PORT: u16 = 6653;
+
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct Parameters(prost_types::Struct);
 

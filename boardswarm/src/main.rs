@@ -10,10 +10,11 @@ use futures::prelude::*;
 use futures::stream::BoxStream;
 use futures::Sink;
 use registry::{Properties, Registry};
+use std::net::{AddrParseError, SocketAddr};
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::sync::Mutex;
-use std::{net::ToSocketAddrs, sync::Arc};
 use thiserror::Error;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::WatchStream;
@@ -963,8 +964,20 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
     }
 }
 
+fn parse_listen_address(addr: &str) -> Result<SocketAddr, AddrParseError> {
+    if let Ok(a) = addr.parse() {
+        Ok(a)
+    } else {
+        let ip = addr.parse()?;
+        Ok(SocketAddr::new(ip, boardswarm_protocol::DEFAULT_PORT))
+    }
+}
+
 #[derive(Debug, clap::Parser)]
 struct Opts {
+    #[clap(short, long)]
+    #[arg(value_parser = parse_listen_address)]
+    listen: Option<SocketAddr>,
     config: PathBuf,
 }
 
@@ -974,6 +987,16 @@ async fn main() -> anyhow::Result<()> {
 
     let opts = Opts::parse();
     let config = config::Config::from_file(opts.config)?;
+    let listen_config = config
+        .listen
+        .map(|l| parse_listen_address(&l))
+        .transpose()?;
+
+    let listen_addr = match (opts.listen, listen_config) {
+        (Some(l), _) => l,
+        (_, Some(c)) => c,
+        (None, None) => SocketAddr::new("::1".parse().unwrap(), boardswarm_protocol::DEFAULT_PORT),
+    };
 
     let server = Server::new();
     for d in config.devices {
@@ -997,8 +1020,8 @@ async fn main() -> anyhow::Result<()> {
 
     let server = tonic::transport::Server::builder()
         .add_service(boardswarm_protocol::boardswarm_server::BoardswarmServer::new(server.clone()))
-        .serve("[::1]:50051".to_socket_addrs().unwrap().next().unwrap());
-    info!("Server listening");
+        .serve(listen_addr);
+    info!("Server listening on {}", listen_addr);
     tokio::join!(local, server).1?;
 
     Ok(())

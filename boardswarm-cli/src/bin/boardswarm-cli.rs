@@ -254,8 +254,8 @@ enum Command {
 
 #[derive(clap::Parser)]
 struct Opts {
-    #[clap(short, long, default_value = "http://localhost:50051")]
-    uri: String,
+    #[clap(short, long, default_value = "http://localhost:6653")]
+    uri: tonic::transport::Uri,
     #[command(subcommand)]
     command: Command,
 }
@@ -272,6 +272,8 @@ fn print_item(i: boardswarm_protocol::Item) {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let opt = Opts::parse();
+
+    println!("Connecting to: {}", opt.uri);
     let mut boardswarm = boardswarm_cli::client::Boardswarm::connect(opt.uri).await?;
 
     match opt.command {
