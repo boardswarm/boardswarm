@@ -27,7 +27,7 @@ tracing-subscriber = "0.3.16"
 url = "2.3.1"
 erased-serde = "0.3.24"
 tokio-stream = { version = "0.1.11", features = ["sync"] }
-dfu-libusb = { git = "https://github.com/sjoerdsimons/dfu-libusb", branch = "sjoerd/dfu-1.1", version = "0.4.0" }
+dfu-libusb = "0.5.0"
 rusb = "0.9.1"
 boardswarm-cli = { version = "0.1.0", path = "../boardswarm-cli" }
 tokio-gpiod = "0.2.3"
