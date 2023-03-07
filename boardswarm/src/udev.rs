@@ -104,7 +104,7 @@ pub async fn add_dfu(server: &Server, device: &tokio_udev::Device) -> Option<u64
             .parse()
             .unwrap();
         let dfu = crate::dfu::Dfu::new(busnum, devnum).await;
-        return Some(server.register_uploader(properties, dfu));
+        return Some(server.register_volume(properties, dfu));
     }
     None
 }
@@ -144,7 +144,7 @@ pub async fn monitor_dfu(server: Server) {
             tokio_udev::EventType::Remove => {
                 if let Some(path) = event.device().devnode() {
                     if let Some(dfu) = dfu_devices.remove(path) {
-                        server.unregister_uploader(dfu);
+                        server.unregister_volume(dfu);
                     }
                 }
             }

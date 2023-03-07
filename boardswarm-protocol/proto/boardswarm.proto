@@ -17,9 +17,11 @@ service Boardswarm {
   rpc ConsoleStreamOutput (ConsoleOutputRequest) returns (stream ConsoleOutput);
   rpc ConsoleStreamInput (stream ConsoleInputRequest) returns (google.protobuf.Empty);
 
-  rpc UploaderInfo(UploaderRequest) returns (UploaderInfoMsg);
-  rpc UploaderUpload (stream UploadRequest) returns (stream UploadProgress);
-  rpc UploaderCommit(UploaderRequest) returns (google.protobuf.Empty);
+  rpc VolumeInfo(VolumeRequest) returns (VolumeInfoMsg);
+  rpc VolumeIo (stream VolumeIoRequest) returns (stream VolumeIoReply);
+
+  // Commit all data in an uploader specific manner; e.g. may trigger a USB reset for DFU devices
+  rpc VolumeCommit(VolumeRequest) returns (google.protobuf.Empty);
 
 }
 
@@ -27,7 +29,7 @@ enum ItemType {
   ITEM_TYPE_DEVICE = 0;
   ITEM_TYPE_CONSOLE = 1;
   ITEM_TYPE_ACTUATOR = 2;
-  ITEM_TYPE_UPLOADER = 3;
+  ITEM_TYPE_VOLUME = 3;
 }
 
 message ItemTypeRequest {
@@ -71,7 +73,7 @@ message DeviceRequest {
 
 message Device {
   repeated Console consoles = 1;
-  repeated Uploader uploaders = 2;
+  repeated Volume volumes = 2;
   repeated Mode modes = 3;
   optional string current_mode = 4;
 }
@@ -81,7 +83,7 @@ message Console {
   optional uint64 id = 2;
 }
 
-message Uploader {
+message Volume {
   string name = 1;
   optional uint64 id = 2;
 }
@@ -122,31 +124,73 @@ message ActuatorModeRequest {
   google.protobuf.Struct parameters = 2;
 }
 
-message UploaderTarget {
+message VolumeTarget {
   string name = 1;
+  bool readable = 2;
+  bool writable = 3;
+  bool seekable = 4;
+  /// target size in bytes if known
+  optional uint64 size = 5;
+  /// blocksize of the underlying media; For optimal performance read/write request should be done 
+  /// at that size
+  optional uint32 blocksize = 6;
 }
 
-message UploaderInfoMsg {
-   repeated UploaderTarget target = 1;
+message VolumeInfoMsg {
+   repeated VolumeTarget target = 1;
 }
 
-message UploaderRequest {
-  uint64 uploader = 1;
+message VolumeRequest {
+  uint64 volume = 1;
 }
 
-message UploadRequest {
-  oneof TargetOrData {
-     UploadTarget target = 1;
-     bytes data = 2;
+message VolumeIoTarget {
+  uint64 volume = 1;
+  string target = 2;
+  optional uint64 length = 3;
+}
+
+message VolumeIoRead {
+  uint64 length = 1;
+  uint64 offset = 2;
+}
+
+message VolumeIoReadReply {
+  bytes data = 1;
+}
+
+message VolumeIoWrite {
+  bytes data = 1;
+  uint64 offset = 2;
+}
+
+message VolumeIoWriteReply {
+  uint64 written = 1;
+}
+
+message VolumeIoFlush {
+}
+
+message VolumeIoFlushReply {
+}
+
+
+message VolumeIoRequest {
+  oneof TargetOrRequest {
+     VolumeIoTarget target = 1;
+     VolumeIoRead read = 2;
+     VolumeIoWrite write = 3;
+     VolumeIoFlush flush = 4;
   }
 }
 
-message UploadTarget {
-  uint64 uploader = 1;
-  string target  = 2;
-  uint64 length = 3;
+// One result per read request -> should furfill full read request unless eof is reached
+message VolumeIoReply {
+  oneof Reply {
+        VolumeIoReadReply read = 1;
+        VolumeIoWriteReply write = 2;
+        VolumeIoFlushReply flush = 3;
+  }
 }
 
-message UploadProgress {
-  uint64 written = 1;
-}
+
