@@ -1,15 +1,11 @@
-use std::{
-    convert::Infallible,
-    os::unix::prelude::AsRawFd,
-    path::{Path, PathBuf},
-};
+use std::{convert::Infallible, os::unix::prelude::AsRawFd, path::PathBuf};
 
 use anyhow::{anyhow, bail};
-use boardswarm_cli::client::{Boardswarm, UploadProgressState};
+use boardswarm_cli::client::Boardswarm;
 use boardswarm_protocol::ItemType;
 use bytes::{Bytes, BytesMut};
 use clap::{arg, Args, Parser, Subcommand};
-use futures::{pin_mut, stream, FutureExt, Stream, StreamExt, TryStreamExt};
+use futures::{pin_mut, FutureExt, Stream, StreamExt, TryStreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use boardswarm_cli::client::ItemEvent;
@@ -43,52 +39,6 @@ fn input_stream() -> impl Stream<Item = Bytes> {
         data.truncate(r);
         Some((data.into(), stdin))
     })
-}
-
-async fn file_stream(path: &Path) -> anyhow::Result<(u64, impl Stream<Item = Bytes>)> {
-    let f = tokio::fs::File::open(path).await?;
-    let m = f.metadata().await?;
-    let data = stream::unfold(f, |mut f| async move {
-        let mut data = BytesMut::zeroed(4096);
-        let r = f.read(&mut data).await.unwrap();
-        if r == 0 {
-            None
-        } else {
-            data.truncate(r);
-            Some((data.freeze(), f))
-        }
-    });
-    Ok((m.len(), data))
-}
-
-async fn watch_upload_progress(
-    progress: boardswarm_cli::client::UploadProgress,
-    length: u64,
-) -> anyhow::Result<()> {
-    let bar = indicatif::ProgressBar::new(length);
-    bar.set_style(
-        indicatif::ProgressStyle::default_bar()
-            .template(
-                "[{bar:40.cyan/blue}]   \
-                          {bytes}/{total_bytes} ({bytes_per_sec}) ({eta})",
-            )?
-            .progress_chars("#>-"),
-    );
-
-    let mut stream = progress.stream();
-
-    while let Some(progress) = stream.next().await {
-        match progress {
-            UploadProgressState::Writing(written) => bar.set_position(written),
-            UploadProgressState::Succeeded => bar.finish(),
-            UploadProgressState::Failed(e) => {
-                bar.abandon();
-                return Err(e.into());
-            }
-        }
-    }
-
-    Ok(())
 }
 
 #[derive(Debug, Args)]
@@ -125,22 +75,22 @@ enum ConsoleCommand {
 }
 
 #[derive(Debug, Args)]
-struct UploadArgs {
-    uploader: u64,
+struct WriteArgs {
+    volume: u64,
     target: String,
     file: PathBuf,
 }
 
 #[derive(Debug, Subcommand)]
-enum UploadCommand {
+enum VolumeCommand {
     Info {
-        uploader: u64,
+        volume: u64,
     },
-    /// Upload file to uploader target
-    Upload(UploadArgs),
+    /// Upload file to volume target
+    Write(WriteArgs),
     /// Commit upload
     Commit {
-        uploader: u64,
+        volume: u64,
     },
 }
 
@@ -200,7 +150,7 @@ enum DeviceCommand {
         commit: bool,
         #[arg(value_parser = parse_device)]
         device: DeviceArg,
-        uploader: String,
+        volume: String,
         target: String,
         file: PathBuf,
     },
@@ -222,7 +172,7 @@ fn parse_item(item: &str) -> Result<ItemType, anyhow::Error> {
         ("actuators", ItemType::Actuator),
         ("consoles", ItemType::Console),
         ("devices", ItemType::Device),
-        ("uploaders", ItemType::Uploader),
+        ("volumes", ItemType::Volume),
     ];
     for (n, t) in types {
         if n == item {
@@ -246,9 +196,9 @@ enum Command {
         #[command(subcommand)]
         command: ConsoleCommand,
     },
-    Uploader {
+    Volume {
         #[command(subcommand)]
-        command: UploadCommand,
+        command: VolumeCommand,
     },
     Device {
         #[command(subcommand)]
@@ -359,21 +309,24 @@ async fn main() -> anyhow::Result<()> {
 
             Ok(())
         }
-        Command::Uploader { command } => {
+        Command::Volume { command } => {
             match command {
-                UploadCommand::Info { uploader } => {
-                    let info = boardswarm.uploader_info(uploader).await?;
+                VolumeCommand::Info { volume } => {
+                    let info = boardswarm.volume_info(volume).await?;
                     println!("{:#?}", info);
                 }
-                UploadCommand::Upload(upload) => {
-                    let (length, data) = file_stream(&upload.file).await?;
-                    let progress = boardswarm
-                        .uploader_upload(upload.uploader, upload.target, data, length)
+                VolumeCommand::Write(write) => {
+                    let mut f = tokio::fs::File::open(write.file).await?;
+                    let m = f.metadata().await?;
+                    let mut rw = boardswarm
+                        .volume_io_readwrite(write.volume, write.target, Some(m.len()))
                         .await?;
-                    watch_upload_progress(progress, length).await?;
+                    tokio::io::copy(&mut f, &mut rw).await?;
+                    f.flush().await?;
+                    drop(rw);
                 }
-                UploadCommand::Commit { uploader } => {
-                    boardswarm.uploader_commit(uploader).await?;
+                VolumeCommand::Commit { volume } => {
+                    boardswarm.volume_commit(volume).await?;
                 }
             }
             Ok(())
@@ -384,29 +337,33 @@ async fn main() -> anyhow::Result<()> {
                     wait,
                     commit,
                     device,
-                    uploader,
+                    volume,
                     target,
                     file,
                 } => {
+                    let mut f = tokio::fs::File::open(file).await?;
                     let device = device.device(boardswarm).await?;
                     let device = device.ok_or_else(|| anyhow::anyhow!("Device not found"))?;
-                    let (length, data) = file_stream(&file).await?;
-                    let mut uploader = device
-                        .uploader_by_name(&uploader)
-                        .ok_or_else(|| anyhow!("Uploader not available for device"))?;
-                    if !uploader.available() {
+                    let mut volume = device
+                        .volume_by_name(&volume)
+                        .ok_or_else(|| anyhow!("Volume not available for device"))?;
+                    if !volume.available() {
                         if wait {
-                            println!("Waiting for uploader..");
-                            uploader.wait().await;
+                            println!("Waiting for volume..");
+                            volume.wait().await;
                         } else {
-                            bail!("uploader not available");
+                            bail!("volume not available");
                         }
                     }
-                    let progress = uploader.upload(target, data, length).await?;
-                    watch_upload_progress(progress, length).await?;
-                    println!("{} uploaded", file.display());
+
+                    let m = f.metadata().await?;
+                    let mut rw = volume.open(target, Some(m.len())).await?;
+                    tokio::io::copy(&mut f, &mut rw).await?;
+                    f.flush().await?;
+                    drop(rw);
+
                     if commit {
-                        uploader.commit().await?;
+                        volume.commit().await?;
                     }
                 }
                 DeviceCommand::Info { device } => {

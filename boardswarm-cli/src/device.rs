@@ -1,12 +1,12 @@
 use std::sync::{Arc, Mutex};
 
-use boardswarm_protocol::UploaderInfoMsg;
+use boardswarm_protocol::VolumeInfoMsg;
 use bytes::Bytes;
 use futures::{pin_mut, Stream, StreamExt};
 use tokio::{select, sync::broadcast};
 use tracing::info;
 
-use crate::client::{Boardswarm, UploadProgress};
+use crate::client::{Boardswarm, VolumeIo, VolumeIoRW};
 
 #[derive(Debug, Clone)]
 pub struct DeviceBuilder {
@@ -45,22 +45,22 @@ impl DeviceBuilder {
 }
 
 #[derive(Clone)]
-pub struct DeviceUploader {
+pub struct DeviceVolume {
     device: Device,
-    uploader: String,
+    volume: String,
 }
 
-impl DeviceUploader {
-    fn new(device: Device, uploader: String) -> Self {
-        Self { device, uploader }
+impl DeviceVolume {
+    fn new(device: Device, volume: String) -> Self {
+        Self { device, volume }
     }
 
     // todo differention between console no (longer) available
     fn get_id(&self) -> Option<u64> {
         let d = self.device.inner.device.lock().unwrap();
-        d.uploaders
+        d.volumes
             .iter()
-            .find(|u| u.name == self.uploader)
+            .find(|u| u.name == self.volume)
             .and_then(|u| u.id)
     }
 
@@ -68,7 +68,7 @@ impl DeviceUploader {
         self.get_id().is_some()
     }
 
-    /// Wait for the uploader to become available again
+    /// Wait for the volume to become available again
     pub async fn wait(&self) {
         let mut watch = self.device.watch();
         while !self.available() {
@@ -76,45 +76,46 @@ impl DeviceUploader {
         }
     }
 
-    pub async fn info(&mut self) -> Result<UploaderInfoMsg, tonic::Status> {
+    pub async fn info(&mut self) -> Result<VolumeInfoMsg, tonic::Status> {
         if let Some(id) = self.get_id() {
-            self.device.client.uploader_info(id).await
+            self.device.client.volume_info(id).await
         } else {
-            Err(tonic::Status::unavailable(
-                "Uploader currently not available",
-            ))
+            Err(tonic::Status::unavailable("Volume currently not available"))
         }
     }
 
-    pub async fn upload<S, T>(
+    pub async fn io(
         &mut self,
-        target: T,
-        data: S,
-        length: u64,
-    ) -> Result<UploadProgress, tonic::Status>
-    where
-        S: Stream<Item = Bytes> + Send + 'static,
-        T: Into<String>,
-    {
-        if let Some(id) = self.get_id() {
-            self.device
-                .client
-                .uploader_upload(id, target.into(), data, length)
-                .await
-        } else {
-            Err(tonic::Status::unavailable(
-                "Uploader currently not available",
-            ))
-        }
+        target: &str,
+        length: Option<u64>,
+    ) -> Result<VolumeIo, tonic::Status> {
+        let id = self
+            .get_id()
+            .ok_or_else(|| tonic::Status::unavailable("Volume currently not available"))?;
+        self.device.client.volume_io(id, target, length).await
+    }
+
+    // TODO handle errors
+    // TODO cache info
+    pub async fn open<S: Into<String> + AsRef<str>>(
+        &mut self,
+        target: S,
+        length: Option<u64>,
+    ) -> Result<VolumeIoRW, tonic::Status> {
+        let id = self
+            .get_id()
+            .ok_or_else(|| tonic::Status::unavailable("Volume currently not available"))?;
+        self.device
+            .client
+            .volume_io_readwrite(id, target, length)
+            .await
     }
 
     pub async fn commit(&mut self) -> Result<(), tonic::Status> {
         if let Some(id) = self.get_id() {
-            self.device.client.uploader_commit(id).await
+            self.device.client.volume_commit(id).await
         } else {
-            Err(tonic::Status::unavailable(
-                "Uploader currently not available",
-            ))
+            Err(tonic::Status::unavailable("Volume currently not available"))
         }
     }
 }
@@ -252,20 +253,20 @@ impl Device {
             .map(|c| DeviceConsole::new(self.clone(), c.name.clone()))
     }
 
-    pub fn uploaders(&self) -> Vec<DeviceUploader> {
+    pub fn volumes(&self) -> Vec<DeviceVolume> {
         let d = self.inner.device.lock().unwrap();
-        d.uploaders
+        d.volumes
             .iter()
-            .map(|u| DeviceUploader::new(self.clone(), u.name.clone()))
+            .map(|u| DeviceVolume::new(self.clone(), u.name.clone()))
             .collect()
     }
 
-    pub fn uploader_by_name(&self, name: &str) -> Option<DeviceUploader> {
+    pub fn volume_by_name(&self, name: &str) -> Option<DeviceVolume> {
         let d = self.inner.device.lock().unwrap();
-        d.uploaders
+        d.volumes
             .iter()
             .find(|u| u.name == name)
-            .map(|u| DeviceUploader::new(self.clone(), u.name.clone()))
+            .map(|u| DeviceVolume::new(self.clone(), u.name.clone()))
     }
 
     async fn monitor<M>(monitor: M, mut shutdown: broadcast::Receiver<()>, inner: Arc<DeviceInner>)

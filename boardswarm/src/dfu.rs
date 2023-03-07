@@ -2,58 +2,79 @@ use std::{collections::HashMap, io::Read};
 
 use anyhow::bail;
 use bytes::{Buf, Bytes};
-use futures::{stream::BoxStream, StreamExt};
 use tokio::sync::{
     mpsc::{self, Receiver},
     oneshot,
 };
 use tracing::{info, warn};
 
-use crate::{UploadProgress, Uploader, UploaderError};
+use crate::{Volume, VolumeError, VolumeTarget, VolumeTargetInfo};
 
 #[derive(Debug)]
 pub struct Dfu {
     device: DfuDevice,
-    targets: Vec<String>,
+    targets: Vec<VolumeTargetInfo>,
 }
 
 impl Dfu {
     pub async fn new(busnum: u8, address: u8) -> Self {
         let device = DfuDevice::new(busnum, address);
-        let targets = device.targets().await;
+        let targets = device
+            .targets()
+            .await
+            .into_iter()
+            .map(|name| VolumeTargetInfo {
+                name,
+                readable: false,
+                writable: true,
+                seekable: false,
+                size: None,
+                blocksize: None,
+            })
+            .collect();
         Self { device, targets }
     }
 }
 
 #[async_trait::async_trait]
-impl Uploader for Dfu {
-    fn targets(&self) -> &[String] {
+impl Volume for Dfu {
+    fn targets(&self) -> &[VolumeTargetInfo] {
         self.targets.as_slice()
     }
 
-    async fn upload(
+    async fn open(
         &self,
         target: &str,
-        data: BoxStream<'static, Bytes>,
-        length: u64,
-        progress: UploadProgress,
-    ) -> Result<(), UploaderError> {
-        info!("Uploading to: {}", target);
-        let device = self.device.clone();
-        let target = target.to_string();
-
-        let mut updates = device.start_download(target, data, length as u32).await;
-
-        while updates.changed().await.is_ok() {
-            progress.update(*updates.borrow_and_update() as u64);
+        length: Option<u64>,
+    ) -> Result<Box<dyn VolumeTarget>, VolumeError> {
+        if self.targets.iter().any(|t| t.name == target) {
+            let tx = self
+                .device
+                .start_download(target.to_owned(), length.unwrap_or_default() as u32)
+                .await;
+            Ok(Box::new(DfuTarget { tx }))
+        } else {
+            warn!("Unknown target requested");
+            Err(VolumeError::UnknownTargetRequested)
         }
-
-        Ok(())
     }
 
-    async fn commit(&self) -> Result<(), UploaderError> {
+    async fn commit(&self) -> Result<(), VolumeError> {
         self.device.reset().await;
         Ok(())
+    }
+}
+
+struct DfuTarget {
+    tx: mpsc::Sender<Bytes>,
+}
+
+#[async_trait::async_trait]
+impl VolumeTarget for DfuTarget {
+    async fn write(&mut self, data: Bytes, _offset: u64, completion: crate::WriteCompletion) {
+        let len = data.len();
+        let _ = self.tx.send(data).await;
+        completion.complete(Ok(len as u64));
     }
 }
 
@@ -106,9 +127,8 @@ enum DfuCommand {
         target: String,
         length: u32,
         reader: DfuRead,
-        progress: tokio::sync::watch::Sender<usize>,
     },
-    Reset,
+    Reset(oneshot::Sender<()>),
 }
 
 #[derive(Clone, Debug)]
@@ -126,34 +146,24 @@ impl DfuDevice {
         rx.await.unwrap_or_default()
     }
 
-    async fn start_download(
-        &self,
-        target: String,
-        mut data: BoxStream<'static, Bytes>,
-        length: u32,
-    ) -> tokio::sync::watch::Receiver<usize> {
+    async fn start_download(&self, target: String, length: u32) -> mpsc::Sender<Bytes> {
         let (tx, rx) = tokio::sync::mpsc::channel(1);
-        let (progress, watch_rx) = tokio::sync::watch::channel(0);
         let reader = DfuRead::new(rx);
 
         let command = DfuCommand::Download {
             target,
             length,
             reader,
-            progress,
         };
 
         self.0.send(command).await.unwrap();
-        tokio::spawn(async move {
-            while let Some(bytes) = data.next().await {
-                let _ = tx.send(bytes).await;
-            }
-        });
-        watch_rx
+        tx
     }
 
     async fn reset(&self) {
-        let _ = self.0.send(DfuCommand::Reset).await;
+        let (tx, rx) = oneshot::channel();
+        let _ = self.0.send(DfuCommand::Reset(tx)).await;
+        let _ = rx.await;
     }
 }
 
@@ -226,7 +236,6 @@ fn dfu_download<C: rusb::UsbContext>(
     interface: &DfuInterface,
     length: u32,
     reader: DfuRead,
-    progress: tokio::sync::watch::Sender<usize>,
 ) -> anyhow::Result<()> {
     let handle = device.device.open()?;
     let mut dfu = dfu_libusb::DfuLibusb::from_usb_device(
@@ -235,13 +244,6 @@ fn dfu_download<C: rusb::UsbContext>(
         interface.interface,
         interface.alt,
     )?;
-    dfu.with_progress({
-        let mut total = 0;
-        move |count| {
-            total += count;
-            let _ = progress.send(total);
-        }
-    });
     dfu.download(reader, length)?;
     Ok(())
 }
@@ -280,17 +282,16 @@ fn dfu_thread(bus: u8, dev: u8, mut control: mpsc::Receiver<DfuCommand>) {
                 target,
                 length,
                 reader,
-                progress,
             } => {
                 if let Some(interface) = device.interfaces.get(&target) {
-                    if let Err(e) = dfu_download(&device, interface, length, reader, progress) {
+                    if let Err(e) = dfu_download(&device, interface, length, reader) {
                         warn!("Download failed: {}", e);
                     }
                 } else {
                     warn!("Target not found: {}", target);
                 }
             }
-            DfuCommand::Reset => {
+            DfuCommand::Reset(tx) => {
                 // Shouldn't really matter what interface gets reset;  on the first interface
                 if let Some(interface) = device.interfaces.values().next() {
                     if let Err(e) = dfu_reset(&device, interface) {
@@ -299,6 +300,7 @@ fn dfu_thread(bus: u8, dev: u8, mut control: mpsc::Receiver<DfuCommand>) {
                 } else {
                     warn!("No interfaces");
                 }
+                let _ = tx.send(());
             }
         }
     }

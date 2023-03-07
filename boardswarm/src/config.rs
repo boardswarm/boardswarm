@@ -25,7 +25,7 @@ pub struct Device {
     pub consoles: Vec<Console>,
     pub modes: Vec<Mode>,
     #[serde(default)]
-    pub uploaders: Vec<Uploader>,
+    pub volumes: Vec<Volume>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -39,7 +39,7 @@ pub struct Console {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct Uploader {
+pub struct Volume {
     pub name: String,
     #[serde(rename = "match")]
     pub match_: HashMap<String, String>,

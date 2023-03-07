@@ -1,8 +1,8 @@
 use boardswarm_protocol::item_event::Event;
 use boardswarm_protocol::{
-    console_input_request, upload_request, ConsoleConfigureRequest, ConsoleInputRequest,
-    ConsoleOutputRequest, ItemEvent, ItemList, ItemPropertiesMsg, ItemPropertiesRequest,
-    ItemTypeRequest, Property, UploaderInfoMsg, UploaderRequest,
+    console_input_request, volume_io_reply, volume_io_request, ConsoleConfigureRequest,
+    ConsoleInputRequest, ConsoleOutputRequest, ItemEvent, ItemList, ItemPropertiesMsg,
+    ItemPropertiesRequest, ItemTypeRequest, Property, VolumeInfoMsg, VolumeRequest,
 };
 use bytes::Bytes;
 use clap::Parser;
@@ -16,8 +16,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 use thiserror::Error;
-use tokio::sync::broadcast;
-use tokio_stream::wrappers::WatchStream;
+use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::Streaming;
 
 use tracing::{info, warn};
@@ -78,41 +78,142 @@ trait ConsoleExt: Console {
 impl<C> ConsoleExt for C where C: Console + ?Sized {}
 
 #[derive(Clone, Error, Debug)]
-pub enum UploaderError {}
-
-type UploadProgressStream = WatchStream<Result<boardswarm_protocol::UploadProgress, tonic::Status>>;
-
-#[derive(Debug)]
-pub struct UploadProgress {
-    tx: tokio::sync::watch::Sender<Result<boardswarm_protocol::UploadProgress, tonic::Status>>,
+pub enum VolumeError {
+    #[error("Unknown target requested")]
+    UnknownTargetRequested,
 }
 
-impl UploadProgress {
-    fn new() -> (Self, UploadProgressStream) {
-        let (tx, rx) =
-            tokio::sync::watch::channel(Ok(boardswarm_protocol::UploadProgress { written: 0 }));
-        (Self { tx }, WatchStream::new(rx))
+type VolumeIoReplyStream =
+    ReceiverStream<Result<boardswarm_protocol::VolumeIoReply, tonic::Status>>;
+
+enum VolumeIoReply {
+    Read(oneshot::Receiver<Result<Bytes, tonic::Status>>),
+    Write(oneshot::Receiver<Result<u64, tonic::Status>>),
+    Flush(oneshot::Receiver<Result<(), tonic::Status>>),
+    FatalError(tonic::Status),
+}
+
+pub struct VolumeIoReplies {
+    completion_tx: tokio::sync::mpsc::UnboundedSender<VolumeIoReply>,
+}
+
+impl VolumeIoReplies {
+    fn new() -> (Self, VolumeIoReplyStream) {
+        let (reply_tx, reply_rx) = mpsc::channel(8);
+        let (completion_tx, mut completion_rx) = mpsc::unbounded_channel();
+
+        tokio::spawn(async move {
+            while let Some(completion) = completion_rx.recv().await {
+                let reply = match completion {
+                    VolumeIoReply::Read(r) => {
+                        let Ok(r) = r.await else { break };
+                        r.map(|data| boardswarm_protocol::VolumeIoReply {
+                            reply: Some(volume_io_reply::Reply::Read(
+                                boardswarm_protocol::VolumeIoReadReply { data },
+                            )),
+                        })
+                    }
+                    VolumeIoReply::Write(w) => {
+                        let Ok(w) = w.await else { break };
+                        w.map(|written| boardswarm_protocol::VolumeIoReply {
+                            reply: Some(volume_io_reply::Reply::Write(
+                                boardswarm_protocol::VolumeIoWriteReply { written },
+                            )),
+                        })
+                    }
+                    VolumeIoReply::Flush(f) => {
+                        let Ok(f) = f.await else { break };
+                        f.map(|_| boardswarm_protocol::VolumeIoReply {
+                            reply: Some(volume_io_reply::Reply::Flush(
+                                boardswarm_protocol::VolumeIoFlushReply {},
+                            )),
+                        })
+                    }
+                    VolumeIoReply::FatalError(e) => Err(e),
+                };
+                if reply_tx.send(reply).await.is_err() {
+                    break;
+                };
+            }
+        });
+        (Self { completion_tx }, ReceiverStream::new(reply_rx))
     }
 
-    fn update(&self, written: u64) {
-        let _ = self
-            .tx
-            .send(Ok(boardswarm_protocol::UploadProgress { written }));
+    fn enqueue_write_reply(&mut self, rx: oneshot::Receiver<Result<u64, tonic::Status>>) {
+        let _ = self.completion_tx.send(VolumeIoReply::Write(rx));
+    }
+
+    fn enqueue_read_reply(&mut self, rx: oneshot::Receiver<Result<Bytes, tonic::Status>>) {
+        let _ = self.completion_tx.send(VolumeIoReply::Read(rx));
+    }
+
+    fn enqueue_flush_reply(&mut self, rx: oneshot::Receiver<Result<(), tonic::Status>>) {
+        let _ = self.completion_tx.send(VolumeIoReply::Flush(rx));
+    }
+
+    fn enqueue_fatal_error(&mut self, error: tonic::Status) {
+        let _ = self.completion_tx.send(VolumeIoReply::FatalError(error));
+    }
+}
+
+type VolumeTargetInfo = boardswarm_protocol::VolumeTarget;
+#[async_trait::async_trait]
+pub trait Volume: std::fmt::Debug + Send + Sync {
+    fn targets(&self) -> &[VolumeTargetInfo];
+    async fn open(
+        &self,
+        target: &str,
+        length: Option<u64>,
+    ) -> Result<Box<dyn VolumeTarget>, VolumeError>;
+    async fn commit(&self) -> Result<(), VolumeError>;
+}
+
+pub struct ReadCompletion(oneshot::Sender<Result<Bytes, tonic::Status>>);
+impl ReadCompletion {
+    fn new() -> (Self, oneshot::Receiver<Result<Bytes, tonic::Status>>) {
+        let (tx, rx) = oneshot::channel();
+        (Self(tx), rx)
+    }
+    pub fn complete(self, result: Result<Bytes, tonic::Status>) {
+        let _ = self.0.send(result);
+    }
+}
+
+pub struct WriteCompletion(oneshot::Sender<Result<u64, tonic::Status>>);
+impl WriteCompletion {
+    fn new() -> (Self, oneshot::Receiver<Result<u64, tonic::Status>>) {
+        let (tx, rx) = oneshot::channel();
+        (Self(tx), rx)
+    }
+    pub fn complete(self, result: Result<u64, tonic::Status>) {
+        let _ = self.0.send(result);
+    }
+}
+
+pub struct FlushCompletion(oneshot::Sender<Result<(), tonic::Status>>);
+impl FlushCompletion {
+    fn new() -> (Self, oneshot::Receiver<Result<(), tonic::Status>>) {
+        let (tx, rx) = oneshot::channel();
+        (Self(tx), rx)
+    }
+    pub fn complete(self, result: Result<(), tonic::Status>) {
+        let _ = self.0.send(result);
     }
 }
 
 #[async_trait::async_trait]
-pub trait Uploader: std::fmt::Debug + Send + Sync {
-    fn targets(&self) -> &[String];
-    async fn upload(
-        &self,
-        target: &str,
-        data: BoxStream<'static, Bytes>,
-        length: u64,
-        progress: UploadProgress,
-    ) -> Result<(), UploaderError>;
+pub trait VolumeTarget: Send {
+    async fn read(&mut self, _length: u64, _offset: u64, completion: ReadCompletion) {
+        completion.complete(Err(tonic::Status::unimplemented("Target is not readable")));
+    }
 
-    async fn commit(&self) -> Result<(), UploaderError>;
+    async fn write(&mut self, _data: Bytes, _offset: u64, completion: WriteCompletion) {
+        completion.complete(Err(tonic::Status::unimplemented("Target is not writable")));
+    }
+
+    async fn flush(&mut self, completion: FlushCompletion) {
+        completion.complete(Ok(()))
+    }
 }
 
 trait DeviceConfigItem {
@@ -125,7 +226,7 @@ impl DeviceConfigItem for config::Console {
     }
 }
 
-impl DeviceConfigItem for config::Uploader {
+impl DeviceConfigItem for config::Volume {
     fn matches(&self, properties: &Properties) -> bool {
         properties.matches(&self.match_)
     }
@@ -197,11 +298,11 @@ impl From<&Device> for boardswarm_protocol::Device {
                 id: c.get(),
             })
             .collect();
-        let uploaders = d
+        let volumes = d
             .inner
-            .uploaders
+            .volumes
             .iter()
-            .map(|u| boardswarm_protocol::Uploader {
+            .map(|u| boardswarm_protocol::Volume {
                 name: u.config().name.clone(),
                 id: u.get(),
             })
@@ -219,7 +320,7 @@ impl From<&Device> for boardswarm_protocol::Device {
         let current_mode = d.current_mode();
         boardswarm_protocol::Device {
             consoles,
-            uploaders,
+            volumes,
             current_mode,
             modes,
         }
@@ -301,7 +402,7 @@ struct DeviceInner {
     name: String,
     current_mode: Mutex<Option<String>>,
     consoles: Vec<DeviceItem<config::Console>>,
-    uploaders: Vec<DeviceItem<config::Uploader>>,
+    volumes: Vec<DeviceItem<config::Volume>>,
     modes: Vec<DeviceMode>,
     server: Server,
 }
@@ -315,7 +416,7 @@ impl Device {
     fn from_config(config: config::Device, server: Server) -> Device {
         let name = config.name;
         let consoles = config.consoles.into_iter().map(DeviceItem::new).collect();
-        let uploaders = config.uploaders.into_iter().map(DeviceItem::new).collect();
+        let volumes = config.volumes.into_iter().map(DeviceItem::new).collect();
         let notifier = DeviceNotifier::new();
         let modes = config.modes.into_iter().map(Into::into).collect();
         Device {
@@ -324,7 +425,7 @@ impl Device {
                 name,
                 current_mode: Mutex::new(None),
                 consoles,
-                uploaders,
+                volumes,
                 modes,
                 server,
             }),
@@ -440,7 +541,7 @@ impl Device {
 
         let mut actuator_monitor = self.inner.server.inner.actuators.monitor();
         let mut console_monitor = self.inner.server.inner.consoles.monitor();
-        let mut uploader_monitor = self.inner.server.inner.uploaders.monitor();
+        let mut uploader_monitor = self.inner.server.inner.volumes.monitor();
         let mut changed = false;
 
         for (id, item) in self.inner.server.inner.actuators.contents() {
@@ -455,8 +556,8 @@ impl Device {
             changed |= add_item_with(self.inner.consoles.iter(), id, item, setup_console);
         }
 
-        for (id, item) in self.inner.server.inner.uploaders.contents() {
-            changed |= add_item(self.inner.uploaders.iter(), id, item);
+        for (id, item) in self.inner.server.inner.volumes.contents() {
+            changed |= add_item(self.inner.volumes.iter(), id, item);
         }
 
         if changed {
@@ -483,9 +584,9 @@ impl Device {
                 }
                 msg = uploader_monitor.recv() => {
                     match msg {
-                        Ok(c) => change(self.inner.uploaders.iter(), c),
+                        Ok(c) => change(self.inner.volumes.iter(), c),
                         Err(e) => {
-                            warn!("Issue with monitoring uploaders: {:?}", e); return },
+                            warn!("Issue with monitoring volumes: {:?}", e); return },
                     }
                 }
             };
@@ -500,7 +601,7 @@ struct ServerInner {
     devices: Registry<Device>,
     consoles: Registry<Arc<dyn Console>>,
     actuators: Registry<Arc<dyn Actuator>>,
-    uploaders: Registry<Arc<dyn Uploader>>,
+    volumes: Registry<Arc<dyn Volume>>,
 }
 
 fn to_item_list<T: Clone>(registry: &Registry<T>) -> ItemList {
@@ -528,7 +629,7 @@ impl Server {
                 consoles: Registry::new(),
                 devices: Registry::new(),
                 actuators: Registry::new(),
-                uploaders: Registry::new(),
+                volumes: Registry::new(),
             }),
         }
     }
@@ -591,25 +692,25 @@ impl Server {
             .map(|item| item.inner().clone())
     }
 
-    fn register_uploader<U>(&self, properties: Properties, uploader: U) -> u64
+    fn register_volume<V>(&self, properties: Properties, volume: V) -> u64
     where
-        U: Uploader + 'static,
+        V: Volume + 'static,
     {
-        let (id, item) = self.inner.uploaders.add(properties, Arc::new(uploader));
+        let (id, item) = self.inner.volumes.add(properties, Arc::new(volume));
         info!("Registered uploader: {} - {}", id, item);
         id
     }
 
-    fn unregister_uploader(&self, id: u64) {
-        if let Some(item) = self.inner.uploaders.lookup(id) {
+    fn unregister_volume(&self, id: u64) {
+        if let Some(item) = self.inner.volumes.lookup(id) {
             info!("Unregistering uploader: {} - {}", id, item.name());
-            self.inner.uploaders.remove(id);
+            self.inner.volumes.remove(id);
         }
     }
 
-    pub fn get_uploader(&self, id: u64) -> Option<Arc<dyn Uploader>> {
+    pub fn get_volume(&self, id: u64) -> Option<Arc<dyn Volume>> {
         self.inner
-            .uploaders
+            .volumes
             .lookup(id)
             .map(registry::Item::into_inner)
     }
@@ -632,13 +733,14 @@ impl Server {
             boardswarm_protocol::ItemType::Actuator => to_item_list(&self.inner.actuators),
             boardswarm_protocol::ItemType::Device => to_item_list(&self.inner.devices),
             boardswarm_protocol::ItemType::Console => to_item_list(&self.inner.consoles),
-            boardswarm_protocol::ItemType::Uploader => to_item_list(&self.inner.uploaders),
+            boardswarm_protocol::ItemType::Volume => to_item_list(&self.inner.volumes),
         }
     }
 }
 
 type ItemMonitorStream = BoxStream<'static, Result<boardswarm_protocol::ItemEvent, tonic::Status>>;
-#[tonic::async_trait]
+
+#[async_trait::async_trait]
 impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
     async fn list(
         &self,
@@ -701,7 +803,7 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
             boardswarm_protocol::ItemType::Actuator => to_item_stream(&self.inner.actuators),
             boardswarm_protocol::ItemType::Device => to_item_stream(&self.inner.devices),
             boardswarm_protocol::ItemType::Console => to_item_stream(&self.inner.consoles),
-            boardswarm_protocol::ItemType::Uploader => to_item_stream(&self.inner.uploaders),
+            boardswarm_protocol::ItemType::Volume => to_item_stream(&self.inner.volumes),
         };
         Ok(tonic::Response::new(response))
     }
@@ -732,9 +834,9 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
                 .lookup(request.item)
                 .ok_or_else(|| tonic::Status::not_found("Item not found"))?
                 .properties(),
-            boardswarm_protocol::ItemType::Uploader => self
+            boardswarm_protocol::ItemType::Volume => self
                 .inner
-                .uploaders
+                .volumes
                 .lookup(request.item)
                 .ok_or_else(|| tonic::Status::not_found("Item not found"))?
                 .properties(),
@@ -882,11 +984,11 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         }
     }
 
-    type UploaderUploadStream = UploadProgressStream;
-    async fn uploader_upload(
+    type VolumeIoStream = VolumeIoReplyStream;
+    async fn volume_io(
         &self,
-        request: tonic::Request<tonic::Streaming<boardswarm_protocol::UploadRequest>>,
-    ) -> Result<tonic::Response<Self::UploaderUploadStream>, tonic::Status> {
+        request: tonic::Request<tonic::Streaming<boardswarm_protocol::VolumeIoRequest>>,
+    ) -> Result<tonic::Response<Self::VolumeIoStream>, tonic::Status> {
         let mut rx = request.into_inner();
         let msg = match rx.message().await? {
             Some(msg) => msg,
@@ -897,36 +999,60 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
             }
         };
 
-        if let Some(upload_request::TargetOrData::Target(target)) = msg.target_or_data {
-            let uploader = self
+        if let Some(volume_io_request::TargetOrRequest::Target(target)) = msg.target_or_request {
+            let volume = self
                 .inner
-                .uploaders
-                .lookup(target.uploader)
+                .volumes
+                .lookup(target.volume)
                 .map(registry::Item::into_inner)
-                .ok_or_else(|| tonic::Status::not_found("No uploader console by that name"))?;
+                .ok_or_else(|| tonic::Status::not_found("No volume by that name"))?;
 
-            let data = stream::unfold(rx, |mut rx| async move {
-                // TODO handle errors
-                if let Some(msg) = rx.message().await.ok()? {
-                    match msg.target_or_data {
-                        Some(upload_request::TargetOrData::Data(data)) => Some((data, rx)),
-                        _ => None, // TODO this is an error!
-                    }
-                } else {
-                    None
-                }
-            })
-            .boxed();
+            let mut target = volume
+                .open(&target.target, target.length)
+                .await
+                .map_err(|_| tonic::Status::not_found("No target by that name"))?;
 
-            let (progress, progress_stream) = UploadProgress::new();
+            let (mut reply, reply_stream) = VolumeIoReplies::new();
             tokio::spawn(async move {
-                uploader
-                    .upload(&target.target, data, target.length, progress)
-                    .await
-                    .unwrap()
+                while let Some(msg) = rx.message().await.transpose() {
+                    let request = match msg {
+                        Ok(request) => request,
+                        Err(e) => {
+                            warn!("Received error: {}", e);
+                            return;
+                        }
+                    };
+
+                    let Some(request) = request.target_or_request else {
+                    warn!("Invalid request, no actualy request"); return; };
+
+                    match request {
+                        volume_io_request::TargetOrRequest::Target(_) => {
+                            reply.enqueue_fatal_error(tonic::Status::invalid_argument(
+                                "Target request sent out of order",
+                            ));
+                            break;
+                        }
+                        volume_io_request::TargetOrRequest::Read(read) => {
+                            let (completion, rx) = ReadCompletion::new();
+                            reply.enqueue_read_reply(rx);
+                            target.read(read.length, read.offset, completion).await;
+                        }
+                        volume_io_request::TargetOrRequest::Write(write) => {
+                            let (completion, rx) = WriteCompletion::new();
+                            reply.enqueue_write_reply(rx);
+                            target.write(write.data, write.offset, completion).await;
+                        }
+                        volume_io_request::TargetOrRequest::Flush(_f) => {
+                            let (completion, rx) = FlushCompletion::new();
+                            reply.enqueue_flush_reply(rx);
+                            target.flush(completion).await;
+                        }
+                    }
+                }
             });
 
-            Ok(tonic::Response::new(progress_stream))
+            Ok(tonic::Response::new(reply_stream))
         } else {
             Err(tonic::Status::invalid_argument(
                 "Target should be set first",
@@ -934,37 +1060,32 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         }
     }
 
-    async fn uploader_commit(
+    async fn volume_commit(
         &self,
-        request: tonic::Request<UploaderRequest>,
+        request: tonic::Request<VolumeRequest>,
     ) -> Result<tonic::Response<()>, tonic::Status> {
         let request = request.into_inner();
-        let uploader = self
-            .get_uploader(request.uploader)
-            .ok_or_else(|| tonic::Status::not_found("Uploader not found"))?;
-        uploader
+        let volume = self
+            .get_volume(request.volume)
+            .ok_or_else(|| tonic::Status::not_found("Volume not found"))?;
+        volume
             .commit()
             .await
             .map_err(|_e| tonic::Status::unknown("Commit failed"))?;
         Ok(tonic::Response::new(()))
     }
 
-    async fn uploader_info(
+    async fn volume_info(
         &self,
-        request: tonic::Request<UploaderRequest>,
-    ) -> Result<tonic::Response<UploaderInfoMsg>, tonic::Status> {
+        request: tonic::Request<VolumeRequest>,
+    ) -> Result<tonic::Response<VolumeInfoMsg>, tonic::Status> {
         let request = request.into_inner();
-        let uploader = self
-            .get_uploader(request.uploader)
+        let volume = self
+            .get_volume(request.volume)
             .ok_or_else(|| tonic::Status::not_found("Uploader not found"))?;
 
-        let info = UploaderInfoMsg {
-            target: uploader
-                .targets()
-                .iter()
-                .cloned()
-                .map(|name| boardswarm_protocol::UploaderTarget { name })
-                .collect(),
+        let info = VolumeInfoMsg {
+            target: volume.targets().to_vec(),
         };
         Ok(tonic::Response::new(info))
     }
