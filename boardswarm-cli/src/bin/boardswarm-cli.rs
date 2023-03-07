@@ -206,6 +206,11 @@ enum DeviceCommand {
     },
     /// Change device mode
     Mode(DeviceModeArgs),
+    // Turn the device off and on again
+    Reset {
+        #[arg(value_parser = parse_device)]
+        device: DeviceArg,
+    },
 }
 
 fn parse_item(item: &str) -> Result<ItemType, anyhow::Error> {
@@ -412,6 +417,14 @@ async fn main() -> anyhow::Result<()> {
                     let device = d.device.device(boardswarm).await?;
                     let device = device.ok_or_else(|| anyhow::anyhow!("Device not found"))?;
                     device.change_mode(d.mode).await?;
+                }
+                DeviceCommand::Reset { device } => {
+                    let device = device.device(boardswarm).await?;
+                    let device = device.ok_or_else(|| anyhow::anyhow!("Device not found"))?;
+                    println!("Turning off");
+                    device.change_mode("off").await?;
+                    println!("Turning on");
+                    device.change_mode("on").await?;
                 }
             }
             Ok(())
