@@ -1,5 +1,6 @@
 use std::{
     convert::Infallible,
+    os::unix::prelude::AsRawFd,
     path::{Path, PathBuf},
 };
 
@@ -28,6 +29,14 @@ where
 
 fn input_stream() -> impl Stream<Item = Bytes> {
     let stdin = tokio::io::stdin();
+    let stdin_fd = stdin.as_raw_fd();
+
+    let mut stdin_termios = nix::sys::termios::tcgetattr(stdin_fd).unwrap();
+
+    nix::sys::termios::cfmakeraw(&mut stdin_termios);
+    nix::sys::termios::tcsetattr(stdin_fd, nix::sys::termios::SetArg::TCSANOW, &stdin_termios)
+        .unwrap();
+
     futures::stream::unfold(stdin, |mut stdin| async move {
         let mut data = BytesMut::zeroed(64);
         let r = stdin.read(&mut data).await.ok()?;
