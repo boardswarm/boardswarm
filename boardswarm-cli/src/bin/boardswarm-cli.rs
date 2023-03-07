@@ -211,6 +211,10 @@ enum DeviceCommand {
         #[arg(value_parser = parse_device)]
         device: DeviceArg,
     },
+    /// Connect to the console
+    Connect(DeviceConsoleArgs),
+    /// Tail to the console
+    Tail(DeviceConsoleArgs),
 }
 
 fn parse_item(item: &str) -> Result<ItemType, anyhow::Error> {
@@ -425,6 +429,40 @@ async fn main() -> anyhow::Result<()> {
                     device.change_mode("off").await?;
                     println!("Turning on");
                     device.change_mode("on").await?;
+                }
+                DeviceCommand::Connect(d) => {
+                    let device = d.device.device(boardswarm).await?;
+                    let device = device.ok_or_else(|| anyhow::anyhow!("Device not found"))?;
+                    let mut console = if let Some(c) = &d.console {
+                        device
+                            .console_by_name(c)
+                            .ok_or_else(|| anyhow::anyhow!("Console not found"))?
+                    } else {
+                        device
+                            .console()
+                            .ok_or_else(|| anyhow::anyhow!("Console not found"))?
+                    };
+                    let out = copy_output_to_stdout(console.stream_output().await?);
+                    let in_ = console.stream_input(input_stream());
+                    futures::select! {
+                        in_ = in_.fuse() => in_?,
+                        out = out.fuse() => out?,
+                    }
+                }
+                DeviceCommand::Tail(d) => {
+                    let device = d.device.device(boardswarm).await?;
+                    let device = device.ok_or_else(|| anyhow::anyhow!("Device not found"))?;
+                    let mut console = if let Some(c) = &d.console {
+                        device
+                            .console_by_name(c)
+                            .ok_or_else(|| anyhow::anyhow!("Console not found"))?
+                    } else {
+                        device
+                            .console()
+                            .ok_or_else(|| anyhow::anyhow!("Console not found"))?
+                    };
+                    let output = console.stream_output().await?;
+                    copy_output_to_stdout(output).await?;
                 }
             }
             Ok(())
