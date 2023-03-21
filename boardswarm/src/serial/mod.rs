@@ -3,6 +3,7 @@ use bytes::{Bytes, BytesMut};
 use futures::ready;
 use serde::Deserialize;
 use std::{
+    collections::HashMap,
     pin::Pin,
     sync::{Arc, Mutex},
     task::{Context, Poll},
@@ -17,6 +18,34 @@ use tokio::{
 };
 use tokio_serial::{SerialPortBuilderExt, SerialStream};
 
+pub async fn start_provider(server: Server) {
+    let mut registrations = HashMap::new();
+    let mut devices = crate::udev::DeviceStream::new("tty").unwrap();
+    while let Some(d) = devices.next().await {
+        match d {
+            DeviceEvent::Add(d) => {
+                if d.parent().is_none() {
+                    continue;
+                }
+                if let Some(node) = d.devnode() {
+                    if let Some(name) = node.file_name() {
+                        let name = name.to_string_lossy().into_owned();
+                        let path = node.to_string_lossy().into_owned();
+                        let console = SerialPort::new(path);
+                        let id = server.register_console(d.properties(name), console);
+                        registrations.insert(d.syspath().to_path_buf(), id);
+                    }
+                }
+            }
+            DeviceEvent::Remove(d) => {
+                if let Some(id) = registrations.remove(d.syspath()) {
+                    server.unregister_console(id)
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 struct SerialOpen {
     write: Arc<AsyncMutex<WriteHalf<SerialStream>>>,
@@ -29,7 +58,7 @@ pub(crate) struct SerialPort {
     rate: Mutex<u32>,
     open: AsyncMutex<Option<SerialOpen>>,
 }
-use crate::ConsoleError;
+use crate::{udev::DeviceEvent, ConsoleError, Server};
 
 impl SerialPort {
     pub fn new(path: String) -> Self {

@@ -1136,9 +1136,22 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    let local = tokio::task::LocalSet::new();
     for p in config.providers {
         match p.type_.as_str() {
-            "gpio" => gpio::start_provider(p.name, p.parameters.unwrap(), server.clone()),
+            "dfu" => {
+                local.spawn_local(dfu::start_provider(server.clone()));
+            }
+            "serial" => {
+                local.spawn_local(serial::start_provider(server.clone()));
+            }
+            "gpio" => {
+                local.spawn_local(gpio::start_provider(
+                    p.name,
+                    p.parameters.unwrap(),
+                    server.clone(),
+                ));
+            }
             "pdudaemon" => pdudaemon::start_provider(p.name, p.parameters.unwrap(), server.clone()),
             "boardswarm" => {
                 boardswarm_provider::start_provider(p.name, p.parameters.unwrap(), server.clone())
@@ -1146,9 +1159,6 @@ async fn main() -> anyhow::Result<()> {
             t => warn!("Unknown provider type: {t}"),
         }
     }
-
-    let local = tokio::task::LocalSet::new();
-    local.spawn_local(udev::start_provider("udev".to_string(), server.clone()));
 
     let server = tonic::transport::Server::builder()
         .add_service(boardswarm_protocol::boardswarm_server::BoardswarmServer::new(server.clone()))

@@ -1,159 +1,144 @@
-use std::collections::HashMap;
+use std::{collections::VecDeque, ffi::OsStr, path::Path, pin::Pin, task::Poll};
 
-use crate::{registry::Properties, Server};
-use futures::StreamExt;
-use tracing::info;
+use crate::registry::Properties;
+use futures::{ready, Stream};
+use tokio_udev::{AsyncMonitorSocket, Enumerator};
+use tracing::warn;
 
-pub fn properties_from_device(name: String, device: &tokio_udev::Device) -> Properties {
-    let mut properties = Properties::new(name);
-    for p in device.properties() {
-        let key = format!("udev.{}", p.name().to_string_lossy());
-        let value = p.value().to_string_lossy();
-        properties.insert(key, value);
-    }
-
-    properties
+pub struct DeviceStream {
+    existing: VecDeque<Device>,
+    monitor: AsyncMonitorSocket,
 }
 
-pub async fn add_serial(server: &Server, device: &tokio_udev::Device) -> Option<u64> {
-    if let Some(node) = device.devnode() {
-        if let Some(name) = node.file_name() {
-            let name = name.to_string_lossy().into_owned();
-            let path = node.to_string_lossy().into_owned();
-            let properties = properties_from_device(name, device);
-            let port = crate::serial::SerialPort::new(path);
-            return Some(server.register_console(properties, port));
-        }
+impl DeviceStream {
+    pub fn new<O: AsRef<OsStr>>(subsystem: O) -> Result<Self, std::io::Error> {
+        let monitor = tokio_udev::MonitorBuilder::new()?
+            .match_subsystem(&subsystem)?
+            .listen()?;
+        let monitor = tokio_udev::AsyncMonitorSocket::new(monitor)?;
+
+        let mut enumerator = Enumerator::new()?;
+        enumerator.match_subsystem(&subsystem)?;
+        let existing = enumerator.scan_devices()?.map(Device).collect();
+
+        Ok(Self { existing, monitor })
     }
-    None
 }
 
-pub async fn monitor_serial(server: Server) {
-    let mut serial_devices = HashMap::new();
-    let monitor = tokio_udev::MonitorBuilder::new()
-        .unwrap()
-        .match_subsystem("tty")
-        .unwrap()
-        .listen()
-        .unwrap();
+pub enum DeviceEvent {
+    Add(Device),
+    Remove(Device),
+}
 
-    let mut monitor = tokio_udev::AsyncMonitorSocket::new(monitor).unwrap();
+impl Stream for DeviceStream {
+    type Item = DeviceEvent;
 
-    let mut enumerator = tokio_udev::Enumerator::new().unwrap();
-    enumerator.match_subsystem("tty").unwrap();
-    let devices = enumerator.scan_devices().unwrap();
-    for d in devices {
-        if d.parent().is_none() {
-            continue;
-        }
-        if let Some(devnode) = d.devnode() {
-            if let Some(id) = add_serial(&server, &d).await {
-                serial_devices.insert(devnode.to_path_buf(), id);
-            }
-        }
-    }
-
-    while let Some(Ok(event)) = monitor.next().await {
-        match event.event_type() {
-            tokio_udev::EventType::Add => {
-                let device = event.device();
-                if let Some(devnode) = device.devnode() {
-                    if let Some(id) = add_serial(&server, &device).await {
-                        serial_devices.insert(devnode.to_path_buf(), id);
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let me = self.get_mut();
+        if let Some(device) = me.existing.pop_front() {
+            Poll::Ready(Some(DeviceEvent::Add(device)))
+        } else {
+            loop {
+                let Some(event) = ready!(Pin::new(&mut me.monitor).poll_next(cx)) else {
+                return Poll::Ready(None)
+            };
+                let event = match event {
+                    Ok(event) => event,
+                    Err(e) => {
+                        warn!("Udev event monitor error: {:?}", e);
+                        continue;
                     }
+                };
+                match event.event_type() {
+                    tokio_udev::EventType::Add => {
+                        return Poll::Ready(Some(DeviceEvent::Add(Device(event.device()))))
+                    }
+                    tokio_udev::EventType::Remove => {
+                        return Poll::Ready(Some(DeviceEvent::Remove(Device(event.device()))))
+                    }
+                    _ => continue,
                 }
             }
-            tokio_udev::EventType::Remove => {
-                if let Some(path) = event.device().devnode() {
-                    if let Some(id) = serial_devices.remove(path) {
-                        server.unregister_console(id);
-                    }
-                }
-            }
-            _ => info!(
-                "Udev event: {:?} {:?}",
-                event.event_type(),
-                event.device().devnode()
-            ),
         }
     }
 }
 
-pub async fn add_dfu(server: &Server, device: &tokio_udev::Device) -> Option<u64> {
-    let interface = device.property_value("ID_USB_INTERFACES")?;
-    if interface != ":fe0102:" {
-        return None;
+const PROPERTY_BLACKLIST: &[&str] = &[
+    "ACTION",
+    "DRIVER",
+    "MAJOR",
+    "MODALIAS",
+    "MINOR",
+    "USEC_INITIALIZED",
+];
+
+pub struct Device(tokio_udev::Device);
+impl Device {
+    #[allow(dead_code)]
+    pub fn udev_device(&self) -> &tokio_udev::Device {
+        &self.0
     }
 
-    if let Some(node) = device.devnode() {
-        let path = node.to_string_lossy().into_owned();
-        let properties = properties_from_device(path.clone(), device);
+    pub fn syspath(&self) -> &Path {
+        self.0.syspath()
+    }
 
-        let busnum = device
-            .property_value("BUSNUM")
-            .unwrap()
+    pub fn devnode(&self) -> Option<&Path> {
+        self.0.devnode()
+    }
+
+    pub fn properties<S: Into<String>>(&self, name: S) -> Properties {
+        fn find_reasonable_parent(device: tokio_udev::Device) -> VecDeque<tokio_udev::Device> {
+            let reasonable = matches!(
+                (
+                    device.subsystem().and_then(|s| s.to_str()),
+                    device.devtype().and_then(|s| s.to_str()),
+                ),
+                (Some("pci"), _) | (Some("platform"), _) | (Some("usb"), Some("usb_device"))
+            );
+            let mut v = if reasonable {
+                VecDeque::new()
+            } else if let Some(p) = device.parent() {
+                find_reasonable_parent(p)
+            } else {
+                VecDeque::new()
+            };
+            v.push_back(device);
+            v
+        }
+
+        let mut properties = Properties::new(name);
+        let chain = find_reasonable_parent(self.0.clone());
+        for d in chain {
+            for p in d.properties() {
+                let name = p.name().to_string_lossy();
+                if PROPERTY_BLACKLIST.contains(&&*name) {
+                    continue;
+                }
+                let key = format!("udev.{}", name);
+                let value = p.value().to_string_lossy();
+                properties.insert(key, value);
+            }
+        }
+
+        properties
+    }
+
+    pub fn property(&self, property: &str) -> Option<&str> {
+        self.0.property_value(property)?.to_str()
+    }
+
+    pub fn property_u64(&self, property: &str, radix: u32) -> Option<u64> {
+        self.0
+            .property_value(property)?
             .to_str()
-            .unwrap()
-            .parse()
-            .unwrap();
-        let devnum = device
-            .property_value("DEVNUM")
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .parse()
-            .unwrap();
-        let dfu = crate::dfu::Dfu::new(busnum, devnum).await;
-        return Some(server.register_volume(properties, dfu));
-    }
-    None
-}
-
-pub async fn monitor_dfu(server: Server) {
-    let mut dfu_devices = HashMap::new();
-    let monitor = tokio_udev::MonitorBuilder::new()
-        .unwrap()
-        .match_subsystem("usb")
-        .unwrap()
-        .listen()
-        .unwrap();
-
-    let mut monitor = tokio_udev::AsyncMonitorSocket::new(monitor).unwrap();
-
-    let mut enumerator = tokio_udev::Enumerator::new().unwrap();
-    enumerator.match_subsystem("usb").unwrap();
-    let devices = enumerator.scan_devices().unwrap();
-    for d in devices {
-        if let Some(devnode) = d.devnode() {
-            if let Some(id) = add_dfu(&server, &d).await {
-                dfu_devices.insert(devnode.to_path_buf(), id);
-            }
-        }
+            .and_then(|u| u64::from_str_radix(u, radix).ok())
     }
 
-    while let Some(Ok(event)) = monitor.next().await {
-        match event.event_type() {
-            tokio_udev::EventType::Add => {
-                let device = event.device();
-                if let Some(devnode) = device.devnode() {
-                    if let Some(id) = add_dfu(&server, &device).await {
-                        dfu_devices.insert(devnode.to_path_buf(), id);
-                    }
-                }
-            }
-            tokio_udev::EventType::Remove => {
-                if let Some(path) = event.device().devnode() {
-                    if let Some(dfu) = dfu_devices.remove(path) {
-                        server.unregister_volume(dfu);
-                    }
-                }
-            }
-            _ => (),
-        }
+    pub fn parent(&self) -> Option<Device> {
+        self.0.parent().map(Device)
     }
-}
-
-pub async fn start_provider(_name: String, server: Server) {
-    tokio::task::spawn_local(monitor_serial(server.clone()));
-    tokio::task::spawn_local(monitor_dfu(server));
 }
