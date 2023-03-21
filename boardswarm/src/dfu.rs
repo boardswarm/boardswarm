@@ -2,13 +2,48 @@ use std::{collections::HashMap, io::Read};
 
 use anyhow::bail;
 use bytes::{Buf, Bytes};
+use futures::StreamExt;
 use tokio::sync::{
     mpsc::{self, Receiver},
     oneshot,
 };
 use tracing::{info, warn};
 
-use crate::{Volume, VolumeError, VolumeTarget, VolumeTargetInfo};
+use crate::{udev::DeviceEvent, Server, Volume, VolumeError, VolumeTarget, VolumeTargetInfo};
+
+pub async fn start_provider(server: Server) {
+    let mut registrations = HashMap::new();
+    let mut devices = crate::udev::DeviceStream::new("usb").unwrap();
+    while let Some(d) = devices.next().await {
+        match d {
+            DeviceEvent::Add(d) => {
+                let Some(interface) = d.property("ID_USB_INTERFACES") else { continue };
+                if interface != ":fe0102:" && d.devnode().is_some() {
+                    continue;
+                }
+                let Some(busnum) = d.property_u64("BUSNUM", 10)
+                    .and_then( | v | v.try_into().ok()) else { continue } ;
+                let Some(devnum) = d.property_u64("DEVNUM", 10)
+                    .and_then(|v|v.try_into().ok()) else { continue } ;
+
+                let name = if let Some(model) = d.property("ID_MODEL") {
+                    format!("{}/{} {}", busnum, devnum, model)
+                } else {
+                    format!("{}/{}", devnum, devnum)
+                };
+
+                let dfu = Dfu::new(busnum, devnum).await;
+                let id = server.register_volume(d.properties(name), dfu);
+                registrations.insert(d.syspath().to_path_buf(), id);
+            }
+            DeviceEvent::Remove(d) => {
+                if let Some(id) = registrations.remove(d.syspath()) {
+                    server.unregister_volume(id)
+                }
+            }
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct Dfu {
