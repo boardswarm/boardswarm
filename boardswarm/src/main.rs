@@ -30,8 +30,10 @@ mod dfu;
 mod gpio;
 mod pdudaemon;
 mod registry;
+mod rockusb;
 mod serial;
 mod udev;
+mod utils;
 
 #[derive(Error, Debug)]
 #[error("Actuator failed")]
@@ -81,6 +83,20 @@ impl<C> ConsoleExt for C where C: Console + ?Sized {}
 pub enum VolumeError {
     #[error("Unknown target requested")]
     UnknownTargetRequested,
+    #[error("Internal error: {0}")]
+    Internal(String),
+    #[error("Volume failure: {0}")]
+    Failure(String),
+}
+
+impl From<VolumeError> for tonic::Status {
+    fn from(e: VolumeError) -> Self {
+        match e {
+            VolumeError::UnknownTargetRequested => tonic::Status::not_found(e.to_string()),
+            VolumeError::Internal(e) => tonic::Status::internal(e),
+            VolumeError::Failure(e) => tonic::Status::aborted(e),
+        }
+    }
 }
 
 type VolumeIoReplyStream =
@@ -541,7 +557,7 @@ impl Device {
 
         let mut actuator_monitor = self.inner.server.inner.actuators.monitor();
         let mut console_monitor = self.inner.server.inner.consoles.monitor();
-        let mut uploader_monitor = self.inner.server.inner.volumes.monitor();
+        let mut volume_monitor = self.inner.server.inner.volumes.monitor();
         let mut changed = false;
 
         for (id, item) in self.inner.server.inner.actuators.contents() {
@@ -582,7 +598,7 @@ impl Device {
                             warn!("Issue with monitoring actuators: {:?}", e); return },
                         }
                 }
-                msg = uploader_monitor.recv() => {
+                msg = volume_monitor.recv() => {
                     match msg {
                         Ok(c) => change(self.inner.volumes.iter(), c),
                         Err(e) => {
@@ -697,13 +713,13 @@ impl Server {
         V: Volume + 'static,
     {
         let (id, item) = self.inner.volumes.add(properties, Arc::new(volume));
-        info!("Registered uploader: {} - {}", id, item);
+        info!("Registered volume: {} - {}", id, item);
         id
     }
 
     fn unregister_volume(&self, id: u64) {
         if let Some(item) = self.inner.volumes.lookup(id) {
-            info!("Unregistering uploader: {} - {}", id, item.name());
+            info!("Unregistering volume: {} - {}", id, item.name());
             self.inner.volumes.remove(id);
         }
     }
@@ -1007,10 +1023,7 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
                 .map(registry::Item::into_inner)
                 .ok_or_else(|| tonic::Status::not_found("No volume by that name"))?;
 
-            let mut target = volume
-                .open(&target.target, target.length)
-                .await
-                .map_err(|_| tonic::Status::not_found("No target by that name"))?;
+            let mut target = volume.open(&target.target, target.length).await?;
 
             let (mut reply, reply_stream) = VolumeIoReplies::new();
             tokio::spawn(async move {
@@ -1141,6 +1154,9 @@ async fn main() -> anyhow::Result<()> {
         match p.type_.as_str() {
             "dfu" => {
                 local.spawn_local(dfu::start_provider(server.clone()));
+            }
+            "rockusb" => {
+                local.spawn_local(rockusb::start_provider(server.clone()));
             }
             "serial" => {
                 local.spawn_local(serial::start_provider(server.clone()));

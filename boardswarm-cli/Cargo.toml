@@ -17,7 +17,7 @@ mprocs-vt100 = "0.1.1"
 nix = "0.26.1"
 boardswarm-protocol = { version = "0.1.0", path = "../boardswarm-protocol" }
 tokio = { version = "1.23.0", features = ["full"] }
-tokio-util = "0.7.4"
+tokio-util = { version = "0.7.4", features = ["compat"] }
 tonic = "0.8.3"
 tui = "0.19.0"
 serde_json = "1.0.91"
@@ -25,3 +25,5 @@ tracing = "0.1.37"
 indicatif = { version = "0.17.3", features = ["improved_unicode"] }
 tokio-stream = { version = "0.1.11", features = ["sync"] }
 thiserror = "1.0.40"
+bmap-parser = "0.1.0"
+async-compression = { version = "0.3.15", features = ["futures-io", "gzip"] }

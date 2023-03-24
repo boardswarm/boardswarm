@@ -583,8 +583,18 @@ impl AsyncWrite for VolumeIoRW {
                 }
                 IoWrapperState::ReserveRequest(ref mut r) => match ready!(r.as_mut().poll(cx)) {
                     Ok(p) => {
-                        let bytes = Bytes::copy_from_slice(buf);
-                        let len = bytes.len();
+                        let len = if let Some(blocksize) = me.blocksize() {
+                            let blocksize = blocksize as usize;
+                            if buf.len() > blocksize {
+                                (buf.len() / blocksize) * blocksize
+                            } else {
+                                // TODO cache?
+                                buf.len()
+                            }
+                        } else {
+                            buf.len()
+                        };
+                        let bytes = Bytes::copy_from_slice(&buf[0..len]);
                         let (request, write) = VolumeIo::prepare_write(bytes, me.pos);
                         me.outstanding_writes.push_back(write);
                         p.send(request);
