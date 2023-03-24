@@ -1,14 +1,69 @@
-use std::{convert::Infallible, os::unix::prelude::AsRawFd, path::PathBuf};
+use std::{
+    convert::Infallible,
+    os::unix::prelude::AsRawFd,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{anyhow, bail};
-use boardswarm_cli::client::Boardswarm;
+use async_compression::futures::bufread::GzipDecoder;
+use bmap_parser::Bmap;
+use boardswarm_cli::client::{Boardswarm, VolumeIoRW};
 use boardswarm_protocol::ItemType;
 use bytes::{Bytes, BytesMut};
 use clap::{arg, Args, Parser, Subcommand};
 use futures::{pin_mut, FutureExt, Stream, StreamExt, TryStreamExt};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
 use boardswarm_cli::client::ItemEvent;
+use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+
+fn find_bmap(img: &Path) -> Option<PathBuf> {
+    fn append(path: PathBuf) -> PathBuf {
+        let mut p = path.into_os_string();
+        p.push(".bmap");
+        p.into()
+    }
+
+    let mut bmap = img.to_path_buf();
+    loop {
+        bmap = append(bmap);
+        if bmap.exists() {
+            return Some(bmap);
+        }
+        // Drop .bmap
+        bmap.set_extension("");
+        bmap.extension()?;
+        // Drop existing orignal extension part
+        bmap.set_extension("");
+    }
+}
+
+async fn write_bmap(io: VolumeIoRW, path: &Path) -> anyhow::Result<()> {
+    let bmap_path = find_bmap(path).ok_or_else(|| anyhow!("Failed to find bmap"))?;
+    println!("Using bmap file: {}", path.display());
+
+    let mut bmap_file = tokio::fs::File::open(bmap_path).await?;
+    let mut xml = String::new();
+    bmap_file.read_to_string(&mut xml).await?;
+    let bmap = Bmap::from_xml(&xml)?;
+
+    let blocksize = io.blocksize().unwrap_or(4096) as usize * 128;
+    let mut writer = boardswarm_cli::utils::BatchWriter::new(io, blocksize).compat_write();
+
+    let file = tokio::fs::File::open(path).await?;
+    match path.extension().and_then(std::ffi::OsStr::to_str) {
+        Some("gz") => {
+            let gz = GzipDecoder::new(BufReader::new(file).compat());
+            let mut gz = bmap_parser::AsyncDiscarder::new(gz);
+            bmap_parser::copy_async(&mut gz, &mut writer, &bmap).await?;
+        }
+        _ => {
+            bmap_parser::copy_async(&mut file.compat(), &mut writer, &bmap).await?;
+        }
+    }
+
+    Ok(())
+}
 
 async fn copy_output_to_stdout<O>(output: O) -> anyhow::Result<()>
 where
@@ -88,6 +143,8 @@ enum VolumeCommand {
     },
     /// Upload file to volume target
     Write(WriteArgs),
+    /// Write a bmap file to volume target
+    WriteBmap(WriteArgs),
     /// Commit upload
     Commit {
         volume: u64,
@@ -136,6 +193,19 @@ struct DeviceModeArgs {
     mode: String,
 }
 
+#[derive(Debug, Args)]
+struct DeviceWriteArg {
+    #[arg(short, long)]
+    wait: bool,
+    #[arg(short, long)]
+    commit: bool,
+    #[arg(value_parser = parse_device)]
+    device: DeviceArg,
+    volume: String,
+    target: String,
+    file: PathBuf,
+}
+
 #[derive(Debug, Subcommand)]
 enum DeviceCommand {
     /// Get info about a device
@@ -143,17 +213,8 @@ enum DeviceCommand {
         #[arg(value_parser = parse_device)]
         device: DeviceArg,
     },
-    Upload {
-        #[arg(short, long)]
-        wait: bool,
-        #[arg(short, long)]
-        commit: bool,
-        #[arg(value_parser = parse_device)]
-        device: DeviceArg,
-        volume: String,
-        target: String,
-        file: PathBuf,
-    },
+    Write(DeviceWriteArg),
+    WriteBmap(DeviceWriteArg),
     /// Change device mode
     Mode(DeviceModeArgs),
     // Turn the device off and on again
@@ -325,6 +386,12 @@ async fn main() -> anyhow::Result<()> {
                     f.flush().await?;
                     drop(rw);
                 }
+                VolumeCommand::WriteBmap(write) => {
+                    let rw = boardswarm
+                        .volume_io_readwrite(write.volume, write.target, None)
+                        .await?;
+                    write_bmap(rw, &write.file).await?;
+                }
                 VolumeCommand::Commit { volume } => {
                     boardswarm.volume_commit(volume).await?;
                 }
@@ -333,14 +400,14 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Device { command } => {
             match command {
-                DeviceCommand::Upload {
+                DeviceCommand::Write(DeviceWriteArg {
                     wait,
                     commit,
                     device,
                     volume,
                     target,
                     file,
-                } => {
+                }) => {
                     let mut f = tokio::fs::File::open(file).await?;
                     let device = device.device(boardswarm).await?;
                     let device = device.ok_or_else(|| anyhow::anyhow!("Device not found"))?;
@@ -361,6 +428,35 @@ async fn main() -> anyhow::Result<()> {
                     tokio::io::copy(&mut f, &mut rw).await?;
                     f.flush().await?;
                     drop(rw);
+
+                    if commit {
+                        volume.commit().await?;
+                    }
+                }
+                DeviceCommand::WriteBmap(DeviceWriteArg {
+                    wait,
+                    commit,
+                    device,
+                    volume,
+                    target,
+                    file,
+                }) => {
+                    let device = device.device(boardswarm).await?;
+                    let device = device.ok_or_else(|| anyhow::anyhow!("Device not found"))?;
+                    let mut volume = device
+                        .volume_by_name(&volume)
+                        .ok_or_else(|| anyhow!("Volume not available for device"))?;
+                    if !volume.available() {
+                        if wait {
+                            println!("Waiting for volume..");
+                            volume.wait().await;
+                        } else {
+                            bail!("volume not available");
+                        }
+                    }
+
+                    let rw = volume.open(target, None).await?;
+                    write_bmap(rw, &file).await?;
 
                     if commit {
                         volume.commit().await?;

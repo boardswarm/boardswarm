@@ -18,7 +18,7 @@ pub async fn start_provider(server: Server) {
         match d {
             DeviceEvent::Add(d) => {
                 let Some(interface) = d.property("ID_USB_INTERFACES") else { continue };
-                if interface != ":fe0102:" && d.devnode().is_some() {
+                if interface != ":fe0102:" || d.devnode().is_none() {
                     continue;
                 }
                 let Some(busnum) = d.property_u64("BUSNUM", 10)
@@ -202,16 +202,6 @@ impl DfuDevice {
     }
 }
 
-fn find_device(bus: u8, dev: u8) -> anyhow::Result<rusb::Device<rusb::GlobalContext>> {
-    let devices = rusb::DeviceList::new()?;
-    for d in devices.iter() {
-        if d.bus_number() == bus && d.address() == dev {
-            return Ok(d);
-        }
-    }
-    bail!("Dfu device not found");
-}
-
 struct DfuData<C: rusb::UsbContext> {
     device: rusb::Device<C>,
     interfaces: HashMap<String, DfuInterface>,
@@ -224,7 +214,9 @@ struct DfuInterface {
 }
 
 fn setup_device(bus: u8, dev: u8) -> anyhow::Result<DfuData<rusb::GlobalContext>> {
-    let device = find_device(bus, dev)?;
+    let Some(device) = crate::utils::usb_device_from_bus_dev(bus, dev) else {
+        bail!("Couldn't find device")
+    };
     let handle = device.open()?;
     let mut interfaces = HashMap::new();
 
