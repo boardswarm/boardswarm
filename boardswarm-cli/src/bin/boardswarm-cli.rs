@@ -1,18 +1,30 @@
 use std::{
+    cmp::Ordering,
     convert::Infallible,
+    io::SeekFrom,
     os::unix::prelude::AsRawFd,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use anyhow::{anyhow, bail};
 use async_compression::futures::bufread::GzipDecoder;
 use bmap_parser::Bmap;
-use boardswarm_cli::client::{Boardswarm, VolumeIoRW};
+use boardswarm_cli::{
+    client::{Boardswarm, VolumeIoRW},
+    device::DeviceVolume,
+};
 use boardswarm_protocol::ItemType;
 use bytes::{Bytes, BytesMut};
 use clap::{arg, Args, Parser, Subcommand};
 use futures::{pin_mut, FutureExt, Stream, StreamExt, TryStreamExt};
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use rockfile::boot::{
+    RkBootEntry, RkBootEntryBytes, RkBootHeader, RkBootHeaderBytes, RkBootHeaderEntry,
+};
+use tokio::{
+    fs::File,
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader},
+};
 
 use boardswarm_cli::client::ItemEvent;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -94,6 +106,55 @@ fn input_stream() -> impl Stream<Item = Bytes> {
         data.truncate(r);
         Some((data.into(), stdin))
     })
+}
+
+async fn rock_download_entry(
+    header: RkBootHeaderEntry,
+    target: &str,
+    file: &mut File,
+    volume: &mut DeviceVolume,
+) -> anyhow::Result<()> {
+    for i in 0..header.count {
+        let mut entry: RkBootEntryBytes = [0; 57];
+
+        file.seek(SeekFrom::Start(
+            header.offset as u64 + (header.size * i) as u64,
+        ))
+        .await?;
+        file.read_exact(&mut entry).await?;
+
+        let entry = RkBootEntry::from_bytes(&entry);
+        println!("{} Name: {}", i, String::from_utf16(entry.name.as_slice())?);
+
+        let mut data = Vec::new();
+        data.resize(entry.data_size as usize, 0);
+
+        file.seek(SeekFrom::Start(entry.data_offset as u64)).await?;
+        file.read_exact(&mut data).await?;
+
+        let mut target = volume.open(target, Some(data.len() as u64)).await?;
+        target.write_all(&data).await?;
+        target.flush().await?;
+
+        println!("Done!... waiting {}ms", entry.data_delay);
+        if entry.data_delay > 0 {
+            tokio::time::sleep(Duration::from_millis(entry.data_delay as u64)).await;
+        }
+    }
+
+    Ok(())
+}
+
+async fn rock_download_boot(volume: &mut DeviceVolume, path: &Path) -> anyhow::Result<()> {
+    let mut file = File::open(path).await?;
+    let mut header: RkBootHeaderBytes = [0; 102];
+    file.read_exact(&mut header).await?;
+    let header =
+        RkBootHeader::from_bytes(&header).ok_or_else(|| anyhow!("Failed to parse header"))?;
+
+    rock_download_entry(header.entry_471, "471", &mut file, volume).await?;
+    rock_download_entry(header.entry_472, "472", &mut file, volume).await?;
+    Ok(())
 }
 
 #[derive(Debug, Args)]
@@ -228,6 +289,17 @@ enum DeviceCommand {
     Tail(DeviceConsoleArgs),
 }
 
+#[derive(Debug, Subcommand)]
+enum RockCommand {
+    DownloadBoot {
+        #[arg(short, long)]
+        wait: bool,
+        #[clap(short, long)]
+        volume: Option<String>,
+        path: PathBuf,
+    },
+}
+
 fn parse_item(item: &str) -> Result<ItemType, anyhow::Error> {
     let types = [
         ("actuators", ItemType::Actuator),
@@ -265,7 +337,13 @@ enum Command {
         #[command(subcommand)]
         command: DeviceCommand,
     },
-    Ui(DeviceConsoleArgs),
+    // Commands specific to rockchip devices
+    Rock {
+        #[arg(value_parser = parse_device)]
+        device: DeviceArg,
+        #[command(subcommand)]
+        command: RockCommand,
+    },
     List {
         #[arg(value_parser = parse_item)]
         type_: ItemType,
@@ -279,6 +357,7 @@ enum Command {
         type_: ItemType,
         item: u64,
     },
+    Ui(DeviceConsoleArgs),
 }
 
 #[derive(clap::Parser)]
@@ -516,6 +595,38 @@ async fn main() -> anyhow::Result<()> {
                     };
                     let output = console.stream_output().await?;
                     copy_output_to_stdout(output).await?;
+                }
+            }
+            Ok(())
+        }
+        Command::Rock { device, command } => {
+            let device = device
+                .device(boardswarm)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("Device not found"))?;
+            match command {
+                RockCommand::DownloadBoot { wait, volume, path } => {
+                    let mut volume = if let Some(volume) = volume {
+                        device
+                            .volume_by_name(&volume)
+                            .ok_or_else(|| anyhow::anyhow!("Volume not found"))?
+                    } else {
+                        let mut volumes = device.volumes();
+                        match volumes.len().cmp(&1) {
+                            Ordering::Equal => volumes.pop().unwrap(),
+                            Ordering::Greater => bail!("More then one volume, please specify one"),
+                            Ordering::Less => bail!("No volumes for this device"),
+                        }
+                    };
+                    if !volume.available() {
+                        if wait {
+                            println!("Waiting for volume..");
+                            volume.wait().await;
+                        } else {
+                            bail!("volume not available");
+                        }
+                    }
+                    rock_download_boot(&mut volume, &path).await?;
                 }
             }
             Ok(())
