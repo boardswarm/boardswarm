@@ -159,7 +159,6 @@ async fn rock_download_boot(volume: &mut DeviceVolume, path: &Path) -> anyhow::R
 
 #[derive(Debug, Args)]
 struct ActuatorMode {
-    actuator: u64,
     mode: String,
 }
 
@@ -170,13 +169,7 @@ enum ActuatorCommand {
 }
 
 #[derive(Debug, Args)]
-struct ConsoleArgs {
-    console: u64,
-}
-
-#[derive(Debug, Args)]
 struct ConsoleConfigure {
-    console: u64,
     configuration: String,
 }
 
@@ -185,31 +178,26 @@ enum ConsoleCommand {
     /// Configure a console
     Configure(ConsoleConfigure),
     /// Tail the output of a device console
-    Tail(ConsoleArgs),
+    Tail,
     /// Connect input and output to a device console
-    Connect(ConsoleArgs),
+    Connect,
 }
 
 #[derive(Debug, Args)]
 struct WriteArgs {
-    volume: u64,
     target: String,
     file: PathBuf,
 }
 
 #[derive(Debug, Subcommand)]
 enum VolumeCommand {
-    Info {
-        volume: u64,
-    },
+    Info,
     /// Upload file to volume target
     Write(WriteArgs),
     /// Write a bmap file to volume target
     WriteBmap(WriteArgs),
     /// Commit upload
-    Commit {
-        volume: u64,
-    },
+    Commit,
 }
 
 #[derive(Clone, Debug)]
@@ -239,18 +227,14 @@ fn parse_device(device: &str) -> Result<DeviceArg, Infallible> {
     }
 }
 
-#[derive(Debug, Args)]
+#[derive(Clone, Debug, Args)]
 struct DeviceConsoleArgs {
     #[clap(short, long)]
     console: Option<String>,
-    #[arg(value_parser = parse_device)]
-    device: DeviceArg,
 }
 
 #[derive(Debug, Args)]
 struct DeviceModeArgs {
-    #[arg(value_parser = parse_device)]
-    device: DeviceArg,
     mode: String,
 }
 
@@ -260,8 +244,6 @@ struct DeviceWriteArg {
     wait: bool,
     #[arg(short, long)]
     commit: bool,
-    #[arg(value_parser = parse_device)]
-    device: DeviceArg,
     volume: String,
     target: String,
     file: PathBuf,
@@ -271,18 +253,15 @@ struct DeviceWriteArg {
 enum DeviceCommand {
     /// Get info about a device
     Info {
-        #[arg(value_parser = parse_device)]
-        device: DeviceArg,
+        #[arg(short, long)]
+        follow: bool,
     },
     Write(DeviceWriteArg),
     WriteBmap(DeviceWriteArg),
     /// Change device mode
     Mode(DeviceModeArgs),
     // Turn the device off and on again
-    Reset {
-        #[arg(value_parser = parse_device)]
-        device: DeviceArg,
-    },
+    Reset,
     /// Connect to the console
     Connect(DeviceConsoleArgs),
     /// Tail to the console
@@ -322,18 +301,23 @@ fn parse_item(item: &str) -> Result<ItemType, anyhow::Error> {
 #[derive(Debug, Subcommand)]
 enum Command {
     Actuator {
+        actuator: u64,
         #[command(subcommand)]
         command: ActuatorCommand,
     },
     Console {
+        console: u64,
         #[command(subcommand)]
         command: ConsoleCommand,
     },
     Volume {
+        volume: u64,
         #[command(subcommand)]
         command: VolumeCommand,
     },
     Device {
+        #[arg(value_parser = parse_device)]
+        device: DeviceArg,
         #[command(subcommand)]
         command: DeviceCommand,
     },
@@ -357,7 +341,12 @@ enum Command {
         type_: ItemType,
         item: u64,
     },
-    Ui(DeviceConsoleArgs),
+    Ui {
+        #[arg(value_parser = parse_device)]
+        device: DeviceArg,
+        #[command(flatten)]
+        console: DeviceConsoleArgs,
+    },
 }
 
 #[derive(clap::Parser)]
@@ -416,30 +405,30 @@ async fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Command::Actuator { command } => {
+        Command::Actuator { actuator, command } => {
             match command {
                 ActuatorCommand::ChangeMode(c) => {
                     let p = serde_json::from_str(&c.mode)?;
-                    boardswarm.actuator_change_mode(c.actuator, p).await?;
+                    boardswarm.actuator_change_mode(actuator, p).await?;
                 }
             }
 
             Ok(())
         }
-        Command::Console { command } => {
+        Command::Console { console, command } => {
             match command {
                 ConsoleCommand::Configure(c) => {
                     let p = serde_json::from_str(&c.configuration)?;
-                    boardswarm.console_configure(c.console, p).await?;
+                    boardswarm.console_configure(console, p).await?;
                 }
-                ConsoleCommand::Tail(c) => {
-                    let output = boardswarm.console_stream_output(c.console).await?;
+                ConsoleCommand::Tail => {
+                    let output = boardswarm.console_stream_output(console).await?;
                     copy_output_to_stdout(output).await?;
                 }
-                ConsoleCommand::Connect(c) => {
+                ConsoleCommand::Connect => {
                     let out =
-                        copy_output_to_stdout(boardswarm.console_stream_output(c.console).await?);
-                    let in_ = boardswarm.console_stream_input(c.console, input_stream());
+                        copy_output_to_stdout(boardswarm.console_stream_output(console).await?);
+                    let in_ = boardswarm.console_stream_input(console, input_stream());
                     futures::select! {
                         in_ = in_.fuse() => in_?,
                         out = out.fuse() => out?,
@@ -449,9 +438,9 @@ async fn main() -> anyhow::Result<()> {
 
             Ok(())
         }
-        Command::Volume { command } => {
+        Command::Volume { volume, command } => {
             match command {
-                VolumeCommand::Info { volume } => {
+                VolumeCommand::Info => {
                     let info = boardswarm.volume_info(volume).await?;
                     println!("{:#?}", info);
                 }
@@ -459,7 +448,7 @@ async fn main() -> anyhow::Result<()> {
                     let mut f = tokio::fs::File::open(write.file).await?;
                     let m = f.metadata().await?;
                     let mut rw = boardswarm
-                        .volume_io_readwrite(write.volume, write.target, Some(m.len()))
+                        .volume_io_readwrite(volume, write.target, Some(m.len()))
                         .await?;
                     tokio::io::copy(&mut f, &mut rw).await?;
                     f.flush().await?;
@@ -467,29 +456,28 @@ async fn main() -> anyhow::Result<()> {
                 }
                 VolumeCommand::WriteBmap(write) => {
                     let rw = boardswarm
-                        .volume_io_readwrite(write.volume, write.target, None)
+                        .volume_io_readwrite(volume, write.target, None)
                         .await?;
                     write_bmap(rw, &write.file).await?;
                 }
-                VolumeCommand::Commit { volume } => {
+                VolumeCommand::Commit => {
                     boardswarm.volume_commit(volume).await?;
                 }
             }
             Ok(())
         }
-        Command::Device { command } => {
+        Command::Device { device, command } => {
+            let device = device.device(boardswarm.clone()).await?;
+            let device = device.ok_or_else(|| anyhow::anyhow!("Device not found"))?;
             match command {
                 DeviceCommand::Write(DeviceWriteArg {
                     wait,
                     commit,
-                    device,
                     volume,
                     target,
                     file,
                 }) => {
                     let mut f = tokio::fs::File::open(file).await?;
-                    let device = device.device(boardswarm).await?;
-                    let device = device.ok_or_else(|| anyhow::anyhow!("Device not found"))?;
                     let mut volume = device
                         .volume_by_name(&volume)
                         .ok_or_else(|| anyhow!("Volume not available for device"))?;
@@ -515,13 +503,10 @@ async fn main() -> anyhow::Result<()> {
                 DeviceCommand::WriteBmap(DeviceWriteArg {
                     wait,
                     commit,
-                    device,
                     volume,
                     target,
                     file,
                 }) => {
-                    let device = device.device(boardswarm).await?;
-                    let device = device.ok_or_else(|| anyhow::anyhow!("Device not found"))?;
                     let mut volume = device
                         .volume_by_name(&volume)
                         .ok_or_else(|| anyhow!("Volume not available for device"))?;
@@ -541,30 +526,25 @@ async fn main() -> anyhow::Result<()> {
                         volume.commit().await?;
                     }
                 }
-                DeviceCommand::Info { device } => {
-                    let device = device.device(boardswarm.clone()).await?;
-                    let device = device.ok_or_else(|| anyhow::anyhow!("Device not found"))?;
+                DeviceCommand::Info { follow } => {
                     let mut d = boardswarm.device_info(device.id()).await?;
                     while let Some(device) = d.try_next().await? {
                         println!("{:#?}", device);
+                        if !follow {
+                            break;
+                        }
                     }
                 }
                 DeviceCommand::Mode(d) => {
-                    let device = d.device.device(boardswarm).await?;
-                    let device = device.ok_or_else(|| anyhow::anyhow!("Device not found"))?;
                     device.change_mode(d.mode).await?;
                 }
-                DeviceCommand::Reset { device } => {
-                    let device = device.device(boardswarm).await?;
-                    let device = device.ok_or_else(|| anyhow::anyhow!("Device not found"))?;
+                DeviceCommand::Reset {} => {
                     println!("Turning off");
                     device.change_mode("off").await?;
                     println!("Turning on");
                     device.change_mode("on").await?;
                 }
                 DeviceCommand::Connect(d) => {
-                    let device = d.device.device(boardswarm).await?;
-                    let device = device.ok_or_else(|| anyhow::anyhow!("Device not found"))?;
                     let mut console = if let Some(c) = &d.console {
                         device
                             .console_by_name(c)
@@ -582,8 +562,6 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
                 DeviceCommand::Tail(d) => {
-                    let device = d.device.device(boardswarm).await?;
-                    let device = device.ok_or_else(|| anyhow::anyhow!("Device not found"))?;
                     let mut console = if let Some(c) = &d.console {
                         device
                             .console_by_name(c)
@@ -631,10 +609,12 @@ async fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Command::Ui(ui) => {
-            let device = ui.device.device(boardswarm).await?;
-            let device = device.ok_or_else(|| anyhow::anyhow!("Device not found"))?;
-            boardswarm_cli::ui::run_ui(device, ui.console).await
+        Command::Ui { device, console } => {
+            let device = device
+                .device(boardswarm)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("Device not found"))?;
+            boardswarm_cli::ui::run_ui(device, console.console).await
         }
     }
 }
