@@ -14,7 +14,6 @@ use std::net::{AddrParseError, SocketAddr};
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::Mutex;
 use thiserror::Error;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
@@ -22,10 +21,9 @@ use tonic::Streaming;
 
 use tracing::{info, warn};
 
-use crate::registry::RegistryChange;
-
 mod boardswarm_provider;
 mod config;
+mod config_device;
 mod dfu;
 mod gpio;
 mod pdudaemon;
@@ -254,83 +252,31 @@ impl DeviceConfigItem for config::ModeStep {
     }
 }
 
-struct DeviceItem<C> {
-    config: C,
-    id: Mutex<Option<u64>>,
-}
-
-impl<C> DeviceItem<C>
-where
-    C: DeviceConfigItem,
-{
-    fn new(config: C) -> Self {
-        Self {
-            config,
-            id: Mutex::new(None),
-        }
-    }
-
-    fn config(&self) -> &C {
-        &self.config
-    }
-
-    fn set(&self, id: Option<u64>) {
-        *self.id.lock().unwrap() = id;
-    }
-
-    fn get(&self) -> Option<u64> {
-        *self.id.lock().unwrap()
-    }
-
-    fn unset_if_matches(&self, id: u64) -> bool {
-        let mut i = self.id.lock().unwrap();
-        match *i {
-            Some(item_id) if item_id == id => {
-                *i = None;
-                true
-            }
-            _ => false,
-        }
-    }
-
-    fn set_if_matches(&self, id: u64, properties: &Properties) -> bool {
-        if self.config.matches(properties) {
-            self.set(Some(id));
-            true
-        } else {
-            false
-        }
-    }
-}
-
-impl From<&Device> for boardswarm_protocol::Device {
-    fn from(d: &Device) -> Self {
+impl From<&dyn Device> for boardswarm_protocol::Device {
+    fn from(d: &dyn Device) -> Self {
         let consoles = d
-            .inner
-            .consoles
-            .iter()
+            .consoles()
+            .into_iter()
             .map(|c| boardswarm_protocol::Console {
-                name: c.config().name.clone(),
-                id: c.get(),
+                name: c.name,
+                id: c.id,
             })
             .collect();
         let volumes = d
-            .inner
-            .volumes
-            .iter()
-            .map(|u| boardswarm_protocol::Volume {
-                name: u.config().name.clone(),
-                id: u.get(),
+            .volumes()
+            .into_iter()
+            .map(|v| boardswarm_protocol::Volume {
+                name: v.name,
+                id: v.id,
             })
             .collect();
         let modes = d
-            .inner
-            .modes
-            .iter()
+            .modes()
+            .into_iter()
             .map(|m| boardswarm_protocol::Mode {
-                name: m.name.clone(),
-                depends: m.depends.clone(),
-                available: m.sequence.iter().all(|s| s.get().is_some()),
+                name: m.name,
+                depends: m.depends,
+                available: m.available,
             })
             .collect();
         let current_mode = d.current_mode();
@@ -346,11 +292,6 @@ impl From<&Device> for boardswarm_protocol::Device {
 #[derive(Debug, Error)]
 #[error("Device is no longer there")]
 struct DeviceGone();
-
-struct DeviceMonitor {
-    receiver: broadcast::Receiver<()>,
-}
-
 #[derive(Debug, Error)]
 enum DeviceSetModeError {
     #[error("Mode not found")]
@@ -359,6 +300,10 @@ enum DeviceSetModeError {
     WrongCurrentMode,
     #[error("Actuator failed: {0}")]
     ActuatorFailed(#[from] ActuatorError),
+}
+
+struct DeviceMonitor {
+    receiver: broadcast::Receiver<()>,
 }
 
 impl DeviceMonitor {
@@ -373,248 +318,34 @@ impl DeviceMonitor {
     }
 }
 
-// TODO deal with closing
-struct DeviceNotifier {
-    sender: broadcast::Sender<()>,
+struct DeviceConsole {
+    name: String,
+    id: Option<u64>,
 }
 
-impl DeviceNotifier {
-    fn new() -> Self {
-        Self {
-            sender: broadcast::channel(1).0,
-        }
-    }
-
-    async fn notify(&self) {
-        let _ = self.sender.send(());
-    }
-
-    fn watch(&self) -> DeviceMonitor {
-        DeviceMonitor {
-            receiver: self.sender.subscribe(),
-        }
-    }
+struct DeviceVolume {
+    name: String,
+    id: Option<u64>,
 }
 
 struct DeviceMode {
     name: String,
     depends: Option<String>,
-    sequence: Vec<DeviceItem<config::ModeStep>>,
+    available: bool,
 }
 
-impl From<config::Mode> for DeviceMode {
-    fn from(config: config::Mode) -> Self {
-        let sequence = config.sequence.into_iter().map(DeviceItem::new).collect();
-        DeviceMode {
-            name: config.name,
-            depends: config.depends,
-            sequence,
-        }
-    }
-}
-
-struct DeviceInner {
-    notifier: DeviceNotifier,
-    name: String,
-    current_mode: Mutex<Option<String>>,
-    consoles: Vec<DeviceItem<config::Console>>,
-    volumes: Vec<DeviceItem<config::Volume>>,
-    modes: Vec<DeviceMode>,
-    server: Server,
-}
-
-#[derive(Clone)]
-struct Device {
-    inner: Arc<DeviceInner>,
-}
-
-impl Device {
-    fn from_config(config: config::Device, server: Server) -> Device {
-        let name = config.name;
-        let consoles = config.consoles.into_iter().map(DeviceItem::new).collect();
-        let volumes = config.volumes.into_iter().map(DeviceItem::new).collect();
-        let notifier = DeviceNotifier::new();
-        let modes = config.modes.into_iter().map(Into::into).collect();
-        Device {
-            inner: Arc::new(DeviceInner {
-                notifier,
-                name,
-                current_mode: Mutex::new(None),
-                consoles,
-                volumes,
-                modes,
-                server,
-            }),
-        }
-    }
-
-    pub fn name(&self) -> &str {
-        &self.inner.name
-    }
-
-    pub fn updates(&self) -> DeviceMonitor {
-        self.inner.notifier.watch()
-    }
-
-    // TODO add a semaphore ot only allow one sequence to run at a time
-    pub async fn set_mode(&self, mode: &str) -> Result<(), DeviceSetModeError> {
-        let target = self
-            .inner
-            .modes
-            .iter()
-            .find(|m| m.name == mode)
-            .ok_or(DeviceSetModeError::ModeNotFound)?;
-        {
-            let mut current = self.inner.current_mode.lock().unwrap();
-            if let Some(depend) = &target.depends {
-                if current.as_ref() != Some(depend) {
-                    return Err(DeviceSetModeError::WrongCurrentMode);
-                }
-            }
-            *current = None;
-        }
-
-        for step in &target.sequence {
-            let step = step.config();
-            if let Some(provider) = self.inner.server.find_actuator(&step.match_) {
-                provider
-                    .set_mode(Box::new(<dyn erased_serde::Deserializer>::erase(
-                        step.parameters.clone(),
-                    )))
-                    .await?;
-            } else {
-                warn!("Provider {:?} not found", &step.match_);
-                return Err(ActuatorError {}.into());
-            }
-            if let Some(duration) = step.stabilisation {
-                tokio::time::sleep(duration).await;
-            }
-        }
-        {
-            let mut current = self.inner.current_mode.lock().unwrap();
-            *current = Some(mode.to_string());
-        }
-        self.inner.notifier.notify().await;
-        Ok(())
-    }
-
-    fn current_mode(&self) -> Option<String> {
-        let mode = self.inner.current_mode.lock().unwrap();
-        mode.clone()
-    }
-
-    async fn monitor_items(&self) {
-        fn add_item_with<'a, C, I, F, IT>(items: I, id: u64, item: registry::Item<IT>, f: F) -> bool
-        where
-            C: DeviceConfigItem + 'a,
-            I: Iterator<Item = &'a DeviceItem<C>>,
-            F: Fn(&DeviceItem<C>, &IT),
-        {
-            items.fold(false, |changed, i| {
-                if i.set_if_matches(id, &item.properties()) {
-                    f(i, item.inner());
-                    true
-                } else {
-                    changed
-                }
-            })
-        }
-
-        fn add_item<'a, T, C, I>(items: I, id: u64, item: registry::Item<T>) -> bool
-        where
-            C: DeviceConfigItem + 'a,
-            I: Iterator<Item = &'a DeviceItem<C>>,
-        {
-            add_item_with(items, id, item, |_, _| {})
-        }
-
-        fn change_with<'a, T, C, I, F>(items: I, change: RegistryChange<T>, f: F) -> bool
-        where
-            C: DeviceConfigItem + 'a,
-            I: Iterator<Item = &'a DeviceItem<C>>,
-            F: Fn(&DeviceItem<C>, &T),
-        {
-            match change {
-                registry::RegistryChange::Added { id, item } => add_item_with(items, id, item, f),
-                registry::RegistryChange::Removed(id) => {
-                    items.fold(false, |changed, c| c.unset_if_matches(id) || changed)
-                }
-            }
-        }
-        fn change<'a, T, C: DeviceConfigItem + 'a, I: Iterator<Item = &'a DeviceItem<C>>>(
-            items: I,
-            change: RegistryChange<T>,
-        ) -> bool {
-            change_with(items, change, |_, _| {})
-        }
-        fn setup_console(dev: &DeviceItem<config::Console>, console: &Arc<dyn Console>) {
-            if let Err(e) = console.configure(Box::new(<dyn erased_serde::Deserializer>::erase(
-                dev.config().parameters.clone(),
-            ))) {
-                warn!("Failed to configure console: {}", e);
-            }
-        }
-
-        let mut actuator_monitor = self.inner.server.inner.actuators.monitor();
-        let mut console_monitor = self.inner.server.inner.consoles.monitor();
-        let mut volume_monitor = self.inner.server.inner.volumes.monitor();
-        let mut changed = false;
-
-        for (id, item) in self.inner.server.inner.actuators.contents() {
-            changed |= add_item(
-                self.inner.modes.iter().flat_map(|m| m.sequence.iter()),
-                id,
-                item,
-            );
-        }
-
-        for (id, item) in self.inner.server.inner.consoles.contents() {
-            changed |= add_item_with(self.inner.consoles.iter(), id, item, setup_console);
-        }
-
-        for (id, item) in self.inner.server.inner.volumes.contents() {
-            changed |= add_item(self.inner.volumes.iter(), id, item);
-        }
-
-        if changed {
-            self.inner.notifier.notify().await;
-        }
-
-        loop {
-            let changed = tokio::select! {
-                msg = console_monitor.recv() => {
-                    match msg {
-                        Ok(c) => change_with(self.inner.consoles.iter(), c, setup_console),
-                        Err(e) => {
-                            warn!("Issue with monitoring consoles: {:?}", e); return },
-                    }
-                }
-                msg = actuator_monitor.recv() => {
-                    match msg {
-                        Ok(c) => change(
-                            self.inner.modes.iter().flat_map(|m| m.sequence.iter()),
-                            c),
-                        Err(e) => {
-                            warn!("Issue with monitoring actuators: {:?}", e); return },
-                        }
-                }
-                msg = volume_monitor.recv() => {
-                    match msg {
-                        Ok(c) => change(self.inner.volumes.iter(), c),
-                        Err(e) => {
-                            warn!("Issue with monitoring volumes: {:?}", e); return },
-                    }
-                }
-            };
-            if changed {
-                self.inner.notifier.notify().await;
-            }
-        }
-    }
+#[async_trait::async_trait]
+trait Device: Send + Sync {
+    async fn set_mode(&self, mode: &str) -> Result<(), DeviceSetModeError>;
+    fn updates(&self) -> DeviceMonitor;
+    fn consoles(&self) -> Vec<DeviceConsole>;
+    fn volumes(&self) -> Vec<DeviceVolume>;
+    fn modes(&self) -> Vec<DeviceMode>;
+    fn current_mode(&self) -> Option<String>;
 }
 
 struct ServerInner {
-    devices: Registry<Device>,
+    devices: Registry<Arc<dyn Device>>,
     consoles: Registry<Arc<dyn Console>>,
     actuators: Registry<Arc<dyn Actuator>>,
     volumes: Registry<Arc<dyn Volume>>,
@@ -731,13 +462,15 @@ impl Server {
             .map(registry::Item::into_inner)
     }
 
-    fn register_device(&self, device: Device) {
-        let properties = Properties::new(device.name());
-        let (id, item) = self.inner.devices.add(properties, device);
+    fn register_device<D>(&self, properties: Properties, device: D)
+    where
+        D: Device + 'static,
+    {
+        let (id, item) = self.inner.devices.add(properties, Arc::new(device));
         info!("Registered device: {} - {}", id, item);
     }
 
-    fn get_device(&self, id: u64) -> Option<Device> {
+    fn get_device(&self, id: u64) -> Option<Arc<dyn Device>> {
         self.inner
             .devices
             .lookup(id)
@@ -943,13 +676,13 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         let request = request.into_inner();
         if let Some(item) = self.inner.devices.lookup(request.device) {
             let device = item.into_inner();
-            let info = (&device).into();
+            let info = (&*device).into();
             let monitor = device.updates();
             let stream = Box::pin(stream::once(async move { Ok(info) }).chain(stream::unfold(
                 (device, monitor),
                 |(device, mut monitor)| async move {
                     monitor.wait().await.ok()?;
-                    let info = (&device).into();
+                    let info = (&*device).into();
                     Some((Ok(info), (device, monitor)))
                 },
             )));
@@ -1140,13 +873,9 @@ async fn main() -> anyhow::Result<()> {
 
     let server = Server::new();
     for d in config.devices {
-        let device = Device::from_config(d, server.clone());
-        server.register_device(device.clone());
-        tokio::spawn(async move {
-            loop {
-                device.monitor_items().await
-            }
-        });
+        let device = crate::config_device::Device::from_config(d, server.clone());
+        let properties = Properties::new(device.name());
+        server.register_device(properties, device);
     }
 
     let local = tokio::task::LocalSet::new();
