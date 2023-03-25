@@ -462,12 +462,20 @@ impl Server {
             .map(registry::Item::into_inner)
     }
 
-    fn register_device<D>(&self, properties: Properties, device: D)
+    fn register_device<D>(&self, properties: Properties, device: D) -> u64
     where
         D: Device + 'static,
     {
         let (id, item) = self.inner.devices.add(properties, Arc::new(device));
         info!("Registered device: {} - {}", id, item);
+        id
+    }
+
+    fn unregister_device(&self, id: u64) {
+        if let Some(item) = self.inner.devices.lookup(id) {
+            info!("Unregistering device: {} - {}", id, item.name());
+            self.inner.devices.remove(id);
+        }
     }
 
     fn get_device(&self, id: u64) -> Option<Arc<dyn Device>> {

@@ -123,20 +123,24 @@ impl DeviceVolume {
 #[derive(Clone)]
 pub struct DeviceConsole {
     device: Device,
-    console: String,
+    name: String,
 }
 
 impl DeviceConsole {
-    fn new(device: Device, console: String) -> Self {
-        Self { device, console }
+    fn new(device: Device, name: String) -> Self {
+        Self { device, name }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     // todo differention between console no (longer) available
-    fn get_id(&self) -> Option<u64> {
+    pub fn get_id(&self) -> Option<u64> {
         let d = self.device.inner.device.lock().unwrap();
         d.consoles
             .iter()
-            .find(|c| c.name == self.console)
+            .find(|c| c.name == self.name)
             .and_then(|c| c.id)
     }
 
