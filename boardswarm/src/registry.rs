@@ -40,13 +40,19 @@ impl Properties {
         V: AsRef<str>,
         I: IntoIterator<Item = (K, V)>,
     {
-        matches.into_iter().all(|(k, v)| {
+        let mut matched_instance = false;
+        let matched = matches.into_iter().all(|(k, v)| {
+            matched_instance |= k.as_ref() == INSTANCE;
             if let Some(prop) = self.get(k.as_ref()) {
                 prop == v.as_ref()
             } else {
                 false
             }
-        })
+        });
+
+        // All the properties need to match and if the instance is declared in the properties that
+        // also needed to be matched against
+        matched && matched_instance == self.instance().is_some()
     }
 
     pub fn insert<K, V>(&mut self, key: K, value: V)
