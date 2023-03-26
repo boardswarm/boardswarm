@@ -19,10 +19,12 @@ use crate::{registry::Properties, Server};
 use self::actuator::BoardswarmActuator;
 use self::console::BoardswarmConsole;
 use self::device::BoardswarmDevice;
+use self::volume::BoardswarmVolume;
 
 mod actuator;
 mod console;
 mod device;
+mod volume;
 
 #[derive(Deserialize, Debug)]
 struct BoardswarmParameters {
@@ -99,7 +101,13 @@ async fn add_item(
             }
             Err(e) => warn!("Failed to montior remote device: {e}"),
         },
-        _ => unimplemented!(),
+        ItemType::Volume => match BoardswarmVolume::new(id, remote.clone()).await {
+            Ok(v) => {
+                let local = server.register_volume(properties, v);
+                provider.volumes.lock().unwrap().insert(id, local);
+            }
+            Err(e) => warn!("Failed to setup remote volume: {e}"),
+        },
     }
     let _ = provider.notifier.send(());
 }
@@ -124,7 +132,12 @@ fn remove_item(provider: &Provider, type_: ItemType, server: &Server, id: u64) {
                 server.unregister_device(local)
             }
         }
-        _ => unimplemented!(),
+        ItemType::Volume => {
+            let mut volumes = provider.volumes.lock().unwrap();
+            if let Some(local) = volumes.remove(&id) {
+                server.unregister_volume(local)
+            }
+        }
     }
     let _ = provider.notifier.send(());
 }
@@ -176,7 +189,11 @@ async fn monitor_items(
                 server.unregister_device(local);
             }
         }
-        _ => unimplemented!(),
+        ItemType::Volume => {
+            for (_remote, local) in provider.volumes.lock().unwrap().drain() {
+                server.unregister_volume(local);
+            }
+        }
     }
 }
 
@@ -207,12 +224,19 @@ pub fn start_provider(name: String, parameters: serde_yaml::Value, server: Serve
                 let devices = monitor_items(
                     provider.clone(),
                     ItemType::Device,
+                    remote.clone(),
+                    server.clone(),
+                    &name,
+                );
+                let volumes = monitor_items(
+                    provider.clone(),
+                    ItemType::Volume,
                     remote,
                     server.clone(),
                     &name,
                 );
 
-                join!(consoles, actuators, devices);
+                join!(consoles, actuators, devices, volumes);
                 info!("Connection to {} failed", name);
             }
             // TODO move to exponential backoff
