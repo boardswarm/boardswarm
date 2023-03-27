@@ -185,6 +185,14 @@ enum ConsoleCommand {
 
 #[derive(Debug, Args)]
 struct WriteArgs {
+    #[clap(short, long)]
+    offset: Option<u64>,
+    target: String,
+    file: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct BmapWriteArgs {
     target: String,
     file: PathBuf,
 }
@@ -195,7 +203,7 @@ enum VolumeCommand {
     /// Upload file to volume target
     Write(WriteArgs),
     /// Write a bmap file to volume target
-    WriteBmap(WriteArgs),
+    WriteBmap(BmapWriteArgs),
     /// Commit upload
     Commit,
 }
@@ -241,6 +249,19 @@ struct DeviceModeArgs {
 #[derive(Debug, Args)]
 struct DeviceWriteArg {
     #[arg(short, long)]
+    offset: Option<u64>,
+    #[arg(short, long)]
+    wait: bool,
+    #[arg(short, long)]
+    commit: bool,
+    volume: String,
+    target: String,
+    file: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct DeviceBmapWriteArg {
+    #[arg(short, long)]
     wait: bool,
     #[arg(short, long)]
     commit: bool,
@@ -257,7 +278,7 @@ enum DeviceCommand {
         follow: bool,
     },
     Write(DeviceWriteArg),
-    WriteBmap(DeviceWriteArg),
+    WriteBmap(DeviceBmapWriteArg),
     /// Change device mode
     Mode(DeviceModeArgs),
     // Turn the device off and on again
@@ -450,6 +471,9 @@ async fn main() -> anyhow::Result<()> {
                     let mut rw = boardswarm
                         .volume_io_readwrite(volume, write.target, Some(m.len()))
                         .await?;
+                    if let Some(offset) = write.offset {
+                        rw.seek(SeekFrom::Start(offset)).await?;
+                    }
                     tokio::io::copy(&mut f, &mut rw).await?;
                     f.flush().await?;
                     drop(rw);
@@ -471,6 +495,7 @@ async fn main() -> anyhow::Result<()> {
             let device = device.ok_or_else(|| anyhow::anyhow!("Device not found"))?;
             match command {
                 DeviceCommand::Write(DeviceWriteArg {
+                    offset,
                     wait,
                     commit,
                     volume,
@@ -492,6 +517,9 @@ async fn main() -> anyhow::Result<()> {
 
                     let m = f.metadata().await?;
                     let mut rw = volume.open(target, Some(m.len())).await?;
+                    if let Some(offset) = offset {
+                        rw.seek(SeekFrom::Start(offset)).await?;
+                    }
                     tokio::io::copy(&mut f, &mut rw).await?;
                     f.flush().await?;
                     drop(rw);
@@ -500,7 +528,7 @@ async fn main() -> anyhow::Result<()> {
                         volume.commit().await?;
                     }
                 }
-                DeviceCommand::WriteBmap(DeviceWriteArg {
+                DeviceCommand::WriteBmap(DeviceBmapWriteArg {
                     wait,
                     commit,
                     volume,
