@@ -6,7 +6,7 @@ use std::{
 use boardswarm_cli::client::Boardswarm;
 use futures::{pin_mut, Stream, StreamExt};
 use tokio::sync::broadcast;
-use tracing::warn;
+use tracing::{trace, warn};
 
 use crate::{DeviceMonitor, DeviceSetModeError};
 

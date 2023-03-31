@@ -864,7 +864,7 @@ struct Opts {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt().init();
+    tracing_subscriber::fmt::init();
 
     let opts = Opts::parse();
     let config = config::Config::from_file(opts.config)?;

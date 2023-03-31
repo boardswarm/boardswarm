@@ -23,7 +23,7 @@ tokio-udev = { version = "0.7.0", git = "https://github.com/sjoerdsimons/tokio-u
 tokio-util = "0.7.4"
 tonic = "0.8.3"
 tracing = "0.1.37"
-tracing-subscriber = "0.3.16"
+tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
 url = "2.3.1"
 erased-serde = "0.3.24"
 tokio-stream = { version = "0.1.11", features = ["sync"] }
