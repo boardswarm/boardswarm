@@ -91,16 +91,21 @@ impl BoardswarmDeviceInner {
     // Check if the remote id provider had relevant changes changing our mappings
     fn provider_sync(&mut self) -> bool {
         let mut changed = false;
-        for (remote, local) in &self.console_mapping {
-            if self.provider.console_id(*remote) != Some(*local) {
+
+        for remote in self.info.consoles.iter().filter_map(|c| c.id) {
+            let local = self.console_mapping.get(&remote).copied();
+            if self.provider.console_id(remote) != local {
                 changed = true
             }
         }
-        for (remote, local) in &self.volume_mapping {
-            if self.provider.volume_id(*remote) != Some(*local) {
+
+        for remote in self.info.volumes.iter().filter_map(|v| v.id) {
+            let local = self.volume_mapping.get(&remote).copied();
+            if self.provider.volume_id(remote) != local {
                 changed = true
             }
         }
+
         if changed {
             self.update_mappings();
         }
@@ -126,6 +131,7 @@ async fn monitor_device(
             item = updates.next() => {
                 match item {
                     Some(Ok(info)) => {
+                        trace!("Update for device: {:?}", info);
                         let mut inner = device.inner.lock().unwrap();
                         inner.update(info);
                         let _ = device.notifier.send(());
@@ -139,6 +145,7 @@ async fn monitor_device(
             }
             _ = watch.recv() => {
                 let mut inner = device.inner.lock().unwrap();
+                trace!("Provider mappings; syncing");
                 if inner.provider_sync() {
                     let _ = device.notifier.send(());
                 }
