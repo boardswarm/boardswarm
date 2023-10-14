@@ -232,17 +232,17 @@ mod test {
 
         let mut t = HashMap::new();
         t.insert(NAME.to_string(), "test".to_string());
-        assert_eq!(props.matches(&t), true);
+        assert!(props.matches(&t));
 
-        assert_eq!(props.matches([(NAME, "test")]), true);
-        assert_eq!(props.matches([("udev.BADGER", "5")]), true);
+        assert!(props.matches([(NAME, "test")]));
+        assert!(props.matches([("udev.BADGER", "5")]));
 
-        assert_eq!(props.matches([(NAME, "no")]), false);
-        assert_eq!(props.matches([("udev.BADGER", "7")]), false);
-        assert_eq!(props.matches([("udev.SNAKE", "7")]), false);
+        assert!(!props.matches([(NAME, "no")]));
+        assert!(!props.matches([("udev.BADGER", "7")]));
+        assert!(!props.matches([("udev.SNAKE", "7")]));
 
-        assert_eq!(props.matches([(NAME, "test"), ("udev.BADGER", "5")]), true);
-        assert_eq!(props.matches([(NAME, "test"), ("udev.BADGER", "7")]), false);
-        assert_eq!(props.matches([(NAME, "test"), ("udev.SNAKE", "5")]), false);
+        assert!(props.matches([(NAME, "test"), ("udev.BADGER", "5")]));
+        assert!(!props.matches([(NAME, "test"), ("udev.BADGER", "7")]));
+        assert!(!props.matches([(NAME, "test"), ("udev.SNAKE", "5")]));
     }
 }
