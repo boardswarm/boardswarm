@@ -32,3 +32,5 @@ rusb = "0.9.1"
 boardswarm-cli = { version = "0.1.0", path = "../boardswarm-cli" }
 tokio-gpiod = "0.2.3"
 rockusb = "0.1.1"
+axum = "0.6.18"
+axum-server = { version = "0.5.1", features = ["tls-rustls"] }

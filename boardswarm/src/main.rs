@@ -18,7 +18,6 @@ use thiserror::Error;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Streaming;
-
 use tracing::{info, warn};
 
 mod boardswarm_provider;
@@ -875,6 +874,7 @@ async fn main() -> anyhow::Result<()> {
     let opts = Opts::parse();
     let config = config::Config::from_file(opts.config)?;
     let listen_config = config
+        .server
         .listen
         .map(|l| parse_listen_address(&l))
         .transpose()?;
@@ -919,11 +919,21 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let server = tonic::transport::Server::builder()
-        .add_service(boardswarm_protocol::boardswarm_server::BoardswarmServer::new(server.clone()))
-        .serve(listen_addr);
-    info!("Server listening on {}", listen_addr);
-    tokio::join!(local, server).1?;
+    let boardswarm = tonic::transport::server::Routes::new(
+        boardswarm_protocol::boardswarm_server::BoardswarmServer::new(server.clone()),
+    );
+    let router = boardswarm.into_router();
+    if let Some(cert) = config.server.certificate {
+        info!("Server listening on {}", listen_addr);
+        let tls_config =
+            axum_server::tls_rustls::RustlsConfig::from_pem_file(cert.chain, cert.key).await?;
+
+        let s = axum_server::bind_rustls(listen_addr, tls_config).serve(router.into_make_service());
+        tokio::join!(local, s).1?;
+    } else {
+        let s = axum_server::bind(listen_addr).serve(router.into_make_service());
+        tokio::join!(local, s).1?;
+    }
 
     Ok(())
 }

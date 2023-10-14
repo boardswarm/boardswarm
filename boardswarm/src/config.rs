@@ -1,14 +1,30 @@
 #![allow(dead_code)]
-use std::{collections::HashMap, path::Path, time::Duration};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use anyhow::Result;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
-    pub listen: Option<String>,
+    pub server: Server,
     pub providers: Vec<Provider>,
     pub devices: Vec<Device>,
+}
+
+#[derive(Default, Debug, Deserialize)]
+pub struct Server {
+    pub listen: Option<String>,
+    pub certificate: Option<Certificate>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Certificate {
+    pub chain: PathBuf,
+    pub key: PathBuf,
 }
 
 #[derive(Debug, Deserialize)]
