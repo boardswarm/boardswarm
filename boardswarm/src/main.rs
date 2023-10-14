@@ -504,8 +504,10 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         request: tonic::Request<ItemTypeRequest>,
     ) -> Result<tonic::Response<ItemList>, tonic::Status> {
         let request = request.into_inner();
-        let type_ = boardswarm_protocol::ItemType::from_i32(request.r#type)
-            .ok_or_else(|| tonic::Status::invalid_argument("Unknown item type "))?;
+        let type_ = request
+            .r#type
+            .try_into()
+            .map_err(|_e| tonic::Status::invalid_argument("Unknown item type "))?;
 
         Ok(tonic::Response::new(self.item_list_for(type_)))
     }
@@ -516,8 +518,10 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         request: tonic::Request<ItemTypeRequest>,
     ) -> Result<tonic::Response<Self::MonitorStream>, tonic::Status> {
         let request = request.into_inner();
-        let type_ = boardswarm_protocol::ItemType::from_i32(request.r#type)
-            .ok_or_else(|| tonic::Status::invalid_argument("Unknown item type "))?;
+        let type_ = request
+            .r#type
+            .try_into()
+            .map_err(|_e| tonic::Status::invalid_argument("Unknown item type "))?;
 
         fn to_item_stream<T>(registry: &Registry<T>) -> ItemMonitorStream
         where
@@ -570,8 +574,10 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         request: tonic::Request<ItemPropertiesRequest>,
     ) -> Result<tonic::Response<ItemPropertiesMsg>, tonic::Status> {
         let request = request.into_inner();
-        let type_ = boardswarm_protocol::ItemType::from_i32(request.r#type)
-            .ok_or_else(|| tonic::Status::invalid_argument("Unknown item type "))?;
+        let type_ = request
+            .r#type
+            .try_into()
+            .map_err(|_e| tonic::Status::invalid_argument("Unknown item type "))?;
         let properties = match type_ {
             boardswarm_protocol::ItemType::Actuator => self
                 .inner

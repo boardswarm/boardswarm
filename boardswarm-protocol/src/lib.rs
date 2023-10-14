@@ -75,7 +75,7 @@ impl From<String> for ParamValue {
 impl From<f64> for ParamValue {
     fn from(v: f64) -> ParamValue {
         ParamValue(prost_types::Value {
-            kind: Some(prost_types::value::Kind::NumberValue(v as f64)),
+            kind: Some(prost_types::value::Kind::NumberValue(v)),
         })
     }
 }
@@ -353,7 +353,7 @@ mod test {
         )
         .unwrap();
         let mut expected = Parameters::default();
-        expected.insert("number".to_string(), ParamValue::from(115200 as f64));
+        expected.insert("number".to_string(), ParamValue::from(115200_f64));
         expected.insert("bool".to_string(), ParamValue::from(true));
         expected.insert("string".to_string(), ParamValue::from("gnirts"));
 
@@ -369,7 +369,7 @@ mod test {
     #[test]
     fn test_deserializer() {
         let mut data = Parameters::default();
-        data.insert("number".to_string(), ParamValue::from(115200 as f64));
+        data.insert("number".to_string(), ParamValue::from(115200_f64));
         data.insert("bool".to_string(), ParamValue::from(true));
         data.insert("string".to_string(), ParamValue::from("gnirts"));
 
