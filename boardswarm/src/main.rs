@@ -2,13 +2,14 @@ use boardswarm_protocol::item_event::Event;
 use boardswarm_protocol::{
     console_input_request, volume_io_reply, volume_io_request, ConsoleConfigureRequest,
     ConsoleInputRequest, ConsoleOutputRequest, ItemEvent, ItemList, ItemPropertiesMsg,
-    ItemPropertiesRequest, ItemTypeRequest, Property, VolumeInfoMsg, VolumeRequest,
+    ItemPropertiesRequest, ItemTypeRequest, LoginInfoList, Property, VolumeInfoMsg, VolumeRequest,
 };
 use bytes::Bytes;
 use clap::Parser;
 use futures::prelude::*;
 use futures::stream::BoxStream;
 use futures::Sink;
+use jwt_authorizer::{Authorizer, IntoLayer, JwtAuthorizer, RegisteredClaims};
 use registry::{Properties, Registry};
 use std::net::{AddrParseError, SocketAddr};
 use std::path::PathBuf;
@@ -344,6 +345,7 @@ trait Device: Send + Sync {
 }
 
 struct ServerInner {
+    auth_info: Vec<config::Authentication>,
     devices: Registry<Arc<dyn Device>>,
     consoles: Registry<Arc<dyn Console>>,
     actuators: Registry<Arc<dyn Actuator>>,
@@ -369,9 +371,10 @@ pub struct Server {
 }
 
 impl Server {
-    fn new() -> Self {
+    fn new(auth_info: Vec<config::Authentication>) -> Self {
         Self {
             inner: Arc::new(ServerInner {
+                auth_info,
                 consoles: Registry::new(),
                 devices: Registry::new(),
                 actuators: Registry::new(),
@@ -498,6 +501,34 @@ type ItemMonitorStream = BoxStream<'static, Result<boardswarm_protocol::ItemEven
 
 #[async_trait::async_trait]
 impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
+    async fn login_info(
+        &self,
+        _request: tonic::Request<()>,
+    ) -> Result<tonic::Response<LoginInfoList>, tonic::Status> {
+        let info = self
+            .inner
+            .auth_info
+            .iter()
+            .filter_map(|a| match a {
+                config::Authentication::Oidc {
+                    description,
+                    uri,
+                    client,
+                } => Some(boardswarm_protocol::LoginInfo {
+                    description: description.clone(),
+                    info: Some(boardswarm_protocol::login_info::Info::Oidc(
+                        boardswarm_protocol::OidcInfo {
+                            url: uri.clone(),
+                            client_id: client.clone(),
+                        },
+                    )),
+                }),
+                config::Authentication::Jwks { .. } => None,
+            })
+            .collect();
+        Ok(tonic::Response::new(LoginInfoList { info }))
+    }
+
     async fn list(
         &self,
         request: tonic::Request<ItemTypeRequest>,
@@ -859,6 +890,26 @@ fn parse_listen_address(addr: &str) -> Result<SocketAddr, AddrParseError> {
     }
 }
 
+async fn setup_auth_layer(config: &[config::Authentication]) -> anyhow::Result<Vec<Authorizer>> {
+    let mut authorizers = Vec::new();
+    for auth in config {
+        let a = match auth {
+            config::Authentication::Oidc { uri, .. } => {
+                JwtAuthorizer::<RegisteredClaims>::from_oidc(uri)
+                    .build()
+                    .await?
+            }
+            config::Authentication::Jwks { path } => {
+                JwtAuthorizer::<RegisteredClaims>::from_jwks(path.to_str().unwrap())
+                    .build()
+                    .await?
+            }
+        };
+        authorizers.push(a);
+    }
+    Ok(authorizers)
+}
+
 #[derive(Debug, clap::Parser)]
 struct Opts {
     #[clap(short, long)]
@@ -872,7 +923,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
     let opts = Opts::parse();
-    let config = config::Config::from_file(opts.config)?;
+    let config = config::Config::from_file(&opts.config)?;
     let listen_config = config
         .server
         .listen
@@ -885,7 +936,22 @@ async fn main() -> anyhow::Result<()> {
         (None, None) => SocketAddr::new("::1".parse().unwrap(), boardswarm_protocol::DEFAULT_PORT),
     };
 
-    let server = Server::new();
+    let authentication = config
+        .server
+        .authentication
+        .iter()
+        .map(|a| {
+            if let config::Authentication::Jwks { path } = a {
+                config::Authentication::Jwks {
+                    path: opts.config.with_file_name(path),
+                }
+            } else {
+                a.clone()
+            }
+        })
+        .collect();
+
+    let server = Server::new(authentication);
     for d in config.devices {
         let device = crate::config_device::Device::from_config(d, server.clone());
         let properties = Properties::new(device.name());
@@ -922,7 +988,18 @@ async fn main() -> anyhow::Result<()> {
     let boardswarm = tonic::transport::server::Routes::new(
         boardswarm_protocol::boardswarm_server::BoardswarmServer::new(server.clone()),
     );
-    let router = boardswarm.into_router();
+
+    let auth = setup_auth_layer(&server.inner.auth_info).await?;
+    let router = boardswarm
+        .into_router()
+        .layer(auth.into_layer())
+        .route_service(
+            &format!("/{}/LoginInfo",
+          <boardswarm_protocol::boardswarm_server::BoardswarmServer<Server>
+          as tonic::server::NamedService>::NAME),
+            boardswarm_protocol::boardswarm_server::BoardswarmServer::new(server.clone()),
+        );
+
     if let Some(cert) = config.server.certificate {
         info!("Server listening on {}", listen_addr);
         let tls_config =

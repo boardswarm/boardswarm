@@ -4,6 +4,8 @@ import "google/protobuf/struct.proto";
 package boardswarm;
 
 service Boardswarm {
+  rpc LoginInfo(google.protobuf.Empty) returns (LoginInfoList);
+
   rpc List(ItemTypeRequest) returns (ItemList);
   rpc Monitor(ItemTypeRequest) returns (stream ItemEvent);
   rpc ItemProperties(ItemPropertiesRequest) returns (ItemPropertiesMsg);
@@ -23,6 +25,22 @@ service Boardswarm {
   // Commit all data in an uploader specific manner; e.g. may trigger a USB reset for DFU devices
   rpc VolumeCommit(VolumeRequest) returns (google.protobuf.Empty);
 
+}
+
+message OidcInfo {
+        string url = 1;
+        string clientId = 2;
+}
+
+message LoginInfo {
+   string description = 1;
+   oneof info {
+        OidcInfo oidc = 2;
+   }
+}
+
+message LoginInfoList {
+  repeated LoginInfo info = 1;
 }
 
 enum ItemType {

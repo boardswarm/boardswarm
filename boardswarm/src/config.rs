@@ -19,6 +19,20 @@ pub struct Config {
 pub struct Server {
     pub listen: Option<String>,
     pub certificate: Option<Certificate>,
+    pub authentication: Vec<Authentication>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "type")]
+pub enum Authentication {
+    #[serde(rename = "oidc")]
+    Oidc {
+        description: String,
+        uri: String,
+        client: String,
+    },
+    #[serde(rename = "jwks")]
+    Jwks { path: PathBuf },
 }
 
 #[derive(Debug, Deserialize)]
