@@ -9,8 +9,8 @@ use boardswarm_protocol::{
     boardswarm_client::BoardswarmClient, console_input_request, volume_io_reply, volume_io_request,
     ActuatorModeRequest, ConsoleConfigureRequest, ConsoleInputRequest, ConsoleOutputRequest,
     DeviceModeRequest, DeviceRequest, Item, ItemPropertiesRequest, ItemType, ItemTypeRequest,
-    VolumeInfoMsg, VolumeIoFlush, VolumeIoRead, VolumeIoReply, VolumeIoRequest, VolumeIoTarget,
-    VolumeIoWrite, VolumeRequest, VolumeTarget,
+    LoginInfoList, VolumeInfoMsg, VolumeIoFlush, VolumeIoRead, VolumeIoReply, VolumeIoRequest,
+    VolumeIoTarget, VolumeIoWrite, VolumeRequest, VolumeTarget,
 };
 use bytes::Bytes;
 use futures::{future::BoxFuture, stream, FutureExt, Stream, StreamExt};
@@ -39,6 +39,12 @@ impl Boardswarm {
     {
         let client = BoardswarmClient::connect(url).await?;
         Ok(Self { client })
+    }
+
+    pub async fn login_info(&mut self) -> Result<LoginInfoList, tonic::Status> {
+        let info = self.client.login_info(()).await?;
+
+        Ok(info.into_inner())
     }
 
     pub async fn list(&mut self, type_: ItemType) -> Result<Vec<Item>, tonic::Status> {

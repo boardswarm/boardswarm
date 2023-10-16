@@ -321,6 +321,7 @@ fn parse_item(item: &str) -> Result<ItemType, anyhow::Error> {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    Login {},
     Actuator {
         actuator: u64,
         #[command(subcommand)]
@@ -395,6 +396,10 @@ async fn main() -> anyhow::Result<()> {
     let mut boardswarm = boardswarm_cli::client::Boardswarm::connect(opt.uri).await?;
 
     match opt.command {
+        Command::Login {} => {
+            println!("Info: {:#?}", boardswarm.login_info().await?);
+            Ok(())
+        }
         Command::List { type_ } => {
             println!("{:?}s: ", type_);
             for i in boardswarm.list(type_).await? {
