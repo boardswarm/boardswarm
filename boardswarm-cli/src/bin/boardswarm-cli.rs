@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{anyhow, bail};
+use anyhow::{anyhow, bail, Context};
 use async_compression::futures::bufread::GzipDecoder;
 use bmap_parser::Bmap;
 use boardswarm_cli::{
@@ -373,6 +373,8 @@ enum Command {
 
 #[derive(clap::Parser)]
 struct Opts {
+    #[clap(short, long)]
+    token: Option<PathBuf>,
     #[clap(short, long, default_value = "http://localhost:6653")]
     uri: tonic::transport::Uri,
     #[command(subcommand)]
@@ -393,7 +395,14 @@ async fn main() -> anyhow::Result<()> {
     let opt = Opts::parse();
 
     println!("Connecting to: {}", opt.uri);
-    let mut boardswarm = boardswarm_cli::client::Boardswarm::connect(opt.uri).await?;
+    let mut build = boardswarm_cli::client::BoardswarmBuilder::new(opt.uri);
+    if let Some(token) = opt.token {
+        let token = tokio::fs::read_to_string(token)
+            .await
+            .context("Failed to read token")?;
+        build.auth_static(token.trim_end())
+    }
+    let mut boardswarm = build.connect().await?;
 
     match opt.command {
         Command::Login {} => {

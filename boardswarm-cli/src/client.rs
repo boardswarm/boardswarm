@@ -19,7 +19,38 @@ use tokio::{
     sync::{mpsc, oneshot},
 };
 
+use tower::Layer;
 use tracing::warn;
+
+use crate::authenticator::{Authenticator, AuthenticatorService};
+
+#[derive(Clone, Debug)]
+pub struct BoardswarmBuilder {
+    uri: tonic::transport::Uri,
+    authenticator: Option<Authenticator>,
+}
+
+impl BoardswarmBuilder {
+    pub fn new(uri: tonic::transport::Uri) -> Self {
+        Self {
+            uri,
+            authenticator: None,
+        }
+    }
+
+    pub fn auth_static<S: Into<String>>(&mut self, token: S) {
+        self.authenticator = Some(Authenticator::from_static(token));
+    }
+
+    pub async fn connect(self) -> Result<Boardswarm, tonic::transport::Error> {
+        let endpoint = tonic::transport::Endpoint::from(self.uri);
+        let channel = endpoint.connect().await?;
+        let authenticator = self.authenticator.unwrap_or_default();
+        let channel = authenticator.into_layer().layer(channel);
+        let client = BoardswarmClient::new(channel);
+        Ok(Boardswarm { client })
+    }
+}
 
 pub enum ItemEvent {
     Added(Vec<Item>),
@@ -28,19 +59,10 @@ pub enum ItemEvent {
 
 #[derive(Clone, Debug)]
 pub struct Boardswarm {
-    client: BoardswarmClient<tonic::transport::Channel>,
+    client: BoardswarmClient<AuthenticatorService<tonic::transport::Channel>>,
 }
 
 impl Boardswarm {
-    pub async fn connect<D>(url: D) -> Result<Self, tonic::transport::Error>
-    where
-        D: TryInto<tonic::transport::Endpoint>,
-        D::Error: Into<tonic::codegen::StdError>,
-    {
-        let client = BoardswarmClient::connect(url).await?;
-        Ok(Self { client })
-    }
-
     pub async fn login_info(&mut self) -> Result<LoginInfoList, tonic::Status> {
         let info = self.client.login_info(()).await?;
 

@@ -14,15 +14,6 @@ pub struct DeviceBuilder {
 }
 
 impl DeviceBuilder {
-    pub async fn new<D>(url: D) -> Result<Self, tonic::transport::Error>
-    where
-        D: TryInto<tonic::transport::Endpoint>,
-        D::Error: Into<tonic::codegen::StdError>,
-    {
-        let client = Boardswarm::connect(url).await?;
-        Ok(Self::from_client(client))
-    }
-
     pub fn from_client(client: Boardswarm) -> Self {
         DeviceBuilder { client }
     }

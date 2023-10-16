@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use boardswarm_cli::client::BoardswarmBuilder;
 use boardswarm_cli::client::{Boardswarm, ItemEvent};
 use boardswarm_protocol::ItemType;
 use futures::{pin_mut, TryStreamExt};
@@ -205,7 +206,8 @@ pub fn start_provider(name: String, parameters: serde_yaml::Value, server: Serve
     tokio::spawn(async move {
         loop {
             let _span = tracing::span!(tracing::Level::INFO, "boardswarm", name);
-            if let Ok(remote) = Boardswarm::connect(uri.clone()).await {
+            let boardswarm = BoardswarmBuilder::new(uri.clone());
+            if let Ok(remote) = boardswarm.connect().await {
                 trace!("Connected to {}", name);
                 let consoles = monitor_items(
                     provider.clone(),
