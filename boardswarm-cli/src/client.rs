@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, VecDeque},
     future::Future,
     pin::Pin,
+    sync::Arc,
     task::{ready, Poll},
 };
 
@@ -9,8 +10,8 @@ use boardswarm_protocol::{
     boardswarm_client::BoardswarmClient, console_input_request, volume_io_reply, volume_io_request,
     ActuatorModeRequest, ConsoleConfigureRequest, ConsoleInputRequest, ConsoleOutputRequest,
     DeviceModeRequest, DeviceRequest, Item, ItemPropertiesRequest, ItemType, ItemTypeRequest,
-    LoginInfoList, VolumeInfoMsg, VolumeIoFlush, VolumeIoRead, VolumeIoReply, VolumeIoRequest,
-    VolumeIoTarget, VolumeIoWrite, VolumeRequest, VolumeTarget,
+    VolumeInfoMsg, VolumeIoFlush, VolumeIoRead, VolumeIoReply, VolumeIoRequest, VolumeIoTarget,
+    VolumeIoWrite, VolumeRequest, VolumeTarget,
 };
 use bytes::Bytes;
 use futures::{future::BoxFuture, stream, FutureExt, Stream, StreamExt};
@@ -22,30 +23,63 @@ use tokio::{
 use tower::Layer;
 use tracing::warn;
 
-use crate::authenticator::{Authenticator, AuthenticatorService};
+use crate::{
+    authenticator::{Authenticator, AuthenticatorService},
+    config::Auth,
+    oidc::{LoginProvider, OidcClientBuilder},
+};
 
 #[derive(Clone, Debug)]
 pub struct BoardswarmBuilder {
     uri: tonic::transport::Uri,
-    authenticator: Option<Authenticator>,
+    auth: Option<Auth>,
+    login_provider: Option<Arc<dyn LoginProvider>>,
 }
 
 impl BoardswarmBuilder {
     pub fn new(uri: tonic::transport::Uri) -> Self {
         Self {
             uri,
-            authenticator: None,
+            auth: None,
+            login_provider: None,
         }
     }
 
     pub fn auth_static<S: Into<String>>(&mut self, token: S) {
-        self.authenticator = Some(Authenticator::from_static(token));
+        self.auth = Some(Auth::Token(token.into()));
+    }
+
+    pub fn auth(&mut self, auth: Auth) {
+        self.auth = Some(auth)
+    }
+
+    pub fn login_provider<LP>(&mut self, lp: LP)
+    where
+        LP: LoginProvider + 'static,
+    {
+        self.login_provider = Some(Arc::new(lp));
     }
 
     pub async fn connect(self) -> Result<Boardswarm, tonic::transport::Error> {
         let endpoint = tonic::transport::Endpoint::from(self.uri);
         let channel = endpoint.connect().await?;
-        let authenticator = self.authenticator.unwrap_or_default();
+        let authenticator = match self.auth {
+            Some(Auth::Token(t)) => Authenticator::from_static(t),
+            Some(Auth::Oidc {
+                uri,
+                client_id,
+                token_cache,
+            }) => {
+                let mut builder = OidcClientBuilder::new(uri, client_id);
+                builder.token_cache(token_cache);
+                if let Some(lp) = self.login_provider {
+                    builder.login_provider(lp);
+                }
+                let oidc = builder.build();
+                Authenticator::from_oidc(oidc)
+            }
+            None => Authenticator::default(),
+        };
         let channel = authenticator.into_layer().layer(channel);
         let client = BoardswarmClient::new(channel);
         Ok(Boardswarm { client })
@@ -58,15 +92,47 @@ pub enum ItemEvent {
 }
 
 #[derive(Clone, Debug)]
+pub enum AuthMethod {
+    Oidc { url: String, client_id: String },
+}
+
+impl From<boardswarm_protocol::login_info::Method> for AuthMethod {
+    fn from(value: boardswarm_protocol::login_info::Method) -> Self {
+        match value {
+            boardswarm_protocol::login_info::Method::Oidc(o) => AuthMethod::Oidc {
+                url: o.url,
+                client_id: o.client_id,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct LoginInfo {
+    pub description: String,
+    pub method: AuthMethod,
+}
+
+#[derive(Clone, Debug)]
 pub struct Boardswarm {
     client: BoardswarmClient<AuthenticatorService<tonic::transport::Channel>>,
 }
 
 impl Boardswarm {
-    pub async fn login_info(&mut self) -> Result<LoginInfoList, tonic::Status> {
+    pub async fn login_info(&mut self) -> Result<Vec<LoginInfo>, tonic::Status> {
         let info = self.client.login_info(()).await?;
+        let info = info.into_inner();
 
-        Ok(info.into_inner())
+        Ok(info
+            .info
+            .into_iter()
+            .filter_map(|i| {
+                Some(LoginInfo {
+                    description: i.description,
+                    method: i.method?.into(),
+                })
+            })
+            .collect())
     }
 
     pub async fn list(&mut self, type_: ItemType) -> Result<Vec<Item>, tonic::Status> {

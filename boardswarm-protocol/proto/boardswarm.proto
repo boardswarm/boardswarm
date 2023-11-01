@@ -34,7 +34,7 @@ message OidcInfo {
 
 message LoginInfo {
    string description = 1;
-   oneof info {
+   oneof method {
         OidcInfo oidc = 2;
    }
 }

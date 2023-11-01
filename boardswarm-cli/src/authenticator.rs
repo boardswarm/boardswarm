@@ -1,29 +1,37 @@
 use std::{sync::Arc, task::Poll};
 
 use futures::future::BoxFuture;
+use tokio::sync::Mutex;
 use tonic::body::BoxBody;
 use tower::{Layer, Service};
+
+use crate::oidc::OidcClient;
 
 #[derive(Clone, Debug, Default)]
 pub enum Authenticator {
     #[default]
     NoAuth,
-    Token {
-        token: String,
-    },
+    Token(String),
+    Oidc(Arc<Mutex<OidcClient>>),
 }
 
 impl Authenticator {
     pub fn from_static<S: Into<String>>(token: S) -> Self {
-        Self::Token {
-            token: token.into(),
-        }
+        Self::Token(token.into())
     }
 
-    pub fn token(&self) -> Option<&str> {
+    pub fn from_oidc(oidc: OidcClient) -> Self {
+        Self::Oidc(Arc::new(Mutex::new(oidc)))
+    }
+
+    pub async fn token(&self) -> Option<String> {
         match self {
             Self::NoAuth => None,
-            Self::Token { ref token } => Some(token),
+            Self::Token(ref token) => Some(token.clone()),
+            Self::Oidc(ref oidc) => {
+                let mut oidc = oidc.lock().await;
+                oidc.access_token().await.ok().map(|s| s.to_string())
+            }
         }
     }
 
@@ -75,7 +83,7 @@ where
         let mut inner = std::mem::replace(&mut self.inner, inner);
 
         Box::pin(async move {
-            if let Some(token) = auth.token() {
+            if let Some(token) = auth.token().await {
                 req.headers_mut().insert(
                     http::header::AUTHORIZATION.as_str(),
                     format!("Bearer {}", token).parse().unwrap(),

@@ -11,13 +11,16 @@ use anyhow::{anyhow, bail, Context};
 use async_compression::futures::bufread::GzipDecoder;
 use bmap_parser::Bmap;
 use boardswarm_cli::{
-    client::{Boardswarm, VolumeIoRW},
+    client::{Boardswarm, BoardswarmBuilder, VolumeIoRW},
+    config,
     device::DeviceVolume,
+    oidc::{OidcClientBuilder, StdoutAuth},
 };
 use boardswarm_protocol::ItemType;
 use bytes::{Bytes, BytesMut};
 use clap::{arg, Args, Parser, Subcommand};
 use futures::{pin_mut, FutureExt, Stream, StreamExt, TryStreamExt};
+use http::Uri;
 use rockfile::boot::{
     RkBootEntry, RkBootEntryBytes, RkBootHeader, RkBootHeaderBytes, RkBootHeaderEntry,
 };
@@ -319,9 +322,27 @@ fn parse_item(item: &str) -> Result<ItemType, anyhow::Error> {
     ))
 }
 
+#[derive(Debug, clap::Parser)]
+struct ConfigureArg {
+    // New instance to be added
+    #[clap(long)]
+    new: bool,
+    #[clap(long)]
+    default: bool,
+    #[clap(short, long)]
+    uri: Option<Uri>,
+    #[clap(short, long)]
+    token: Option<String>,
+    #[clap(long)]
+    token_file: Option<PathBuf>,
+}
+
 #[derive(Debug, Subcommand)]
 enum Command {
-    Login {},
+    // Doesn't need config
+    Configure(ConfigureArg),
+    // Just needs a uri really
+    LoginInfo,
     Actuator {
         actuator: u64,
         #[command(subcommand)]
@@ -371,12 +392,114 @@ enum Command {
     },
 }
 
+async fn run_configure(
+    mut config: config::Config,
+    instance: Option<String>,
+    opts: &ConfigureArg,
+) -> anyhow::Result<()> {
+    if opts.new && instance.is_none() {
+        bail!("New instances require an instance argument");
+    }
+
+    // UGGGG
+    let config_path = config.path().to_owned();
+
+    let current_server = match instance {
+        Some(ref i) => config.find_server_mut(i),
+        None => config.default_server_mut(),
+    };
+
+    match (current_server.is_some(), opts.new) {
+        (true, true) => bail!("Instance already exists"),
+        (false, false) => bail!("Instance not found, use --new to create a new one"),
+        _ => (),
+    }
+
+    let uri = match &current_server {
+        Some(s) => opts.uri.as_ref().unwrap_or(&s.uri),
+        None => opts
+            .uri
+            .as_ref()
+            .ok_or_else(|| anyhow!("New server needs a url"))?,
+    };
+
+    let instance = instance.unwrap_or_else(|| current_server.as_ref().unwrap().name.clone());
+
+    let auth = if let Some(token) = &opts.token {
+        Some(config::Auth::Token(token.clone()))
+    } else if let Some(ref token_path) = opts.token_file {
+        Some(config::Auth::Token(
+            tokio::fs::read_to_string(token_path).await?,
+        ))
+    } else if current_server
+        .as_ref()
+        .map_or(false, |s| matches!(s.auth, config::Auth::Token(_)))
+    {
+        None
+    } else {
+        // OIDC
+        let mut boardswarm = BoardswarmBuilder::new(uri.clone()).connect().await?;
+        let info = boardswarm.login_info().await?;
+
+        // TODO allow user select the !first one
+        let login = info.first().unwrap();
+        println!("Starting login with {}", login.description);
+        match &login.method {
+            boardswarm_cli::client::AuthMethod::Oidc { url, client_id } => {
+                let mut token_file = instance.replace([std::path::MAIN_SEPARATOR, '.'], "_");
+                token_file.push_str(".token");
+                let token_cache = config_path.with_file_name(token_file);
+
+                println!("===> {token_cache:?}");
+                let mut builder = OidcClientBuilder::new(url.parse()?, client_id);
+                builder.token_cache(token_cache.clone());
+
+                let mut oidc = builder.build();
+                oidc.auth().await?;
+                Some(config::Auth::Oidc {
+                    uri: url.parse().unwrap(),
+                    client_id: client_id.clone(),
+                    token_cache,
+                })
+            }
+        }
+    };
+
+    if let Some(mut s) = current_server {
+        if let Some(auth) = auth {
+            s.auth = auth;
+        }
+        if let Some(uri) = &opts.uri {
+            s.uri = uri.clone()
+        }
+        if opts.default {
+            let name = s.name.clone();
+            config.set_default(&name);
+        }
+    } else {
+        let new = config::Server {
+            name: instance.clone(),
+            uri: opts.uri.clone().ok_or_else(|| anyhow!("Missing uri"))?,
+            auth: auth.ok_or_else(|| anyhow!("Missing authentication configuration"))?,
+        };
+        config.add_server(new);
+        if opts.default {
+            config.set_default(&instance);
+        }
+    }
+
+    config.write().await?;
+
+    Ok(())
+}
+
 #[derive(clap::Parser)]
 struct Opts {
     #[clap(short, long)]
-    token: Option<PathBuf>,
-    #[clap(short, long, default_value = "http://localhost:6653")]
-    uri: tonic::transport::Uri,
+    config: Option<PathBuf>,
+    /// instance name
+    #[clap(short, long)]
+    instance: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
@@ -392,33 +515,92 @@ fn print_item(i: boardswarm_protocol::Item) {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt::init();
+
     let opt = Opts::parse();
 
-    println!("Connecting to: {}", opt.uri);
-    let mut build = boardswarm_cli::client::BoardswarmBuilder::new(opt.uri);
-    if let Some(token) = opt.token {
-        let token = tokio::fs::read_to_string(token)
-            .await
-            .context("Failed to read token")?;
-        build.auth_static(token.trim_end())
-    }
-    let mut boardswarm = build.connect().await?;
+    let config_path = opt.config.clone().unwrap_or_else(|| {
+        let mut c = dirs::config_dir().expect("Config directory not found");
+        c.push("boardswarm");
+        c.push("config.yaml");
+        c
+    });
+
+    let config = match boardswarm_cli::config::Config::from_file(&config_path).await {
+        Ok(config) => Some(config),
+        Err(config::Error::IO(e)) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e).context("Failed to load config"),
+    };
+
+    let server = if let Some(ref c) = config {
+        if let Some(ref name) = opt.instance {
+            c.find_server(name)
+        } else {
+            c.default_server()
+        }
+    } else {
+        None
+    };
+
+    // Pre-connection handling
+    let mut boardswarm = match opt.command {
+        Command::Configure(ref configure) => {
+            let config = config
+                .clone()
+                .unwrap_or_else(|| config::Config::new(config_path));
+
+            return run_configure(config, opt.instance, configure).await;
+        }
+        Command::LoginInfo { .. } => {
+            if let Some(server) = server {
+                server.to_boardswarm_builder().connect().await?
+            } else if let Some(ref instance) = opt.instance {
+                let Ok(uri) = instance.parse() else {
+                    return Err(anyhow!("{instance} not a uri and not in configuration"));
+                };
+                BoardswarmBuilder::new(uri).connect().await?
+            } else {
+                return Err(anyhow!(
+                    "default Server should be configured or instance passed"
+                ));
+            }
+        }
+        _ => {
+            if let Some(server) = server {
+                let mut builder: BoardswarmBuilder = server.to_boardswarm_builder();
+                builder.login_provider(StdoutAuth());
+                builder.connect().await?
+            } else if config.is_none() {
+                return Err(anyhow!(
+                    "Configuration file not found; Run configure first?"
+                ));
+            } else if let Some(ref instance) = opt.instance {
+                return Err(anyhow!("{instance} not found in configuration"));
+            } else {
+                return Err(anyhow!("No default instance configured"));
+            }
+        }
+    };
 
     match opt.command {
-        Command::Login {} => {
+        Command::Configure { .. } => {
+            unreachable!()
+        }
+        Command::LoginInfo { .. } => {
             println!("Info: {:#?}", boardswarm.login_info().await?);
             Ok(())
         }
         Command::List { type_ } => {
+            let items = boardswarm.list(type_).await?;
             println!("{:?}s: ", type_);
-            for i in boardswarm.list(type_).await? {
+            for i in items {
                 print_item(i);
             }
             Ok(())
         }
         Command::Monitor { type_ } => {
-            println!("{:?}s: ", type_);
             let events = boardswarm.monitor(type_).await?;
+            println!("{:?}s: ", type_);
             pin_mut!(events);
             while let Some(event) = events.next().await {
                 let event = event?;

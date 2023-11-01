@@ -516,7 +516,7 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
                     client,
                 } => Some(boardswarm_protocol::LoginInfo {
                     description: description.clone(),
-                    info: Some(boardswarm_protocol::login_info::Info::Oidc(
+                    method: Some(boardswarm_protocol::login_info::Method::Oidc(
                         boardswarm_protocol::OidcInfo {
                             url: uri.clone(),
                             client_id: client.clone(),
