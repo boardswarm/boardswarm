@@ -4,5 +4,4 @@ members = [
   "boardswarm",
   "boardswarm-protocol",
   "boardswarm-cli",
-  "pdudaemon-client"
 ]
