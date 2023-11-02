@@ -450,9 +450,9 @@ async fn run_configure(
                 token_file.push_str(".token");
                 let token_cache = config_path.with_file_name(token_file);
 
-                println!("===> {token_cache:?}");
                 let mut builder = OidcClientBuilder::new(url.parse()?, client_id);
                 builder.token_cache(token_cache.clone());
+                builder.login_provider(StdoutAuth());
 
                 let mut oidc = builder.build();
                 oidc.auth().await?;
