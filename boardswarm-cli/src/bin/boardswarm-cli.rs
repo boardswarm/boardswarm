@@ -250,6 +250,19 @@ struct DeviceModeArgs {
 }
 
 #[derive(Debug, Args)]
+struct DeviceReadArg {
+    #[arg(short, long)]
+    offset: Option<u64>,
+    #[arg(short, long)]
+    length: Option<u64>,
+    #[arg(short, long)]
+    wait: bool,
+    volume: String,
+    target: String,
+    file: PathBuf,
+}
+
+#[derive(Debug, Args)]
 struct DeviceWriteArg {
     #[arg(short, long)]
     offset: Option<u64>,
@@ -280,6 +293,7 @@ enum DeviceCommand {
         #[arg(short, long)]
         follow: bool,
     },
+    Read(DeviceReadArg),
     Write(DeviceWriteArg),
     WriteBmap(DeviceBmapWriteArg),
     /// Change device mode
@@ -690,6 +704,42 @@ async fn main() -> anyhow::Result<()> {
             let device = device.device(boardswarm.clone()).await?;
             let device = device.ok_or_else(|| anyhow::anyhow!("Device not found"))?;
             match command {
+                DeviceCommand::Read(DeviceReadArg {
+                    offset,
+                    length,
+                    wait,
+                    volume,
+                    target,
+                    file,
+                }) => {
+                    let mut f = tokio::fs::File::create(file).await?;
+                    let mut volume = device
+                        .volume_by_name(&volume)
+                        .ok_or_else(|| anyhow!("Volume not available for device"))?;
+                    if !volume.available() {
+                        if wait {
+                            println!("Waiting for volume..");
+                            volume.wait().await;
+                        } else {
+                            bail!("volume not available");
+                        }
+                    }
+                    let mut r = volume.open(target, None).await?;
+                    if let Some(offset) = offset {
+                        r.seek(SeekFrom::Start(offset)).await?;
+                    }
+
+                    // For most volumes reading 8K at a time will be rather slow, so use a 1
+                    // megabyte reader
+                    let mut r = BufReader::with_capacity(1024 * 1024, r);
+                    if let Some(length) = length {
+                        let mut r = r.take(length);
+                        tokio::io::copy_buf(&mut r, &mut f).await?;
+                    } else {
+                        tokio::io::copy_buf(&mut r, &mut f).await?;
+                    }
+                    f.flush().await?;
+                }
                 DeviceCommand::Write(DeviceWriteArg {
                     offset,
                     wait,
