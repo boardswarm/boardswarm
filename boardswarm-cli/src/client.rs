@@ -53,11 +53,11 @@ impl BoardswarmBuilder {
         self.auth = Some(auth)
     }
 
-    pub fn login_provider<LP>(&mut self, lp: LP)
-    where
-        LP: LoginProvider + 'static,
-    {
-        self.login_provider = Some(Arc::new(lp));
+    pub fn login_provider<LP: Into<Arc<dyn LoginProvider + 'static>>>(
+        &mut self,
+        login_provider: LP,
+    ) {
+        self.login_provider = Some(login_provider.into());
     }
 
     pub async fn connect(self) -> Result<Boardswarm, tonic::transport::Error> {

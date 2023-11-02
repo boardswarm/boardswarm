@@ -169,6 +169,12 @@ impl LoginProvider for NoAuth {
     }
 }
 
+impl From<NoAuth> for Arc<dyn LoginProvider> {
+    fn from(value: NoAuth) -> Self {
+        Arc::new(value)
+    }
+}
+
 #[derive(Debug)]
 pub struct StdoutAuth();
 
@@ -185,6 +191,12 @@ impl LoginProvider for StdoutAuth {
             println!("or go directly to {}", u);
         }
         request.get_token().await
+    }
+}
+
+impl From<StdoutAuth> for Arc<dyn LoginProvider> {
+    fn from(value: StdoutAuth) -> Self {
+        Arc::new(value)
     }
 }
 
