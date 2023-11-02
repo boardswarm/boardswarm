@@ -129,9 +129,7 @@ async fn rock_download_entry(
         let entry = RkBootEntry::from_bytes(&entry);
         println!("{} Name: {}", i, String::from_utf16(entry.name.as_slice())?);
 
-        let mut data = Vec::new();
-        data.resize(entry.data_size as usize, 0);
-
+        let mut data = vec![0; entry.data_size as usize];
         file.seek(SeekFrom::Start(entry.data_offset as u64)).await?;
         file.read_exact(&mut data).await?;
 
@@ -479,7 +477,7 @@ async fn run_configure(
         }
     };
 
-    if let Some(mut s) = current_server {
+    if let Some(s) = current_server {
         if let Some(auth) = auth {
             s.auth = auth;
         }
