@@ -1,3 +1,4 @@
+use anyhow::bail;
 use boardswarm_protocol::item_event::Event;
 use boardswarm_protocol::{
     console_input_request, volume_io_reply, volume_io_request, ConsoleConfigureRequest,
@@ -942,7 +943,7 @@ async fn main() -> anyhow::Result<()> {
         (None, None) => SocketAddr::new("::1".parse().unwrap(), boardswarm_protocol::DEFAULT_PORT),
     };
 
-    let authentication = config
+    let authentication: Vec<_> = config
         .server
         .authentication
         .iter()
@@ -956,6 +957,10 @@ async fn main() -> anyhow::Result<()> {
             }
         })
         .collect();
+
+    if authentication.is_empty() {
+        bail!("No authentication methods found in configuration");
+    }
 
     let server = Server::new(
         authentication,
