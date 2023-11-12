@@ -1,6 +1,6 @@
 [package]
 name = "boardswarm-cli"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -15,7 +15,7 @@ features = "0.10.0"
 futures = "0.3.25"
 mprocs-vt100 = "0.1.1"
 nix = "0.26.1"
-boardswarm-protocol = { version = "0.1.0", path = "../boardswarm-protocol" }
+boardswarm-protocol = { version = "0.0.1", path = "../boardswarm-protocol" }
 tokio = { version = "1.30.0", features = ["full"] }
 tokio-util = { version = "0.7.4", features = ["compat"] }
 tonic = { version = "0.10", features = ["tls", "tls-roots"] }
