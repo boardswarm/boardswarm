@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -12,7 +13,6 @@ use tokio::join;
 use tokio::sync::broadcast;
 use tonic::transport::Uri;
 use tracing::info;
-use tracing::trace;
 use tracing::warn;
 
 use crate::{registry::Properties, Server};
@@ -30,6 +30,7 @@ mod volume;
 #[derive(Deserialize, Debug)]
 struct BoardswarmParameters {
     uri: String,
+    token: PathBuf,
 }
 
 pub struct Provider {
@@ -204,11 +205,20 @@ pub fn start_provider(name: String, parameters: serde_yaml::Value, server: Serve
     let uri: Uri = parameters.uri.parse().unwrap();
 
     tokio::spawn(async move {
+        let token_path = server.config_dir().join(parameters.token);
+        let token = match tokio::fs::read_to_string(token_path).await {
+            Ok(token) => token.trim_end().to_string(),
+            Err(e) => {
+                warn!("Failed to read token for {name}: {e}");
+                return;
+            }
+        };
         loop {
             let _span = tracing::span!(tracing::Level::INFO, "boardswarm", name);
-            let boardswarm = BoardswarmBuilder::new(uri.clone());
+            let mut boardswarm = BoardswarmBuilder::new(uri.clone());
+            boardswarm.auth_static(&token);
             if let Ok(remote) = boardswarm.connect().await {
-                trace!("Connected to {}", name);
+                info!("Connected to {}", name);
                 let consoles = monitor_items(
                     provider.clone(),
                     ItemType::Console,
