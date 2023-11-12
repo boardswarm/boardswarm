@@ -12,7 +12,7 @@ use futures::Sink;
 use jwt_authorizer::{Authorizer, IntoLayer, JwtAuthorizer, RegisteredClaims};
 use registry::{Properties, Registry};
 use std::net::{AddrParseError, SocketAddr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use thiserror::Error;
@@ -345,6 +345,7 @@ trait Device: Send + Sync {
 }
 
 struct ServerInner {
+    config_dir: PathBuf,
     auth_info: Vec<config::Authentication>,
     devices: Registry<Arc<dyn Device>>,
     consoles: Registry<Arc<dyn Console>>,
@@ -371,16 +372,21 @@ pub struct Server {
 }
 
 impl Server {
-    fn new(auth_info: Vec<config::Authentication>) -> Self {
+    fn new(auth_info: Vec<config::Authentication>, config_dir: PathBuf) -> Self {
         Self {
             inner: Arc::new(ServerInner {
                 auth_info,
+                config_dir,
                 consoles: Registry::new(),
                 devices: Registry::new(),
                 actuators: Registry::new(),
                 volumes: Registry::new(),
             }),
         }
+    }
+
+    fn config_dir(&self) -> &Path {
+        &self.inner.config_dir
     }
 
     fn register_actuator<A>(&self, properties: Properties, actuator: A) -> u64
@@ -951,7 +957,13 @@ async fn main() -> anyhow::Result<()> {
         })
         .collect();
 
-    let server = Server::new(authentication);
+    let server = Server::new(
+        authentication,
+        opts.config
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf(),
+    );
     for d in config.devices {
         let device = crate::config_device::Device::from_config(d, server.clone());
         let properties = Properties::new(device.name());
