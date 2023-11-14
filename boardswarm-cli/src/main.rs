@@ -10,7 +10,7 @@ use std::{
 use anyhow::{anyhow, bail, Context};
 use async_compression::futures::bufread::GzipDecoder;
 use bmap_parser::Bmap;
-use boardswarm_cli::{
+use boardswarm_client::{
     client::{Boardswarm, BoardswarmBuilder, VolumeIoRW},
     config,
     device::DeviceVolume,
@@ -29,8 +29,12 @@ use tokio::{
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader},
 };
 
-use boardswarm_cli::client::ItemEvent;
+use boardswarm_client::client::ItemEvent;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+
+mod ui;
+mod ui_term;
+mod utils;
 
 fn find_bmap(img: &Path) -> Option<PathBuf> {
     fn append(path: PathBuf) -> PathBuf {
@@ -63,7 +67,7 @@ async fn write_bmap(io: VolumeIoRW, path: &Path) -> anyhow::Result<()> {
     let bmap = Bmap::from_xml(&xml)?;
 
     let blocksize = io.blocksize().unwrap_or(4096) as usize * 128;
-    let mut writer = boardswarm_cli::utils::BatchWriter::new(io, blocksize).compat_write();
+    let mut writer = utils::BatchWriter::new(io, blocksize).compat_write();
 
     let file = tokio::fs::File::open(path).await?;
     match path.extension().and_then(std::ffi::OsStr::to_str) {
@@ -219,8 +223,8 @@ impl DeviceArg {
     async fn device(
         &self,
         client: Boardswarm,
-    ) -> Result<Option<boardswarm_cli::device::Device>, anyhow::Error> {
-        let builder = boardswarm_cli::device::DeviceBuilder::from_client(client);
+    ) -> Result<Option<boardswarm_client::device::Device>, anyhow::Error> {
+        let builder = boardswarm_client::device::DeviceBuilder::from_client(client);
         match self {
             DeviceArg::Id(id) => Ok(Some(builder.by_id(*id).await?)),
             DeviceArg::Name(name) => Ok(builder.by_name(name).await?),
@@ -457,7 +461,7 @@ async fn run_configure(
         let login = info.first().unwrap();
         println!("Starting login with {}", login.description);
         match &login.method {
-            boardswarm_cli::client::AuthMethod::Oidc { url, client_id } => {
+            boardswarm_client::client::AuthMethod::Oidc { url, client_id } => {
                 let mut token_file = instance.replace([std::path::MAIN_SEPARATOR, '.'], "_");
                 token_file.push_str(".token");
                 let token_cache = config_path.with_file_name(token_file);
@@ -538,7 +542,7 @@ async fn main() -> anyhow::Result<()> {
         c
     });
 
-    let config = match boardswarm_cli::config::Config::from_file(&config_path).await {
+    let config = match boardswarm_client::config::Config::from_file(&config_path).await {
         Ok(config) => Some(config),
         Err(config::Error::IO(e)) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(e).context("Failed to load config"),
@@ -886,7 +890,7 @@ async fn main() -> anyhow::Result<()> {
                 .device(boardswarm)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("Device not found"))?;
-            boardswarm_cli::ui::run_ui(device, console.console).await
+            ui::run_ui(device, console.console).await
         }
     }
 }

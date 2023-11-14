@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use boardswarm_cli::client::BoardswarmBuilder;
-use boardswarm_cli::client::{Boardswarm, ItemEvent};
+use boardswarm_client::client::BoardswarmBuilder;
+use boardswarm_client::client::{Boardswarm, ItemEvent};
 use boardswarm_protocol::ItemType;
 use futures::{pin_mut, TryStreamExt};
 use serde::Deserialize;

@@ -16,6 +16,8 @@ use tui::{
 use futures::{pin_mut, ready, Stream, StreamExt};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
+use crate::ui_term;
+
 struct Terminal {
     parser: vt100::Parser,
     tui: TuiTerminal<CrosstermBackend<std::io::Stdout>>,
@@ -55,7 +57,7 @@ impl Terminal {
 
     async fn update(&mut self) {
         let screen = self.parser.screen();
-        let term = crate::ui_term::UiTerm::new(screen);
+        let term = ui_term::UiTerm::new(screen);
         self.tui
             .draw(|f| {
                 let size = f.size();
@@ -142,7 +144,10 @@ where
     }
 }
 
-pub async fn run_ui(device: crate::device::Device, console: Option<String>) -> anyhow::Result<()> {
+pub async fn run_ui(
+    device: boardswarm_client::device::Device,
+    console: Option<String>,
+) -> anyhow::Result<()> {
     enable_raw_mode()?;
 
     let mut stdout = std::io::stdout();

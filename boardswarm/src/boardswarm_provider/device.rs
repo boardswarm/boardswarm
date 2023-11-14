@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use boardswarm_cli::client::Boardswarm;
+use boardswarm_client::client::Boardswarm;
 use futures::{pin_mut, Stream, StreamExt};
 use tokio::sync::broadcast;
 use tracing::{trace, warn};

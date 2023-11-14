@@ -1,4 +1,4 @@
-use boardswarm_cli::client::{Boardswarm, VolumeIo};
+use boardswarm_client::client::{Boardswarm, VolumeIo};
 use bytes::Bytes;
 
 use crate::{Volume, VolumeError, VolumeTarget, VolumeTargetInfo};

@@ -1,4 +1,4 @@
-use boardswarm_cli::client::Boardswarm;
+use boardswarm_client::client::Boardswarm;
 use boardswarm_protocol::Parameters;
 use serde::Deserialize;
 

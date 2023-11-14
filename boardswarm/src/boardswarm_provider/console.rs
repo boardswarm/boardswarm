@@ -1,6 +1,6 @@
 use std::{pin::Pin, sync::Mutex};
 
-use boardswarm_cli::client::Boardswarm;
+use boardswarm_client::client::Boardswarm;
 use boardswarm_protocol::Parameters;
 use bytes::Bytes;
 use futures::StreamExt;

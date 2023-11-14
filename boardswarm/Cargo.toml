@@ -29,7 +29,7 @@ erased-serde = "0.3.24"
 tokio-stream = { version = "0.1.11", features = ["sync"] }
 dfu-libusb = "0.5.0"
 rusb = "0.9.1"
-boardswarm-cli = { version = "0.0.1", path = "../boardswarm-cli" }
+boardswarm-client = { version = "0.0.1", path = "../boardswarm-client" }
 tokio-gpiod = "0.2.3"
 rockusb = "0.1.1"
 jwt-authorizer = { version = "0.12", features = [ "tonic" ] }
