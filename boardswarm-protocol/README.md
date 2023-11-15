@@ -1,0 +1,1 @@
+# Boardswarm protocol definition
