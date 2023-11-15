@@ -2,8 +2,9 @@
 name = "boardswarm"
 version = "0.0.1"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+authors = ["Sjoerd Simons <sjoerd@collabora.com>"]
+license = "MIT OR Apache-2.0"
+description = "Boardswarm server"
 
 [dependencies]
 anyhow = "1.0.68"

@@ -2,6 +2,9 @@
 name = "boardswarm-client"
 version = "0.0.1"
 edition = "2021"
+authors = ["Sjoerd Simons <sjoerd@collabora.com>"]
+license = "MIT OR Apache-2.0"
+description = "Boardswarm client library"
 
 [dependencies]
 anyhow = "1.0.68"
