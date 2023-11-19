@@ -981,24 +981,26 @@ async fn main() -> anyhow::Result<()> {
     let local = tokio::task::LocalSet::new();
     for p in config.providers {
         match p.provider.as_str() {
-            "dfu" => {
-                local.spawn_local(dfu::start_provider(server.clone()));
+            dfu::PROVIDER => {
+                local.spawn_local(dfu::start_provider(p.name, server.clone()));
             }
-            "rockusb" => {
-                local.spawn_local(rockusb::start_provider(server.clone()));
+            rockusb::PROVIDER => {
+                local.spawn_local(rockusb::start_provider(p.name, server.clone()));
             }
-            "serial" => {
-                local.spawn_local(serial::start_provider(server.clone()));
+            serial::PROVIDER => {
+                local.spawn_local(serial::start_provider(p.name, server.clone()));
             }
-            "gpio" => {
+            gpio::PROVIDER => {
                 local.spawn_local(gpio::start_provider(
                     p.name,
                     p.parameters.unwrap(),
                     server.clone(),
                 ));
             }
-            "pdudaemon" => pdudaemon::start_provider(p.name, p.parameters.unwrap(), server.clone()),
-            "boardswarm" => {
+            pdudaemon::PROVIDER => {
+                pdudaemon::start_provider(p.name, p.parameters.unwrap(), server.clone())
+            }
+            boardswarm_provider::PROVIDER => {
                 boardswarm_provider::start_provider(p.name, p.parameters.unwrap(), server.clone())
             }
             t => warn!("Unknown provider: {t}"),

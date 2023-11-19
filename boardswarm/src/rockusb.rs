@@ -11,9 +11,16 @@ use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{info, warn};
 
-use crate::{udev::DeviceEvent, Server, Volume, VolumeError, VolumeTarget, VolumeTargetInfo};
+use crate::{
+    registry, udev::DeviceEvent, Server, Volume, VolumeError, VolumeTarget, VolumeTargetInfo,
+};
 
-pub async fn start_provider(server: Server) {
+pub const PROVIDER: &str = "rockusb";
+pub async fn start_provider(name: String, server: Server) {
+    let provider_properties = &[
+        (registry::PROVIDER_NAME, name.as_str()),
+        (registry::PROVIDER, PROVIDER),
+    ];
     let mut registrations = HashMap::new();
     let mut devices = crate::udev::DeviceStream::new("usb").unwrap();
     while let Some(d) = devices.next().await {
@@ -39,7 +46,9 @@ pub async fn start_provider(server: Server) {
 
                 match Rockusb::new(busnum, devnum).await {
                     Ok(rockusb) => {
-                        let id = server.register_volume(d.properties(name), rockusb);
+                        let mut properties = d.properties(name);
+                        properties.extend(provider_properties);
+                        let id = server.register_volume(properties, rockusb);
                         registrations.insert(d.syspath().to_path_buf(), id);
                     }
                     Err(e) => {

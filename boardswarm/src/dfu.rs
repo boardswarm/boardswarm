@@ -9,9 +9,16 @@ use tokio::sync::{
 };
 use tracing::{info, warn};
 
-use crate::{udev::DeviceEvent, Server, Volume, VolumeError, VolumeTarget, VolumeTargetInfo};
+use crate::{
+    registry, udev::DeviceEvent, Server, Volume, VolumeError, VolumeTarget, VolumeTargetInfo,
+};
+pub const PROVIDER: &str = "dfu";
 
-pub async fn start_provider(server: Server) {
+pub async fn start_provider(name: String, server: Server) {
+    let provider_properties = &[
+        (registry::PROVIDER_NAME, name.as_str()),
+        (registry::PROVIDER, PROVIDER),
+    ];
     let mut registrations = HashMap::new();
     let mut devices = crate::udev::DeviceStream::new("usb").unwrap();
     while let Some(d) = devices.next().await {
@@ -33,7 +40,9 @@ pub async fn start_provider(server: Server) {
                 };
 
                 let dfu = Dfu::new(busnum, devnum).await;
-                let id = server.register_volume(d.properties(name), dfu);
+                let mut properties = d.properties(name);
+                properties.extend(provider_properties);
+                let id = server.register_volume(properties, dfu);
                 registrations.insert(d.syspath().to_path_buf(), id);
             }
             DeviceEvent::Remove(d) => {

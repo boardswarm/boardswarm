@@ -101,6 +101,10 @@ providers:
       <provider specific>
 ```
 
+For each item created by a provider the `boardswarm.provider.name` property
+is set to the configured name and the `boardswarm.provider` property is set to
+the provider used.
+
 ### Serial provider
 
 The serial provider creates consoles from local serial ports. No provider specific

@@ -19,7 +19,13 @@ use tokio::{
 };
 use tokio_serial::{SerialPortBuilderExt, SerialStream};
 
-pub async fn start_provider(server: Server) {
+pub const PROVIDER: &str = "serial";
+
+pub async fn start_provider(name: String, server: Server) {
+    let provider_properties = &[
+        (registry::PROVIDER_NAME, name.as_str()),
+        (registry::PROVIDER, PROVIDER),
+    ];
     let mut registrations = HashMap::new();
     let mut devices = crate::udev::DeviceStream::new("tty").unwrap();
     while let Some(d) = devices.next().await {
@@ -33,7 +39,9 @@ pub async fn start_provider(server: Server) {
                         let name = name.to_string_lossy().into_owned();
                         let path = node.to_string_lossy().into_owned();
                         let console = SerialPort::new(path);
-                        let id = server.register_console(d.properties(name), console);
+                        let mut properties = d.properties(name);
+                        properties.extend(provider_properties);
+                        let id = server.register_console(properties, console);
                         registrations.insert(d.syspath().to_path_buf(), id);
                     }
                 }
@@ -59,7 +67,7 @@ pub(crate) struct SerialPort {
     rate: Mutex<u32>,
     open: AsyncMutex<Option<SerialOpen>>,
 }
-use crate::{udev::DeviceEvent, ConsoleError, Server};
+use crate::{registry, udev::DeviceEvent, ConsoleError, Server};
 
 impl SerialPort {
     pub fn new(path: String) -> Self {
