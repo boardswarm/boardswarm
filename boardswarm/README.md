@@ -94,8 +94,8 @@ provider is configured in the `providers` section of the configuration file
 using the following generic setup:
 ```
 providers:
-  - name: provider1 # The name of the provider
-    type: providertype: # The type of the profider
+  - name: myprovider # The name of the provider
+    provider: provider # The provider to use
     # Optional device specific parameters
     parameters:
       <provider specific>
@@ -113,7 +113,7 @@ Example configuration:
 ```
 provider:
   - name: serial
-    type: serial
+    provider: serial
 ```
 
 ### Device Firmware Update provider (dfu)
@@ -131,7 +131,7 @@ Example configuration:
 ```
 provider:
   - name: dfu
-    type: dfu
+    provider: dfu
 ```
 
 ### Rock USB provider (rockusb)
@@ -153,7 +153,7 @@ Example configuration:
 ```
 provider:
   - name: rockusb
-    type: rockusb
+    provider: rockusb
 ```
 
 ### pdudaemon provider
@@ -171,7 +171,7 @@ Example configuration:
 ```
 provider:
   - name: pdu
-    type: pdudaemon
+    provider: pdudaemon
     # Configuration parameters for this provider
     parameters:
       # Uri of the pdudaemon server
@@ -205,7 +205,7 @@ Example configuration:
 ```
 providers:
   - name: "rpi header gpio"
-    type: gpio
+    provider: gpio
     parameters:
       # the match has a list of udev properties to match against in similar
       # syntax as the eventual expose item. The example below matches the
@@ -237,7 +237,7 @@ providers:
   # The boardswarm provider connects to a remote boardswarm instance as a
   # client and exposes all remote items as local ones.
   - name: remote
-    type: boardswarm
+    provider: boardswarm
     parameters:
         # The uri of the remote server
         uri: http://remote.example.net:6683

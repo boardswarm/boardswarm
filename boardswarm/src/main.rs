@@ -980,7 +980,7 @@ async fn main() -> anyhow::Result<()> {
 
     let local = tokio::task::LocalSet::new();
     for p in config.providers {
-        match p.type_.as_str() {
+        match p.provider.as_str() {
             "dfu" => {
                 local.spawn_local(dfu::start_provider(server.clone()));
             }
@@ -1001,7 +1001,7 @@ async fn main() -> anyhow::Result<()> {
             "boardswarm" => {
                 boardswarm_provider::start_provider(p.name, p.parameters.unwrap(), server.clone())
             }
-            t => warn!("Unknown provider type: {t}"),
+            t => warn!("Unknown provider: {t}"),
         }
     }
 
