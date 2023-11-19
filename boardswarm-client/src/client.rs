@@ -678,16 +678,18 @@ impl AsyncWrite for VolumeIoRW {
                 }
                 IoWrapperState::ReserveRequest(ref mut r) => match ready!(r.as_mut().poll(cx)) {
                     Ok(p) => {
+                        // Limit size to 3 MB to stay below the default max 4MB gRPC message size
+                        let max_write_size = buf.len().min(3 * 1024 * 1024);
                         let len = if let Some(blocksize) = me.blocksize() {
                             let blocksize = blocksize as usize;
-                            if buf.len() > blocksize {
-                                (buf.len() / blocksize) * blocksize
+                            if max_write_size > blocksize {
+                                (max_write_size / blocksize) * blocksize
                             } else {
                                 // TODO cache?
-                                buf.len()
+                                max_write_size
                             }
                         } else {
-                            buf.len()
+                            max_write_size
                         };
                         let bytes = Bytes::copy_from_slice(&buf[0..len]);
                         let (request, write) = VolumeIo::prepare_write(bytes, me.pos);
