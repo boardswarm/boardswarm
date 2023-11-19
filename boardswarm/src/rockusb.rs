@@ -376,8 +376,11 @@ fn handle_io(
                 let mut data = BytesMut::zeroed(length as usize);
                 let r = io
                     .seek(SeekFrom::Start(offset))
-                    .and_then(|_| io.read_exact(&mut data))
-                    .map(|()| data.into());
+                    .and_then(|_| io.read(&mut data))
+                    .map(|read| {
+                        data.truncate(read);
+                        data.into()
+                    });
                 let _ = tx.send(r);
             }
             RockUsbIO::Flush(tx) => {
