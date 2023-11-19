@@ -636,7 +636,8 @@ impl VolumeIoRW {
 
     fn copy_buffered_read(&mut self, buf: &mut tokio::io::ReadBuf<'_>) -> bool {
         if !self.buffered_read.is_empty() {
-            let tocopy = self.buffered_read.split_to(buf.remaining());
+            let available = buf.remaining().min(self.buffered_read.len());
+            let tocopy = self.buffered_read.split_to(available);
             buf.put_slice(&tocopy);
             self.pos = self.pos.saturating_add(tocopy.len() as u64);
             true
