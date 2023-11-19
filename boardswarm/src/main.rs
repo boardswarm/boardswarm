@@ -47,7 +47,10 @@ trait Actuator: std::fmt::Debug + Send + Sync {
 }
 
 #[derive(Error, Debug)]
-pub enum ConsoleError {}
+pub enum ConsoleError {
+    #[error("Console was closed")]
+    Closed,
+}
 
 #[async_trait::async_trait]
 trait Console: std::fmt::Debug + Send + Sync {

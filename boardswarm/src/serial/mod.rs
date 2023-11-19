@@ -8,6 +8,7 @@ use std::{
     sync::{Arc, Mutex},
     task::{Context, Poll},
 };
+use tracing::warn;
 
 use anyhow::Result;
 use futures::prelude::*;
@@ -81,6 +82,10 @@ impl SerialPort {
             loop {
                 let mut data = BytesMut::zeroed(1024);
                 let r = read.read(&mut data).await.unwrap();
+                // Exit on EOF
+                if r == 0 {
+                    break;
+                }
                 data.truncate(r);
                 let _ = b_clone.send(data.freeze());
             }
@@ -182,12 +187,11 @@ impl Stream for SerialPortOutput {
 async fn recv_data(
     mut rx: broadcast::Receiver<Bytes>,
 ) -> (Result<Bytes, ConsoleError>, broadcast::Receiver<Bytes>) {
-    loop {
-        match rx.recv().await {
-            Ok(data) => {
-                return (Ok(data), rx);
-            }
-            Err(e) => eprintln!("{:?}", e),
+    match rx.recv().await {
+        Ok(data) => (Ok(data), rx),
+        Err(e) => {
+            warn!("Device errored: {:?}", e);
+            (Err(ConsoleError::Closed), rx)
         }
     }
 }
