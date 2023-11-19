@@ -8,6 +8,8 @@ use tokio::sync::broadcast::Receiver;
 
 pub const NAME: &str = "boardswarm.name";
 pub const INSTANCE: &str = "boardswarm.instance";
+pub const PROVIDER: &str = "boardswarm.provider";
+pub const PROVIDER_NAME: &str = "boardswarm.provider.name";
 
 #[derive(Clone, Debug)]
 pub struct Properties {
@@ -65,6 +67,30 @@ impl Properties {
 
     pub fn iter(&self) -> impl Iterator<Item = (&String, &String)> {
         self.properties.iter()
+    }
+}
+
+impl<K, V> Extend<(K, V)> for Properties
+where
+    K: Into<String>,
+    V: Into<String>,
+{
+    fn extend<T: IntoIterator<Item = (K, V)>>(&mut self, iter: T) {
+        for (key, value) in iter.into_iter() {
+            self.properties.insert(key.into(), value.into());
+        }
+    }
+}
+
+impl<'a, K, V> Extend<&'a (K, V)> for Properties
+where
+    K: ToString,
+    V: ToString,
+{
+    fn extend<T: IntoIterator<Item = &'a (K, V)>>(&mut self, iter: T) {
+        for (key, value) in iter.into_iter() {
+            self.properties.insert(key.to_string(), value.to_string());
+        }
     }
 }
 

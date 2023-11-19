@@ -1,7 +1,12 @@
 use pdudaemon_client::PduDaemon;
 use serde::Deserialize;
 
-use crate::{registry::Properties, Server};
+use crate::{
+    registry::{self, Properties},
+    Server,
+};
+
+pub const PROVIDER: &str = "pdudaemon";
 
 #[derive(Deserialize, Debug)]
 #[serde(untagged)]
@@ -24,6 +29,10 @@ struct PduDaemonParameters {
 
 pub fn start_provider(name: String, parameters: serde_yaml::Value, server: Server) {
     let parameters: PduDaemonParameters = serde_yaml::from_value(parameters).unwrap();
+    let provider_properties = &[
+        (registry::PROVIDER_NAME, name.as_str()),
+        (registry::PROVIDER, PROVIDER),
+    ];
 
     let daemon = PduDaemon::new(&parameters.uri).unwrap();
     for pdu in parameters.pdus {
@@ -31,7 +40,8 @@ pub fn start_provider(name: String, parameters: serde_yaml::Value, server: Serve
             Ports::Num(ports) => {
                 for i in 1..=ports {
                     let name = format!("{}.{}.port-{}", name, pdu.name, i);
-                    let properties = Properties::new(name);
+                    let mut properties = Properties::new(name);
+                    properties.extend(provider_properties);
                     let actuator =
                         PduDaemonActuator::new(daemon.clone(), pdu.name.clone(), i.to_string());
                     server.register_actuator(properties, actuator);
@@ -40,7 +50,8 @@ pub fn start_provider(name: String, parameters: serde_yaml::Value, server: Serve
             Ports::Ports(ports) => {
                 for i in ports {
                     let name = format!("{}.{}.port-{}", name, pdu.name, i);
-                    let properties = Properties::new(name);
+                    let mut properties = Properties::new(name);
+                    properties.extend(provider_properties);
                     let actuator =
                         PduDaemonActuator::new(daemon.clone(), pdu.name.clone(), i.to_string());
                     server.register_actuator(properties, actuator);

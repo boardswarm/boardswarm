@@ -11,6 +11,8 @@ use crate::{
     Server,
 };
 
+pub const PROVIDER: &str = "gpio";
+
 #[derive(Deserialize, Debug)]
 struct Line {
     line_name: Option<String>,
@@ -35,10 +37,13 @@ impl GpioParameters {
     }
 }
 
-pub async fn start_provider(_name: String, parameters: serde_yaml::Value, server: Server) {
+pub async fn start_provider(name: String, parameters: serde_yaml::Value, server: Server) {
+    let provider_properties = &[
+        (registry::PROVIDER_NAME, name.as_str()),
+        (registry::PROVIDER, PROVIDER),
+    ];
     let parameters: GpioParameters = serde_yaml::from_value(parameters).unwrap();
     let mut registration = None;
-
     let mut devices = crate::udev::DeviceStream::new("gpio").unwrap();
     while let Some(d) = devices.next().await {
         match d {
@@ -49,7 +54,7 @@ pub async fn start_provider(_name: String, parameters: serde_yaml::Value, server
                 if let Some(path) = d.devnode() {
                     if let Some(name) = path.file_name() {
                         let name = name.to_string_lossy().into_owned();
-                        let properties = d.properties(name);
+                        let mut properties = d.properties(name);
 
                         info!(
                             "GPIO?: {} - {} - {} - {:?}",
@@ -60,6 +65,7 @@ pub async fn start_provider(_name: String, parameters: serde_yaml::Value, server
                         );
 
                         if properties.matches(&parameters.match_) {
+                            properties.extend(provider_properties);
                             if let Some(ids) = setup_gpio_chip(
                                 path.to_path_buf(),
                                 &parameters,

@@ -27,6 +27,8 @@ mod console;
 mod device;
 mod volume;
 
+pub const PROVIDER: &str = "boardswarm";
+
 #[derive(Deserialize, Debug)]
 struct BoardswarmParameters {
     uri: String,
