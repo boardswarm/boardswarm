@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use pdudaemon_client::PduDaemon;
 use serde::Deserialize;
 
@@ -27,6 +29,26 @@ struct PduDaemonParameters {
     pdus: Vec<Pdu>,
 }
 
+fn setup_actuator<D: Display>(
+    server: &Server,
+    daemon: &PduDaemon,
+    name: &str,
+    provider_properties: &[(&str, &str)],
+    pdu_name: &str,
+    port: D,
+) {
+    let name = format!("{}.{}.port-{}", name, pdu_name, port);
+    let port_name = port.to_string();
+
+    let mut properties = Properties::new(name);
+    properties.extend(provider_properties);
+    properties.insert("pdudaemon.pdu", pdu_name);
+    properties.insert("pdudaemon.port", port_name.clone());
+
+    let actuator = PduDaemonActuator::new(daemon.clone(), pdu_name.to_string(), port_name);
+    server.register_actuator(properties, actuator);
+}
+
 pub fn start_provider(name: String, parameters: serde_yaml::Value, server: Server) {
     let parameters: PduDaemonParameters = serde_yaml::from_value(parameters).unwrap();
     let provider_properties = &[
@@ -39,22 +61,12 @@ pub fn start_provider(name: String, parameters: serde_yaml::Value, server: Serve
         match pdu.ports {
             Ports::Num(ports) => {
                 for i in 1..=ports {
-                    let name = format!("{}.{}.port-{}", name, pdu.name, i);
-                    let mut properties = Properties::new(name);
-                    properties.extend(provider_properties);
-                    let actuator =
-                        PduDaemonActuator::new(daemon.clone(), pdu.name.clone(), i.to_string());
-                    server.register_actuator(properties, actuator);
+                    setup_actuator(&server, &daemon, &name, provider_properties, &pdu.name, i);
                 }
             }
             Ports::Ports(ports) => {
                 for i in ports {
-                    let name = format!("{}.{}.port-{}", name, pdu.name, i);
-                    let mut properties = Properties::new(name);
-                    properties.extend(provider_properties);
-                    let actuator =
-                        PduDaemonActuator::new(daemon.clone(), pdu.name.clone(), i.to_string());
-                    server.register_actuator(properties, actuator);
+                    setup_actuator(&server, &daemon, &name, provider_properties, &pdu.name, i);
                 }
             }
         }
