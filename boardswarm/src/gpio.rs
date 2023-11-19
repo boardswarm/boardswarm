@@ -141,7 +141,9 @@ async fn setup_gpio_line(
 ) -> u64 {
     let info = chip.line_info(line).await.unwrap();
     properties.insert(registry::NAME, name);
-    properties.insert("gpio.line_name", info.name);
+    if !info.name.is_empty() {
+        properties.insert("gpio.line_name", info.name);
+    }
     properties.insert("gpio.line_number", format!("{}", line));
     let opts = tokio_gpiod::Options::output([line])
         .drive(tokio_gpiod::Drive::PushPull)
