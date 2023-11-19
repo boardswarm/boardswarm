@@ -2,7 +2,6 @@ use std::{
     cmp::Ordering,
     convert::Infallible,
     io::SeekFrom,
-    os::unix::prelude::AsRawFd,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -99,12 +98,11 @@ where
 
 fn input_stream() -> impl Stream<Item = Bytes> {
     let stdin = tokio::io::stdin();
-    let stdin_fd = stdin.as_raw_fd();
 
-    let mut stdin_termios = nix::sys::termios::tcgetattr(stdin_fd).unwrap();
+    let mut stdin_termios = nix::sys::termios::tcgetattr(&stdin).unwrap();
 
     nix::sys::termios::cfmakeraw(&mut stdin_termios);
-    nix::sys::termios::tcsetattr(stdin_fd, nix::sys::termios::SetArg::TCSANOW, &stdin_termios)
+    nix::sys::termios::tcsetattr(&stdin, nix::sys::termios::SetArg::TCSANOW, &stdin_termios)
         .unwrap();
 
     futures::stream::unfold(stdin, |mut stdin| async move {

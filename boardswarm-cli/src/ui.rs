@@ -1,4 +1,4 @@
-use std::{os::unix::prelude::AsRawFd, task::Poll};
+use std::{os::fd::AsFd, task::Poll};
 
 use bytes::Bytes;
 use crossterm::{
@@ -162,13 +162,16 @@ pub async fn run_ui(
     })?;
 
     let stdin = tokio::io::stdin();
-    let stdin_fd = stdin.as_raw_fd();
-    let stdin_termios = nix::sys::termios::tcgetattr(stdin_fd).unwrap();
+    let stdin_fd = stdin
+        .as_fd()
+        .try_clone_to_owned()
+        .expect("Couldn't clone stdin fd");
+    let stdin_termios = nix::sys::termios::tcgetattr(&stdin).unwrap();
 
     let mut stdin_termios_mod = stdin_termios.clone();
     nix::sys::termios::cfmakeraw(&mut stdin_termios_mod);
     nix::sys::termios::tcsetattr(
-        stdin_fd,
+        &stdin,
         nix::sys::termios::SetArg::TCSANOW,
         &stdin_termios_mod,
     )
