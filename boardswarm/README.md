@@ -209,6 +209,11 @@ number (see the output of the `gpioinfo` command to determine the lines/names).
 Actuators provided a `value` parameter which takes a boolean value to turn the
 gpio line high or low.
 
+Each item created by this provider will have a following properties:
+* `gpio.chip_label`: label of the used GPIO chip
+* `gpio.line_number`: number of the gpio line used
+* `gpio.line_name`: name of the gpio line used if available
+
 Example configuration:
 ```
 providers:
