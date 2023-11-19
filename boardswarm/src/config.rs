@@ -44,8 +44,7 @@ pub struct Certificate {
 #[derive(Debug, Deserialize)]
 pub struct Provider {
     pub name: String,
-    #[serde(rename = "type")]
-    pub type_: String,
+    pub provider: String,
     pub parameters: Option<serde_yaml::Value>,
 }
 
