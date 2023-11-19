@@ -164,6 +164,7 @@ async fn rock_download_boot(volume: &mut DeviceVolume, path: &Path) -> anyhow::R
 
 #[derive(Debug, Args)]
 struct ActuatorMode {
+    /// Actuator specific mode in json format
     mode: String,
 }
 
@@ -175,6 +176,7 @@ enum ActuatorCommand {
 
 #[derive(Debug, Args)]
 struct ConsoleConfigure {
+    /// Console specific configure in json format
     configuration: String,
 }
 
@@ -190,24 +192,30 @@ enum ConsoleCommand {
 
 #[derive(Debug, Args)]
 struct WriteArgs {
+    /// Offset in bytes to write to
     #[clap(short, long)]
     offset: Option<u64>,
+    /// Target to write to
     target: String,
+    /// File to write
     file: PathBuf,
 }
 
 #[derive(Debug, Args)]
 struct BmapWriteArgs {
+    /// Target to write the bmap file to
     target: String,
+    /// Path to bmap file
     file: PathBuf,
 }
 
 #[derive(Debug, Subcommand)]
 enum VolumeCommand {
+    /// Retrieve volume information
     Info,
-    /// Upload file to volume target
+    /// Upload file to the volume
     Write(WriteArgs),
-    /// Write a bmap file to volume target
+    /// Write a bmap file to the volum
     WriteBmap(BmapWriteArgs),
     /// Commit upload
     Commit,
@@ -242,49 +250,69 @@ fn parse_device(device: &str) -> Result<DeviceArg, Infallible> {
 
 #[derive(Clone, Debug, Args)]
 struct DeviceConsoleArgs {
+    /// Console to open instead of the default
     #[clap(short, long)]
     console: Option<String>,
 }
 
 #[derive(Debug, Args)]
 struct DeviceModeArgs {
+    /// Mode to change the device to
     mode: String,
 }
 
 #[derive(Debug, Args)]
 struct DeviceReadArg {
+    /// Offset in bytes for reading to start
     #[arg(short, long)]
     offset: Option<u64>,
+    /// Amount of bytes to be read
+    #[arg(short, long)]
     #[arg(short, long)]
     length: Option<u64>,
+    /// Wait for the volume and target to appear
     #[arg(short, long)]
     wait: bool,
+    /// The volume to read from
     volume: String,
+    /// The volume target to read from
     target: String,
+    /// Path to the file to write the read data to
     file: PathBuf,
 }
 
 #[derive(Debug, Args)]
 struct DeviceWriteArg {
+    /// Write at the given offset rather then from the start
     #[arg(short, long)]
     offset: Option<u64>,
+    /// Wait for the volume and target to appear
     #[arg(short, long)]
     wait: bool,
+    /// Commit the volume after finishing the write
     #[arg(short, long)]
     commit: bool,
+    /// The volume to write to
     volume: String,
+    /// The volume target to write to
     target: String,
+    /// Path to the file to write
     file: PathBuf,
 }
 
 #[derive(Debug, Args)]
 struct DeviceBmapWriteArg {
+    /// Wait for the volume and target to appear
     #[arg(short, long)]
     wait: bool,
+    /// Commit the volume after finishing the write
     #[arg(short, long)]
     commit: bool,
+    /// The volume to write to
     volume: String,
+    /// The volume target to write to
     target: String,
+    /// Path to the bmap file to write
     file: PathBuf,
 }
 
@@ -292,15 +320,19 @@ struct DeviceBmapWriteArg {
 enum DeviceCommand {
     /// Get info about a device
     Info {
+        /// Monitor changes to the device information
         #[arg(short, long)]
         follow: bool,
     },
+    /// Read data from a device volume
     Read(DeviceReadArg),
+    /// Write data to a device volume
     Write(DeviceWriteArg),
+    /// Write a bmap file to a device volume
     WriteBmap(DeviceBmapWriteArg),
     /// Change device mode
     Mode(DeviceModeArgs),
-    // Turn the device off and on again
+    /// Turn the device off and on again
     Reset,
     /// Connect to the console
     Connect(DeviceConsoleArgs),
@@ -340,66 +372,78 @@ fn parse_item(item: &str) -> Result<ItemType, anyhow::Error> {
 
 #[derive(Debug, clap::Parser)]
 struct ConfigureArg {
-    // New instance to be added
+    /// Instance to configure is new
     #[clap(long)]
     new: bool,
+    /// Instance should be set as the default going forward
     #[clap(long)]
     default: bool,
+    /// Configure the instance's url
     #[clap(short, long)]
     uri: Option<Uri>,
+    /// Configure the JWT auth token
     #[clap(short, long)]
     token: Option<String>,
+    /// Read new JWT auth token from the given file
     #[clap(long)]
     token_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    // Doesn't need config
+    /// Configure boardswarm instances
     Configure(ConfigureArg),
-    // Just needs a uri really
+    /// Retrieve the login information from the remote boardswarm server
     LoginInfo,
+    /// Actuator specific commands
     Actuator {
         actuator: u64,
         #[command(subcommand)]
         command: ActuatorCommand,
     },
+    /// Console specific commands
     Console {
         console: u64,
         #[command(subcommand)]
         command: ConsoleCommand,
     },
+    /// Volumes specific commands
     Volume {
         volume: u64,
         #[command(subcommand)]
         command: VolumeCommand,
     },
+    /// Device specific commands
     Device {
         #[arg(value_parser = parse_device)]
         device: DeviceArg,
         #[command(subcommand)]
         command: DeviceCommand,
     },
-    // Commands specific to rockchip devices
+    /// Commands specific to rockchip devices
     Rock {
         #[arg(value_parser = parse_device)]
         device: DeviceArg,
         #[command(subcommand)]
         command: RockCommand,
     },
+    /// List all items of a given type
     List {
         #[arg(value_parser = parse_item)]
         type_: ItemType,
     },
+    /// Monitor registered items of a given type
     Monitor {
         #[arg(value_parser = parse_item)]
         type_: ItemType,
     },
+    /// Show item properties
     Properties {
         #[arg(value_parser = parse_item)]
         type_: ItemType,
         item: u64,
     },
+    /// Open the UI for a given device
     Ui {
         #[arg(value_parser = parse_device)]
         device: DeviceArg,
