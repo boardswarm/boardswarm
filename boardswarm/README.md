@@ -169,6 +169,10 @@ and its ports (due to pdudaemon not supporting introspection).
 Actuators provided by pdudaemon take a `mode` parameter which can be `on` or
 `off` (matching pdudaemon actions).
 
+Each item created by this provider will have a following properties:
+* `pdudaemon.pdu`: name of the pdu controlled
+* `pdudaemon.port`: port of the pdu that is used
+
 [pdudaemon]: https://github.com/pdudaemon/pdudaemon
 
 Example configuration:
