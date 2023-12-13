@@ -30,6 +30,7 @@ The UI has the follow keyboard shortcuts:
 * ^a q: Quit the ui
 * ^a o: Change the device to mode "on"
 * ^a f: Change the device to mode "off"
+* ^a r: Reset the device's power (same as changing mode to "off" then "on")
 * ^a k: Scroll up
 * ^a j: Scroll down
 * ^a 0: Reset scrolling state
