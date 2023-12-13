@@ -5,16 +5,15 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen},
 };
-use tokio_util::sync::ReusableBoxFuture;
-use tui::{
+use futures::{pin_mut, ready, Stream, StreamExt};
+use ratatui::{
     backend::CrosstermBackend,
     layout::Rect,
     widgets::{Block, Borders},
     Terminal as TuiTerminal,
 };
-
-use futures::{pin_mut, ready, Stream, StreamExt};
 use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio_util::sync::ReusableBoxFuture;
 
 use crate::ui_term;
 

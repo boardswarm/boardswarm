@@ -1,4 +1,4 @@
-use tui::{
+use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::Span,
@@ -16,7 +16,7 @@ impl<'a> UiTerm<'a> {
 }
 
 impl Widget for UiTerm<'_> {
-    fn render(self, area: Rect, buf: &mut tui::buffer::Buffer) {
+    fn render(self, area: Rect, buf: &mut ratatui::buffer::Buffer) {
         let screen = self.screen;
 
         for row in 0..area.height {
@@ -33,6 +33,7 @@ impl Widget for UiTerm<'_> {
                         let style = Style {
                             fg: conv_color(cell.fgcolor()),
                             bg: conv_color(cell.bgcolor()),
+                            underline_color: None,
                             add_modifier: mods,
                             sub_modifier: Modifier::empty(),
                         };
@@ -58,10 +59,10 @@ impl Widget for UiTerm<'_> {
     }
 }
 
-fn conv_color(color: vt100::Color) -> Option<tui::style::Color> {
+fn conv_color(color: vt100::Color) -> Option<ratatui::style::Color> {
     match color {
         vt100::Color::Default => None,
-        vt100::Color::Idx(index) => Some(tui::style::Color::Indexed(index)),
-        vt100::Color::Rgb(r, g, b) => Some(tui::style::Color::Rgb(r, g, b)),
+        vt100::Color::Idx(index) => Some(ratatui::style::Color::Indexed(index)),
+        vt100::Color::Rgb(r, g, b) => Some(ratatui::style::Color::Rgb(r, g, b)),
     }
 }

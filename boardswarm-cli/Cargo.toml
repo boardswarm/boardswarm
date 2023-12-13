@@ -20,7 +20,6 @@ boardswarm-protocol = { version = "0.0.1", path = "../boardswarm-protocol" }
 boardswarm-client = { version = "0.0.1", path = "../boardswarm-client" }
 tokio = { version = "1.30.0", features = ["full"] }
 tokio-util = { version = "0.7.4", features = ["compat"] }
-tui = "0.19.0"
 serde_json = "1.0.91"
 tracing = "0.1.37"
 indicatif = { version = "0.17.3", features = ["improved_unicode"] }
@@ -37,3 +36,4 @@ json = "0.12.4"
 async-trait = "0.1.74"
 url = { version = "2.4.1", features = ["serde"] }
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
+ratatui = "0.24.0"
