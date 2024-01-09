@@ -25,7 +25,7 @@ use rockfile::boot::{
 };
 use tokio::{
     fs::File,
-    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader},
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader},
 };
 
 use boardswarm_client::client::ItemEvent;
@@ -486,9 +486,17 @@ async fn run_configure(
     let auth = if let Some(token) = &opts.token {
         Some(config::Auth::Token(token.clone()))
     } else if let Some(ref token_path) = opts.token_file {
-        Some(config::Auth::Token(
-            tokio::fs::read_to_string(token_path).await?,
-        ))
+        let file = tokio::fs::File::open(token_path).await?;
+        let mut reader = BufReader::new(file);
+        let mut token = String::new();
+        let read = reader.read_line(&mut token).await?;
+        // Arbitrary minimal size to make sure might actually be a token without going all the way
+        // and parsing it. Mostly to avoid accidentally using an empty file
+        if read < 16 {
+            bail!("Token file doesn't look like a JTW token (too small)");
+        }
+        let token = token.trim_end();
+        Some(config::Auth::Token(token.to_string()))
     } else if current_server
         .as_ref()
         .map_or(false, |s| matches!(s.auth, config::Auth::Token(_)))
