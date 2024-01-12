@@ -85,6 +85,7 @@ where
 enum Input {
     PowerOn,
     PowerOff,
+    PowerReset,
     Up,
     Down,
     ScrollReset,
@@ -115,6 +116,7 @@ where
                 b'q' if self.saw_escape => return None,
                 b'o' if self.saw_escape => return Some(Input::PowerOn),
                 b'f' if self.saw_escape => return Some(Input::PowerOff),
+                b'r' if self.saw_escape => return Some(Input::PowerReset),
                 b'k' if self.saw_escape => return Some(Input::Up),
                 b'j' if self.saw_escape => return Some(Input::Down),
                 // FIXME enter doesn't work
@@ -227,6 +229,11 @@ pub async fn run_ui(
                         }
                         Input::PowerOff => {
                             device.change_mode("off").await.unwrap();
+                            None
+                        }
+                        Input::PowerReset => {
+                            device.change_mode("off").await.unwrap();
+                            device.change_mode("on").await.unwrap();
                             None
                         }
                         Input::Up | Input::Down | Input::ScrollReset => {
