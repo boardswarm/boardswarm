@@ -1,7 +1,7 @@
 # Boardswarm Concepts
 
 Underneath boardswarm contains collection of items of various types (actuators,
-consoles, consoles, devices). Items of each time are uniquely identified by a
+consoles, consoles, devices). Items of each type are uniquely identified by a
 64 bit identifier (which is not re-used).
 
 Each item has a list of properties which are simple key/value strings. By
