@@ -1,7 +1,7 @@
 # Boardswarm Concepts
 
 Underneath boardswarm contains collection of items of various types (actuators,
-consoles, consoles, devices). Items of each time are uniquely identified by a
+consoles, volumes, devices). Items of each type are uniquely identified by a
 64 bit identifier (which is not re-used).
 
 Each item has a list of properties which are simple key/value strings. By
@@ -44,8 +44,8 @@ consoles and volumes, which are all in principle dynamic.
 Each device has a list of modes as well which can be switched between. The basic,
 by convention, modes are "on" and "off". Other modes are typically defined by
 non-standard boot-modes, for example turning the device on in an USB flashing
-mode as opposed to doing a normal boot. Modes are activated by a sequency of
-actuator actions, which in the simplest case is just turning power on and of
+mode as opposed to doing a normal boot. Modes are activated by a sequence of
+actuator actions, which in the simplest case is just turning power on and off
 but can be arbitrarily complex.
 
 ## Providers
@@ -53,7 +53,7 @@ but can be arbitrarily complex.
 Providers are what backs actuators, consoles and volumes. Currently these
 include:
 * serial: serial consoles
-* dfu:  device firmware update based volumes
+* dfu: device firmware upgrade based volumes
 * rockusb: Rock Usb flash protocol volumes
 * pdudaemon: pdudaemon based actuators
 * gpio: Gpio line based actuators
