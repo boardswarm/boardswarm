@@ -1,9 +1,9 @@
 # Boardswarm server
 
 Boardswarm is a gRPC server exposing APIs useful for interacting with
-development boards. The swarm part of the names comes from the ability of a
+development boards. The "swarm" part of the name comes from the ability of a
 server to connect to other boardswarm instances, sharing and distributing
-functionality transparantly for the end-user.
+functionality transparently for the end-user.
 
 For more info about boardswarm design see the [design document](docs/design.md)
 
@@ -15,15 +15,18 @@ can be used.
 
 ## Authentication
 
-Boardswarm always validates authentication against JWT bearer tokens; The
-tokens can either be validate against a OIDC server or alternatively a local
+Boardswarm always validates authentication against [JWT] bearer tokens; The
+tokens can either be validated against an [OIDC] server or alternatively a local
 static jwks file.
+
+[JWT]: https://en.wikipedia.org/wiki/JSON_Web_Token
+[OIDC]: https://openid.net/developers/how-connect-works/
 
 ### OIDC based authentiation
 
-For OIDC based authentication both the uri to the oidc issuer and the client id
+For OIDC based authentication both the uri to the OIDC issuer and the client id
 need to be configured. While boardswarm itself just uses the uri to get the
-servers JWKS keys, both together with the description are exposed to client it
+servers JWKS keys, both together with the description are exposed to client for it
 to retrieve  tokens via the oauth 2.0 device authorization grant.
 
 ```
@@ -41,7 +44,7 @@ server:
 ...
 ```
 
-On the client side to setup such a server run the following command and follow
+On the client side to set up such a server run the following command and follow
 the instructions to authenticate:
 ```
 $ boardswarm-cli  --instance <instance name> configure --new  -u <instance url>
@@ -51,7 +54,7 @@ $ boardswarm-cli  --instance <instance name> configure --new  -u <instance url>
 
 For static JWKS token a JWKS needs to be generated for boardswarm to validate
 tokens against, while the client(s) needs JWT token(s) signed by the private
-key. An easy way to generate these is to using the
+key. An easy way to generate these is to use the
 [rnbyc](https://github.com/babelouest/rhonabwy#rnbyc-rhonabwy-command-line-tool)
 tool.
 
@@ -62,7 +65,7 @@ $ rnbyc -j -g  Ed25519  -x   -o private.jwks -p auth.jwks
 
 The `private.jwks` should be kept private and used to sign client authentication
 tokens. The auth.jwks file can be configured in boardswarm to validate tokens
-against. as follows:
+against as follows:
 
 ```
 server:
@@ -81,7 +84,7 @@ create a user token (expiry 01-01-2025) the following command can be used.
 $ rnbyc  -s '{"exp": 1735686000 }' -K private.jwks -o token.jwt
 ```
 
-On the client side to setup such a server run the following command and follow
+On the client side to set up such a server run the following command and follow
 the instructions to authenticate:
 ```
 $ boardswarm-cli  --instance <instance name> configure --new -u <instance url> --token-file <path to token file>
@@ -111,7 +114,7 @@ The serial provider creates consoles from local serial ports. No provider specif
 parameters are expected and it only makes sense to have one of this type.
 
 The configuration parameters for a console provided by this provider is
-currently only `rate` with a numeric value matching the consoles baud rate.
+currently only `rate` with a numeric value matching the console's baud rate.
 
 Example configuration:
 ```
@@ -120,14 +123,14 @@ provider:
     provider: serial
 ```
 
-### Device Firmware Update provider (dfu)
+### Device Firmware Upgrade provider (dfu)
 
-Support for (DFU 1.1)[dfu] class specification. DFU devices are autodetected
+Support for (DFU 1.1)[dfu] USB class specification. DFU devices are autodetected
 via udev and are exposed as volumes. No provider specific parameters are
-expected and only one of this provier can exist.
+expected and only one of this provider can exist.
 
-Currently only write operations are support for DFU targets. Committing these
-volumes will execute a usb detach followed by a reset.
+Currently only write operations are supported for DFU targets. Committing these
+volumes will execute a USB detach followed by a reset.
 
 [dfu]: https://usb.org/document-library/device-firmware-upgrade-11-new-version-31-aug-2004
 
@@ -169,7 +172,7 @@ and its ports (due to pdudaemon not supporting introspection).
 Actuators provided by pdudaemon take a `mode` parameter which can be `on` or
 `off` (matching pdudaemon actions).
 
-Each item created by this provider will have a following properties:
+Each item created by this provider will have the following properties:
 * `pdudaemon.pdu`: name of the pdu controlled
 * `pdudaemon.port`: port of the pdu that is used
 
@@ -206,10 +209,10 @@ match the gpiochip that should be used and a list of lines for that chip to be
 exposed as actuators. Lines can be identified by either the line name or line
 number (see the output of the `gpioinfo` command to determine the lines/names).
 
-Actuators provided a `value` parameter which takes a boolean value to turn the
+Actuators provide a `value` parameter which takes a boolean value to turn the
 gpio line high or low.
 
-Each item created by this provider will have a following properties:
+Each item created by this provider will have the following properties:
 * `gpio.chip_label`: label of the used GPIO chip
 * `gpio.line_number`: number of the gpio line used
 * `gpio.line_name`: name of the gpio line used if available
@@ -266,9 +269,9 @@ Devices are what tie everything together. Devices contain:
 * modes: A list of modes the device can operate in
 
 To link the device to other items matches are used using a `match` key in the
-configuation which contains a dictionary of item properties to match. An item
-on a remote instance will only be matches if the `boardswarm.instance` property
-is explicitely configured, otherwise only local items willl be matched.
+configuration which contains a dictionary of item properties to match. An item
+on a remote instance will only be matched if the `boardswarm.instance` property
+is explicitly configured, otherwise only local items will be matched.
 
 ### Device consoles
 
@@ -312,7 +315,7 @@ devices:
 
 A mode refers to an operational mode of a device. By convention devices
 normally have at least two modes "on" and "off". "on" should normally refer
-to the what would be expected as the normal operation of a device, while "off"
+to what would be expected as the normal operation of a device, while "off"
 should mean the device is fully powered "off". Other modes may be configured to
 e.g. reflect the device to be powered on, but configured to load software over
 USB.
@@ -322,8 +325,8 @@ into that mode. After each step a `stabilisation` period can be configured to
 wait before a next step is done (or the switch be flagged as done).
 
 A mode can depend on the device being in a specific mode first. This can help
-simplifying the sequence as the device can be assumed to be in a known state
-(typically off), rather then having to define each sequence such it can be entered
+in simplifying the sequence as the device can be assumed to be in a known state
+(typically off), rather than having to define each sequence such that it can be entered
 from any mode.
 
 ```
@@ -333,9 +336,9 @@ devices:
       # Name of the mode, on/off are by convention the expected "normal"
       # powered on and powered off states
       - name: on
-        # Mode the device needs to be on to ensure the expected mode is reached
+        # Mode the device needs to be in to ensure the expected mode is reached
         depends: off
-        # The sequence of actuator actions to take the establish this mode
+        # The sequence of actuator actions to take to establish this mode
         sequence:
           # Each sequence item should have a match to match the actuator to use
           # and actuator specific parameters to apply
