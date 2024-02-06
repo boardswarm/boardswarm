@@ -395,18 +395,21 @@ enum Command {
     LoginInfo,
     /// Actuator specific commands
     Actuator {
+        /// The actuator to use
         actuator: u64,
         #[command(subcommand)]
         command: ActuatorCommand,
     },
     /// Console specific commands
     Console {
+        /// The console to use
         console: u64,
         #[command(subcommand)]
         command: ConsoleCommand,
     },
     /// Volumes specific commands
     Volume {
+        /// The volume to use
         volume: u64,
         #[command(subcommand)]
         command: VolumeCommand,
@@ -414,6 +417,7 @@ enum Command {
     /// Device specific commands
     Device {
         #[arg(value_parser = parse_device)]
+        /// The device to use
         device: DeviceArg,
         #[command(subcommand)]
         command: DeviceCommand,
@@ -421,6 +425,7 @@ enum Command {
     /// Commands specific to rockchip devices
     Rock {
         #[arg(value_parser = parse_device)]
+        /// The device to use
         device: DeviceArg,
         #[command(subcommand)]
         command: RockCommand,
@@ -428,22 +433,27 @@ enum Command {
     /// List all items of a given type
     List {
         #[arg(value_parser = parse_item)]
+        /// The type of items to list
         type_: ItemType,
     },
     /// Monitor registered items of a given type
     Monitor {
         #[arg(value_parser = parse_item)]
+        /// The type of items to monitor
         type_: ItemType,
     },
     /// Show item properties
     Properties {
         #[arg(value_parser = parse_item)]
+        /// The type of items to show properties of
         type_: ItemType,
+        /// The item of the type to show properties of
         item: u64,
     },
     /// Open the UI for a given device
     Ui {
         #[arg(value_parser = parse_device)]
+        /// The device to use
         device: DeviceArg,
         #[command(flatten)]
         console: DeviceConsoleArgs,
