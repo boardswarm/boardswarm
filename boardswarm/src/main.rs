@@ -912,7 +912,8 @@ async fn setup_auth_layer(config: &[config::Authentication]) -> anyhow::Result<V
             config::Authentication::Jwks { path } => {
                 JwtAuthorizer::<RegisteredClaims>::from_jwks(path.to_str().unwrap())
                     .build()
-                    .await?
+                    .await
+                    .context(format!("Failed to load jwks file {}", path.display()))?
             }
         };
         authorizers.push(a);
