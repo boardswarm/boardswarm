@@ -3,6 +3,7 @@ use std::{collections::HashMap, path::PathBuf};
 use futures::StreamExt;
 use serde::Deserialize;
 use tokio_gpiod::{Chip, Lines};
+use tracing::instrument;
 use tracing::{debug, warn};
 
 use crate::{
@@ -37,6 +38,7 @@ impl GpioParameters {
     }
 }
 
+#[instrument(skip(parameters, server))]
 pub async fn start_provider(name: String, parameters: serde_yaml::Value, server: Server) {
     let provider_properties = &[
         (registry::PROVIDER_NAME, name.as_str()),

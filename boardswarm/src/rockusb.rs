@@ -9,6 +9,7 @@ use rockusb::libusb::Transport;
 use rusb::GlobalContext;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
+use tracing::instrument;
 use tracing::{info, warn};
 
 use crate::{
@@ -16,6 +17,8 @@ use crate::{
 };
 
 pub const PROVIDER: &str = "rockusb";
+
+#[instrument(skip(server))]
 pub async fn start_provider(name: String, server: Server) {
     let provider_properties = &[
         (registry::PROVIDER_NAME, name.as_str()),

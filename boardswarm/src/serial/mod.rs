@@ -8,6 +8,7 @@ use std::{
     sync::{Arc, Mutex},
     task::{Context, Poll},
 };
+use tracing::instrument;
 use tracing::warn;
 
 use anyhow::Result;
@@ -21,6 +22,7 @@ use tokio_serial::{SerialPortBuilderExt, SerialStream};
 
 pub const PROVIDER: &str = "serial";
 
+#[instrument(skip(server))]
 pub async fn start_provider(name: String, server: Server) {
     let provider_properties = &[
         (registry::PROVIDER_NAME, name.as_str()),

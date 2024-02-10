@@ -7,6 +7,7 @@ use tokio::sync::{
     mpsc::{self, Receiver},
     oneshot,
 };
+use tracing::instrument;
 use tracing::{info, warn};
 
 use crate::{
@@ -14,6 +15,7 @@ use crate::{
 };
 pub const PROVIDER: &str = "dfu";
 
+#[instrument(skip(server))]
 pub async fn start_provider(name: String, server: Server) {
     let provider_properties = &[
         (registry::PROVIDER_NAME, name.as_str()),
