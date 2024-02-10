@@ -14,7 +14,9 @@ jobs:
       - name: Install build-depends
         run: sudo apt install -y protobuf-compiler libudev-dev
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.70.0
+      - uses: dtolnay/rust-toolchain@master # avoid the tag here to prevent dependabot from updating it
+        with:
+          toolchain: "1.70"
       - run: cargo test --all-targets --all-features
 
   fmt:
@@ -22,9 +24,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.70.0
+      - uses: dtolnay/rust-toolchain@master # avoid the tag here to prevent dependabot from updating it
         with:
-            components: rustfmt
+          toolchain: "1.70"
+          components: rustfmt
       - run: cargo fmt --all --check
 
   clippy:
@@ -34,9 +37,10 @@ jobs:
       - name: Install build-depends
         run: sudo apt install -y protobuf-compiler libudev-dev
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.70.0
+      - uses: dtolnay/rust-toolchain@master # avoid the tag here to prevent dependabot from updating it
         with:
-            components: clippy
+          toolchain: "1.70"
+          components: clippy
       - run: cargo clippy --all-targets -- -D warnings
 
   minimal-dependencies:
@@ -46,9 +50,10 @@ jobs:
       - name: Install build-depends
         run: sudo apt install -y protobuf-compiler libudev-dev
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@master # avoid the tag here to prevent dependabot from updating it
         with:
-            components: clippy
+          toolchain: "nightly-2024-01-01"
+          components: clippy
       - run: cargo check -Z direct-minimal-versions
 
   allgreen:
