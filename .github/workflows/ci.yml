@@ -46,9 +46,10 @@ jobs:
       - name: Install build-depends
         run: sudo apt install -y protobuf-compiler libudev-dev
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@master # avoid the tag here to prevent dependabot from updating it
         with:
-            components: clippy
+          toolchain: "nightly-2024-01-01"
+          components: clippy
       - run: cargo check -Z direct-minimal-versions
 
   allgreen:
