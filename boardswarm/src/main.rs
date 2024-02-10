@@ -1,4 +1,4 @@
-use anyhow::bail;
+use anyhow::{bail, Context};
 use boardswarm_protocol::item_event::Event;
 use boardswarm_protocol::{
     console_input_request, volume_io_reply, volume_io_request, ConsoleConfigureRequest,
@@ -912,7 +912,8 @@ async fn setup_auth_layer(config: &[config::Authentication]) -> anyhow::Result<V
             config::Authentication::Jwks { path } => {
                 JwtAuthorizer::<RegisteredClaims>::from_jwks(path.to_str().unwrap())
                     .build()
-                    .await?
+                    .await
+                    .context(format!("Failed to load jwks file {}", path.display()))?
             }
         };
         authorizers.push(a);
@@ -933,7 +934,11 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
     let opts = Opts::parse();
-    let config = config::Config::from_file(&opts.config)?;
+    let config = config::Config::from_file(&opts.config).context(format!(
+        "Failed to load configuration file {}",
+        opts.config.display()
+    ))?;
+
     let listen_config = config
         .server
         .listen
