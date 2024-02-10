@@ -2,6 +2,7 @@ use std::fmt::Display;
 
 use pdudaemon_client::PduDaemon;
 use serde::Deserialize;
+use tracing::instrument;
 
 use crate::{
     registry::{self, Properties},
@@ -49,6 +50,7 @@ fn setup_actuator<D: Display>(
     server.register_actuator(properties, actuator);
 }
 
+#[instrument(skip(parameters, server))]
 pub fn start_provider(name: String, parameters: serde_yaml::Value, server: Server) {
     let parameters: PduDaemonParameters = serde_yaml::from_value(parameters).unwrap();
     let provider_properties = &[
