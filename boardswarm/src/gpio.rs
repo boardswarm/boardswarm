@@ -3,7 +3,7 @@ use std::{collections::HashMap, path::PathBuf};
 use futures::StreamExt;
 use serde::Deserialize;
 use tokio_gpiod::{Chip, Lines};
-use tracing::{info, warn};
+use tracing::{debug, warn};
 
 use crate::{
     registry::{self, Properties},
@@ -56,26 +56,22 @@ pub async fn start_provider(name: String, parameters: serde_yaml::Value, server:
                         let name = name.to_string_lossy().into_owned();
                         let mut properties = d.properties(name);
 
-                        info!(
-                            "GPIO?: {} - {} - {} - {:?}",
-                            d.syspath().display(),
-                            registration.is_some(),
-                            properties.matches(&parameters.match_),
-                            properties,
-                        );
-
-                        if properties.matches(&parameters.match_) {
-                            properties.extend(provider_properties);
-                            if let Some(ids) = setup_gpio_chip(
-                                path.to_path_buf(),
-                                &parameters,
+                        if !properties.matches(&parameters.match_) {
+                            debug!(
+                                "Ignoring gpio device {} - {:?}",
+                                d.syspath().display(),
                                 properties,
-                                &server,
-                            )
-                            .await
-                            {
-                                registration = Some((d.syspath().to_owned(), ids));
-                            }
+                            );
+
+                            continue;
+                        }
+
+                        properties.extend(provider_properties);
+                        if let Some(ids) =
+                            setup_gpio_chip(path.to_path_buf(), &parameters, properties, &server)
+                                .await
+                        {
+                            registration = Some((d.syspath().to_owned(), ids));
                         }
                     }
                 }
