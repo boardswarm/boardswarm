@@ -493,7 +493,7 @@ async fn run_configure(
         // Arbitrary minimal size to make sure might actually be a token without going all the way
         // and parsing it. Mostly to avoid accidentally using an empty file
         if read < 16 {
-            bail!("Token file doesn't look like a JTW token (too small)");
+            bail!("Token file doesn't look like a JWT token (too small)");
         }
         let token = token.trim_end();
         Some(config::Auth::Token(token.to_string()))
