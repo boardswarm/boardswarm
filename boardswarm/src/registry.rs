@@ -36,6 +36,9 @@ impl Properties {
         self.properties.get(prop).map(String::as_ref)
     }
 
+    /// Tests if the elements match all of the elements of an iterator.
+    ///
+    /// An empty iterator returns `true`.
     pub fn matches<K, V, I>(&self, matches: I) -> bool
     where
         K: AsRef<str>,
