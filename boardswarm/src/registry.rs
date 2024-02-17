@@ -263,6 +263,9 @@ mod test {
         t.insert(NAME.to_string(), "test".to_string());
         assert!(props.matches(&t));
 
+        let empty: HashMap<String, String> = HashMap::new();
+        assert!(props.matches(empty));
+
         assert!(props.matches([(NAME, "test")]));
         assert!(props.matches([("udev.BADGER", "5")]));
 
