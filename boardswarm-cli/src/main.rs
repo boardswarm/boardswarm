@@ -205,6 +205,8 @@ struct ActuatorMode {
 enum ActuatorCommand {
     /// Change actuator mode
     ChangeMode(ActuatorMode),
+    /// Display actuator properties
+    Properties,
 }
 
 #[derive(Debug, Args)]
@@ -221,6 +223,8 @@ enum ConsoleCommand {
     Tail,
     /// Connect input and output to a device console
     Connect,
+    /// Display console properties
+    Properties,
 }
 
 #[derive(Debug, Args)]
@@ -252,6 +256,8 @@ enum VolumeCommand {
     WriteBmap(BmapWriteArgs),
     /// Commit upload
     Commit,
+    /// Display volume properties
+    Properties,
 }
 
 #[derive(Clone, Debug)]
@@ -371,6 +377,8 @@ enum DeviceCommand {
     Connect(DeviceConsoleArgs),
     /// Tail to the console
     Tail(DeviceConsoleArgs),
+    /// Display device properties
+    Properties,
 }
 
 #[derive(Debug, Subcommand)]
@@ -457,14 +465,6 @@ enum Command {
         #[arg(value_enum)]
         /// The type of items to monitor
         type_: ItemTypes,
-    },
-    /// Show item properties
-    Properties {
-        #[arg(value_enum)]
-        /// The type of items to show properties of
-        type_: ItemTypes,
-        /// The item of the type to show properties of
-        item: u64,
     },
     /// Open the UI for a given device
     Ui {
@@ -707,18 +707,17 @@ async fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Command::Properties { type_, item } => {
-            let properties = boardswarm.properties(type_.into(), item).await?;
-            for (k, v) in properties {
-                println!(r#""{}" => "{}""#, k, v);
-            }
-            Ok(())
-        }
         Command::Actuator { actuator, command } => {
             match command {
                 ActuatorCommand::ChangeMode(c) => {
                     let p = serde_json::from_str(&c.mode)?;
                     boardswarm.actuator_change_mode(actuator, p).await?;
+                }
+                ActuatorCommand::Properties => {
+                    let properties = boardswarm.properties(ItemType::Actuator, actuator).await?;
+                    for (k, v) in properties {
+                        println!(r#""{}" => "{}""#, k, v);
+                    }
                 }
             }
 
@@ -741,6 +740,12 @@ async fn main() -> anyhow::Result<()> {
                     futures::select! {
                         in_ = in_.fuse() => in_?,
                         out = out.fuse() => out?,
+                    }
+                }
+                ConsoleCommand::Properties => {
+                    let properties = boardswarm.properties(ItemType::Console, console).await?;
+                    for (k, v) in properties {
+                        println!(r#""{}" => "{}""#, k, v);
                     }
                 }
             }
@@ -774,6 +779,12 @@ async fn main() -> anyhow::Result<()> {
                 }
                 VolumeCommand::Commit => {
                     boardswarm.volume_commit(volume).await?;
+                }
+                VolumeCommand::Properties => {
+                    let properties = boardswarm.properties(ItemType::Volume, volume).await?;
+                    for (k, v) in properties {
+                        println!(r#""{}" => "{}""#, k, v);
+                    }
                 }
             }
             Ok(())
@@ -925,6 +936,12 @@ async fn main() -> anyhow::Result<()> {
                     };
                     let output = console.stream_output().await?;
                     copy_output_to_stdout(output).await?;
+                }
+                DeviceCommand::Properties => {
+                    let properties = boardswarm.properties(ItemType::Device, device.id()).await?;
+                    for (k, v) in properties {
+                        println!(r#""{}" => "{}""#, k, v);
+                    }
                 }
             }
             Ok(())
