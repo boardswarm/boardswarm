@@ -17,7 +17,7 @@ use boardswarm_client::{
 };
 use boardswarm_protocol::ItemType;
 use bytes::{Bytes, BytesMut};
-use clap::{arg, Args, Parser, Subcommand};
+use clap::{arg, builder::PossibleValue, Args, Parser, Subcommand, ValueEnum};
 use futures::{pin_mut, FutureExt, Stream, StreamExt, TryStreamExt};
 use http::Uri;
 use rockfile::boot::{
@@ -34,6 +34,41 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 mod ui;
 mod ui_term;
 mod utils;
+
+#[derive(Clone, Copy)]
+struct ItemTypes(pub ItemType);
+
+impl From<ItemTypes> for ItemType {
+    fn from(val: ItemTypes) -> Self {
+        val.0
+    }
+}
+
+impl std::fmt::Debug for ItemTypes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl ValueEnum for ItemTypes {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[
+            ItemTypes(ItemType::Actuator),
+            ItemTypes(ItemType::Console),
+            ItemTypes(ItemType::Device),
+            ItemTypes(ItemType::Volume),
+        ]
+    }
+
+    fn to_possible_value(&self) -> Option<PossibleValue> {
+        Some(match self.0 {
+            ItemType::Actuator => PossibleValue::new("actuators"),
+            ItemType::Console => PossibleValue::new("consoles"),
+            ItemType::Device => PossibleValue::new("devices"),
+            ItemType::Volume => PossibleValue::new("volumes"),
+        })
+    }
+}
 
 fn find_bmap(img: &Path) -> Option<PathBuf> {
     fn append(path: PathBuf) -> PathBuf {
@@ -349,25 +384,6 @@ enum RockCommand {
     },
 }
 
-fn parse_item(item: &str) -> Result<ItemType, anyhow::Error> {
-    let types = [
-        ("actuators", ItemType::Actuator),
-        ("consoles", ItemType::Console),
-        ("devices", ItemType::Device),
-        ("volumes", ItemType::Volume),
-    ];
-    for (n, t) in types {
-        if n == item {
-            return Ok(t);
-        }
-    }
-
-    Err(anyhow::anyhow!(
-        "Unknown item type; known types: {:?}",
-        types.map(|(n, _)| n)
-    ))
-}
-
 #[derive(Debug, clap::Parser)]
 struct ConfigureArg {
     /// Instance to configure is new
@@ -432,21 +448,21 @@ enum Command {
     },
     /// List all items of a given type
     List {
-        #[arg(value_parser = parse_item)]
+        #[arg(value_enum)]
         /// The type of items to list
-        type_: ItemType,
+        type_: ItemTypes,
     },
     /// Monitor registered items of a given type
     Monitor {
-        #[arg(value_parser = parse_item)]
+        #[arg(value_enum)]
         /// The type of items to monitor
-        type_: ItemType,
+        type_: ItemTypes,
     },
     /// Show item properties
     Properties {
-        #[arg(value_parser = parse_item)]
+        #[arg(value_enum)]
         /// The type of items to show properties of
-        type_: ItemType,
+        type_: ItemTypes,
         /// The item of the type to show properties of
         item: u64,
     },
@@ -667,7 +683,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::List { type_ } => {
-            let items = boardswarm.list(type_).await?;
+            let items = boardswarm.list(type_.into()).await?;
             println!("{:?}s: ", type_);
             for i in items {
                 print_item(i);
@@ -675,7 +691,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Monitor { type_ } => {
-            let events = boardswarm.monitor(type_).await?;
+            let events = boardswarm.monitor(type_.into()).await?;
             println!("{:?}s: ", type_);
             pin_mut!(events);
             while let Some(event) = events.next().await {
@@ -692,7 +708,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Properties { type_, item } => {
-            let properties = boardswarm.properties(type_, item).await?;
+            let properties = boardswarm.properties(type_.into(), item).await?;
             for (k, v) in properties {
                 println!(r#""{}" => "{}""#, k, v);
             }
