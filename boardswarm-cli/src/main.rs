@@ -252,7 +252,7 @@ enum VolumeCommand {
     Info,
     /// Upload file to the volume
     Write(WriteArgs),
-    /// Write a bmap file to the volum
+    /// Write a bmap file to the volume
     WriteBmap(BmapWriteArgs),
     /// Commit upload
     Commit,
