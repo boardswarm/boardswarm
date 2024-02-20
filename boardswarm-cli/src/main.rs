@@ -20,6 +20,7 @@ use bytes::{Bytes, BytesMut};
 use clap::{arg, builder::PossibleValue, Args, Parser, Subcommand, ValueEnum};
 use futures::{pin_mut, FutureExt, Stream, StreamExt, TryStreamExt};
 use http::Uri;
+use itertools::Itertools;
 use rockfile::boot::{
     RkBootEntry, RkBootEntryBytes, RkBootHeader, RkBootHeaderBytes, RkBootHeaderEntry,
 };
@@ -715,8 +716,8 @@ async fn main() -> anyhow::Result<()> {
                 }
                 ActuatorCommand::Properties => {
                     let properties = boardswarm.properties(ItemType::Actuator, actuator).await?;
-                    for (k, v) in properties {
-                        println!(r#""{}" => "{}""#, k, v);
+                    for key in properties.keys().sorted_unstable() {
+                        println!(r#""{}" => "{}""#, key, properties[key]);
                     }
                 }
             }
@@ -744,8 +745,8 @@ async fn main() -> anyhow::Result<()> {
                 }
                 ConsoleCommand::Properties => {
                     let properties = boardswarm.properties(ItemType::Console, console).await?;
-                    for (k, v) in properties {
-                        println!(r#""{}" => "{}""#, k, v);
+                    for key in properties.keys().sorted_unstable() {
+                        println!(r#""{}" => "{}""#, key, properties[key]);
                     }
                 }
             }
@@ -782,8 +783,8 @@ async fn main() -> anyhow::Result<()> {
                 }
                 VolumeCommand::Properties => {
                     let properties = boardswarm.properties(ItemType::Volume, volume).await?;
-                    for (k, v) in properties {
-                        println!(r#""{}" => "{}""#, k, v);
+                    for key in properties.keys().sorted_unstable() {
+                        println!(r#""{}" => "{}""#, key, properties[key]);
                     }
                 }
             }
@@ -939,8 +940,8 @@ async fn main() -> anyhow::Result<()> {
                 }
                 DeviceCommand::Properties => {
                     let properties = boardswarm.properties(ItemType::Device, device.id()).await?;
-                    for (k, v) in properties {
-                        println!(r#""{}" => "{}""#, k, v);
+                    for key in properties.keys().sorted_unstable() {
+                        println!(r#""{}" => "{}""#, key, properties[key]);
                     }
                 }
             }
