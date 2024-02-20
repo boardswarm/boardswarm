@@ -413,7 +413,7 @@ struct ConfigureArg {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Configure boardswarm instances
+    /// Configure client authentication to boardswarm servers
     Configure(ConfigureArg),
     /// Retrieve the login information from the remote boardswarm server
     LoginInfo,
