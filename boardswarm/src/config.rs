@@ -7,6 +7,7 @@ use std::{
 
 use anyhow::Result;
 use serde::Deserialize;
+use tracing::info;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
@@ -93,6 +94,7 @@ pub struct ModeStep {
 
 impl Config {
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Config> {
+        info!("Loading configuration file {}", path.as_ref().display());
         let file = std::fs::File::open(path)?;
         Ok(serde_yaml::from_reader(file)?)
     }
