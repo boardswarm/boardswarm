@@ -654,7 +654,7 @@ async fn main() -> anyhow::Result<()> {
 
             return run_configure(config, opt.instance, configure).await;
         }
-        Command::LoginInfo { .. } => {
+        Command::LoginInfo => {
             if let Some(server) = server {
                 server.to_boardswarm_builder().connect().await?
             } else if let Some(ref instance) = opt.instance {
@@ -689,7 +689,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Configure { .. } => {
             unreachable!()
         }
-        Command::LoginInfo { .. } => {
+        Command::LoginInfo => {
             println!("Info: {:#?}", boardswarm.login_info().await?);
             Ok(())
         }
