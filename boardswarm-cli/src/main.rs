@@ -543,7 +543,9 @@ async fn run_configure(
         let info = boardswarm.login_info().await?;
 
         // TODO allow user select the !first one
-        let login = info.first().unwrap();
+        let login = info
+            .first()
+            .context("No OIDC authentication to choose from")?;
         println!("Starting login with {}", login.description);
         match &login.method {
             boardswarm_client::client::AuthMethod::Oidc { url, client_id } => {
