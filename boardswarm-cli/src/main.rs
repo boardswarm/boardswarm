@@ -31,6 +31,7 @@ use tokio::{
 
 use boardswarm_client::client::ItemEvent;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+use tracing::info;
 
 mod ui;
 mod ui_term;
@@ -511,8 +512,13 @@ async fn run_configure(
     let instance = instance.unwrap_or_else(|| current_server.as_ref().unwrap().name.clone());
 
     let auth = if let Some(token) = &opts.token {
+        info!("Using authentication token provided: {:?}", opts.token);
         Some(config::Auth::Token(token.clone()))
     } else if let Some(ref token_path) = opts.token_file {
+        info!(
+            "Using authentication token from the path provided: {:?}",
+            token_path
+        );
         let file = tokio::fs::File::open(token_path).await?;
         let mut reader = BufReader::new(file);
         let mut token = String::new();
@@ -528,9 +534,11 @@ async fn run_configure(
         .as_ref()
         .map_or(false, |s| matches!(s.auth, config::Auth::Token(_)))
     {
+        info!("Using current server: {:?}", current_server);
         None
     } else {
         // OIDC
+        info!("Using OIDC authentication");
         let mut boardswarm = BoardswarmBuilder::new(uri.clone()).connect().await?;
         let info = boardswarm.login_info().await?;
 
