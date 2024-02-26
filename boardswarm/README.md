@@ -13,6 +13,9 @@ To run boardswarm a yaml configuration file needs to be passed as an argument.
 As a starting point the documented [example configuration](share/server.conf)
 can be used.
 
+To run as a systemd service, the [example systemd service](share/boardswarm.service)
+can be used.
+
 ## Authentication
 
 Boardswarm always validates authentication against [JWT] bearer tokens; The
