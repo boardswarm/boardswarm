@@ -72,11 +72,21 @@ impl Config {
         self.config.servers.push(server);
     }
 
+    pub fn remove_server(&mut self, name: &str) {
+        self.config.servers.retain(|s| s.name != name);
+    }
+
     // Set default server by name; If name is not in the list this is a noop
     pub fn set_default(&mut self, name: &str) {
         if let Some(index) = self.config.servers.iter().position(|s| s.name == name) {
             self.config.servers.swap(0, index)
         }
+    }
+
+    /// Returns an iterator to a collection of Servers.
+    /// The default server is always first in the iterator.
+    pub fn servers(&self) -> impl Iterator<Item = &Server> {
+        self.config.servers.iter()
     }
 
     pub fn path(&self) -> &Path {
