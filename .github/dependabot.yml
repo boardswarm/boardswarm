@@ -8,3 +8,10 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # Not yet supported. See <https://github.com/dependabot/dependabot-core/issues/4009>.
+    # versioning-strategy: "increase-if-necessary"
+    ignore:
+      - depency-name: "tokio"
+        update-types: ["version-update:semver-minor", "version-update:semver-patch"]
+      - depency-name: "*"
+        update-types: ["version-update:semver-patch"]
