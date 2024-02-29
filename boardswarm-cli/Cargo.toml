@@ -9,7 +9,7 @@ repository = "https://github.com/boardswarm/boardswarm"
 readme = "README.md"
 
 [dependencies]
-anyhow = "1.0.68"
+anyhow = "1.0.80"
 bytes = "1.4.0"
 clap = { version = "4.0.32", features = ["derive"] }
 crossterm = "0.27.0"

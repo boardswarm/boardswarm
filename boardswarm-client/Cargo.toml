@@ -9,7 +9,7 @@ repository = "https://github.com/boardswarm/boardswarm"
 readme = "README.md"
 
 [dependencies]
-anyhow = "1.0.68"
+anyhow = "1.0.80"
 bytes = "1.4.0"
 futures = "0.3.25"
 boardswarm-protocol = { version = "0.0.1", path = "../boardswarm-protocol" }
