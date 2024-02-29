@@ -197,6 +197,48 @@ async fn rock_download_boot(volume: &mut DeviceVolume, path: &Path) -> anyhow::R
     Ok(())
 }
 
+#[derive(Debug, clap::Parser)]
+struct AuthInitArg {
+    /// Configure the url
+    #[clap(short, long)]
+    uri: Uri,
+    /// Configure the JWT auth token
+    #[clap(short, long)]
+    token: Option<String>,
+    /// Read new JWT auth token from the given file
+    #[clap(long, conflicts_with = "token")]
+    token_file: Option<PathBuf>,
+}
+
+#[derive(Debug, clap::Parser)]
+struct AuthModifyArg {
+    /// Configure the url
+    #[clap(short, long)]
+    uri: Option<Uri>,
+    /// Configure the JWT auth token
+    #[clap(short, long)]
+    token: Option<String>,
+    /// Read new JWT auth token from the given file
+    #[clap(long, conflicts_with = "token")]
+    token_file: Option<PathBuf>,
+}
+
+#[derive(Debug, Subcommand)]
+enum AuthCommand {
+    /// Initialize new authentication to a server
+    Init(AuthInitArg),
+    /// Output information about a single authentication
+    Info,
+    /// List all configured authentications
+    List,
+    /// Set default authentication
+    SetDefault,
+    /// Remove an authentication to a server
+    Remove,
+    /// Modify an authentication to a server
+    Modify(AuthModifyArg),
+}
+
 #[derive(Debug, Args)]
 struct ActuatorMode {
     /// Actuator specific mode in json format
@@ -394,29 +436,13 @@ enum RockCommand {
     },
 }
 
-#[derive(Debug, clap::Parser)]
-struct ConfigureArg {
-    /// Instance to configure is new
-    #[clap(long)]
-    new: bool,
-    /// Instance should be set as the default going forward
-    #[clap(long)]
-    default: bool,
-    /// Configure the instance's url
-    #[clap(short, long)]
-    uri: Option<Uri>,
-    /// Configure the JWT auth token
-    #[clap(short, long)]
-    token: Option<String>,
-    /// Read new JWT auth token from the given file
-    #[clap(long)]
-    token_file: Option<PathBuf>,
-}
-
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Configure client authentication to boardswarm servers
-    Configure(ConfigureArg),
+    Auth {
+        #[command(subcommand)]
+        command: AuthCommand,
+    },
     /// Retrieve the login information from the remote boardswarm server
     LoginInfo,
     /// Actuator specific commands
@@ -478,43 +504,24 @@ enum Command {
     },
 }
 
-async fn run_configure(
+async fn run_auth_init(
     mut config: config::Config,
-    instance: Option<String>,
-    opts: &ConfigureArg,
+    instance: &str,
+    init_args: AuthInitArg,
 ) -> anyhow::Result<()> {
-    if opts.new && instance.is_none() {
-        bail!("New instances require an instance argument");
+    if let Some(s) = config.find_server(instance) {
+        bail!(
+            "Authentication for {} already exists, use modify instead.",
+            s.name
+        );
     }
 
-    // UGGGG
     let config_path = config.path().to_owned();
 
-    let current_server = match instance {
-        Some(ref i) => config.find_server_mut(i),
-        None => config.default_server_mut(),
-    };
-
-    match (current_server.is_some(), opts.new) {
-        (true, true) => bail!("Instance already exists"),
-        (false, false) => bail!("Instance not found, use --new to create a new one"),
-        _ => (),
-    }
-
-    let uri = match &current_server {
-        Some(s) => opts.uri.as_ref().unwrap_or(&s.uri),
-        None => opts
-            .uri
-            .as_ref()
-            .ok_or_else(|| anyhow!("New server needs a url"))?,
-    };
-
-    let instance = instance.unwrap_or_else(|| current_server.as_ref().unwrap().name.clone());
-
-    let auth = if let Some(token) = &opts.token {
-        info!("Using authentication token provided: {:?}", opts.token);
-        Some(config::Auth::Token(token.clone()))
-    } else if let Some(ref token_path) = opts.token_file {
+    let auth = if let Some(token) = &init_args.token {
+        info!("Using authentication token provided: {:?}", token);
+        config::Auth::Token(token.clone())
+    } else if let Some(ref token_path) = init_args.token_file {
         info!(
             "Using authentication token from the path provided: {:?}",
             token_path
@@ -529,17 +536,13 @@ async fn run_configure(
             bail!("Token file doesn't look like a JWT token (too small)");
         }
         let token = token.trim_end();
-        Some(config::Auth::Token(token.to_string()))
-    } else if current_server
-        .as_ref()
-        .map_or(false, |s| matches!(s.auth, config::Auth::Token(_)))
-    {
-        info!("Using current server: {:?}", current_server);
-        None
+        config::Auth::Token(token.to_string())
     } else {
         // OIDC
         info!("Using OIDC authentication");
-        let mut boardswarm = BoardswarmBuilder::new(uri.clone()).connect().await?;
+        let mut boardswarm = BoardswarmBuilder::new(init_args.uri.clone())
+            .connect()
+            .await?;
         let info = boardswarm.login_info().await?;
 
         // TODO allow user select the !first one
@@ -559,37 +562,102 @@ async fn run_configure(
 
                 let mut oidc = builder.build();
                 oidc.auth().await?;
-                Some(config::Auth::Oidc {
+                config::Auth::Oidc {
                     uri: url.parse().unwrap(),
                     client_id: client_id.clone(),
                     token_cache,
-                })
+                }
             }
         }
     };
 
-    if let Some(s) = current_server {
-        if let Some(auth) = auth {
-            s.auth = auth;
-        }
-        if let Some(uri) = &opts.uri {
-            s.uri = uri.clone()
-        }
-        if opts.default {
-            let name = s.name.clone();
-            config.set_default(&name);
-        }
-    } else {
-        let new = config::Server {
-            name: instance.clone(),
-            uri: opts.uri.clone().ok_or_else(|| anyhow!("Missing uri"))?,
-            auth: auth.ok_or_else(|| anyhow!("Missing authentication configuration"))?,
-        };
-        config.add_server(new);
-        if opts.default {
-            config.set_default(&instance);
-        }
+    let new = config::Server {
+        name: instance.to_owned(),
+        uri: init_args.uri.clone(),
+        auth,
+    };
+    config.add_server(new);
+
+    config.write().await?;
+
+    Ok(())
+}
+
+async fn run_auth_list(config: config::Config) -> anyhow::Result<()> {
+    for s in config.servers() {
+        println!("{}: {}", s.name, s.uri)
     }
+
+    Ok(())
+}
+
+async fn run_auth_info(config: config::Config, instance: Option<String>) -> anyhow::Result<()> {
+    let server = match instance {
+        Some(i) => config.find_server(&i),
+        None => config.default_server(),
+    };
+
+    if let Some(s) = server {
+        println!("{}: {}", s.name, s.uri);
+    }
+
+    Ok(())
+}
+
+async fn run_auth_set_default(mut config: config::Config, instance: &String) -> anyhow::Result<()> {
+    if config.find_server(instance).is_none() {
+        bail!("Authentication for {} does not exist", instance);
+    }
+
+    config.set_default(instance);
+
+    config.write().await?;
+
+    Ok(())
+}
+
+async fn run_auth_remove(mut config: config::Config, instance: &String) -> anyhow::Result<()> {
+    if config.find_server(instance).is_none() {
+        bail!("Authentication for {} does not exist", instance);
+    }
+
+    config.remove_server(instance);
+
+    config.write().await?;
+
+    Ok(())
+}
+
+async fn run_auth_modify(
+    mut config: config::Config,
+    instance: &str,
+    modify_args: AuthModifyArg,
+) -> anyhow::Result<()> {
+    let current_server = config
+        .find_server_mut(instance)
+        .context("Authentication for {} does not exist")?;
+
+    if let Some(uri) = modify_args.uri {
+        current_server.uri = uri;
+    };
+
+    if let Some(token) = modify_args.token {
+        current_server.auth = config::Auth::Token(token);
+    };
+
+    if let Some(ref token_path) = modify_args.token_file {
+        let file = tokio::fs::File::open(token_path).await?;
+        let mut reader = BufReader::new(file);
+        let mut token = String::new();
+        let read = reader.read_line(&mut token).await?;
+        // Arbitrary minimal size to make sure might actually be a token without going all the way
+        // and parsing it. Mostly to avoid accidentally using an empty file
+        if read < 16 {
+            bail!("Token file doesn't look like a JWT token (too small)");
+        }
+        let token = token.trim_end();
+        current_server.auth = config::Auth::Token(token.to_string())
+    };
 
     config.write().await?;
 
@@ -647,14 +715,45 @@ async fn main() -> anyhow::Result<()> {
 
     // Pre-connection handling
     let mut boardswarm = match opt.command {
-        Command::Configure(ref configure) => {
+        Command::Auth { command } => {
             let config = config
                 .clone()
                 .unwrap_or_else(|| config::Config::new(config_path));
 
-            return run_configure(config, opt.instance, configure).await;
+            match command {
+                AuthCommand::Init(_)
+                | AuthCommand::SetDefault
+                | AuthCommand::Remove
+                | AuthCommand::Modify(_) => {
+                    if opt.instance.is_none() {
+                        bail!("-i/--instance required for this command.");
+                    }
+                }
+                AuthCommand::Info | AuthCommand::List => (),
+            }
+
+            match command {
+                AuthCommand::Init(init_args) => {
+                    return run_auth_init(config, &opt.instance.unwrap(), init_args).await;
+                }
+                AuthCommand::Info => {
+                    return run_auth_info(config, opt.instance).await;
+                }
+                AuthCommand::List => {
+                    return run_auth_list(config).await;
+                }
+                AuthCommand::SetDefault => {
+                    return run_auth_set_default(config, &opt.instance.unwrap()).await;
+                }
+                AuthCommand::Remove => {
+                    return run_auth_remove(config, &opt.instance.unwrap()).await;
+                }
+                AuthCommand::Modify(modify_args) => {
+                    return run_auth_modify(config, &opt.instance.unwrap(), modify_args).await;
+                }
+            }
         }
-        Command::LoginInfo { .. } => {
+        Command::LoginInfo => {
             if let Some(server) = server {
                 server.to_boardswarm_builder().connect().await?
             } else if let Some(ref instance) = opt.instance {
@@ -686,10 +785,10 @@ async fn main() -> anyhow::Result<()> {
     };
 
     match opt.command {
-        Command::Configure { .. } => {
+        Command::Auth { .. } => {
             unreachable!()
         }
-        Command::LoginInfo { .. } => {
+        Command::LoginInfo => {
             println!("Info: {:#?}", boardswarm.login_info().await?);
             Ok(())
         }
