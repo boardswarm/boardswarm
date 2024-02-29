@@ -14,7 +14,7 @@ futures = "0.3.25"
 prost = "0.12.1"
 prost-types = "0.12.1"
 serde = { version = "1.0.189", features = ["derive"] }
-tokio = { version = "1.30.0", features = ["full"] }
+tokio = { version = "1.36.0", features = ["full"] }
 tonic = "0.10"
 
 [build-dependencies]
