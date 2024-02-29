@@ -28,7 +28,7 @@ bmap-parser = "0.1.0"
 async-compression = { version = "0.4.5", features = ["futures-io", "gzip"] }
 rockfile = "0.1.0"
 http = "0.2.9"
-serde = "1.0.189"
+serde = "1.0.197"
 http-serde = "1.1.3"
 serde_yaml = "0.9.25"
 dirs = "5.0.1"

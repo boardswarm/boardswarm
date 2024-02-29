@@ -17,7 +17,7 @@ futures = "0.3.25"
 humantime-serde = "1.1.1"
 pdudaemon-client = "0.1.0"
 boardswarm-protocol = { version = "0.0.1", path = "../boardswarm-protocol" }
-serde = { version = "1.0.189", features = ["derive"] }
+serde = { version = "1.0.197", features = ["derive"] }
 serde_yaml = "0.9.25"
 thiserror = "1.0.40"
 tokio = { version = "1.30.0", features = ["full"] }
