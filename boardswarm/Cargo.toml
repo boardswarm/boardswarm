@@ -24,7 +24,7 @@ tokio = { version = "1.30.0", features = ["full"] }
 tokio-serial = "5.4.4"
 tokio-udev = "0.9"
 tokio-util = "0.7.4"
-tonic = "0.10"
+tonic = "0.11"
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
 url = "2.4.1"
