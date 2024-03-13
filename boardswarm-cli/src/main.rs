@@ -242,6 +242,52 @@ enum AuthCommand {
     Modify(AuthModifyArg),
 }
 
+#[derive(Clone, Debug)]
+enum ItemArg {
+    Id(u64),
+    Name(String),
+}
+
+async fn item_lookup(
+    arg: ItemArg,
+    item_type: ItemType,
+    mut client: Boardswarm,
+) -> Result<u64, anyhow::Error> {
+    let item_kind = match item_type {
+        ItemType::Device => ("Device", "device"),
+        ItemType::Console => ("Console", "console"),
+        ItemType::Actuator => ("Actuator", "actuator"),
+        ItemType::Volume => ("Volume", "volume"),
+    };
+    match arg {
+        ItemArg::Id(id) => Ok(id),
+        ItemArg::Name(name) => {
+            let mut items = client.list(item_type).await?;
+
+            let (name, instance) = name
+                .rsplit_once('@')
+                .map_or((name.as_str(), None), |(n, i)| (n, Some(i)));
+
+            items.retain(|i| i.name == name && i.instance.as_deref() == instance);
+
+            match items.len() {
+                0 => Err(anyhow!("{} not found", item_kind.0)),
+                1 => Ok(items[0].id),
+                /* The items are uniquely identified only with their ids so this could happen */
+                _ => Err(anyhow!("Duplicate {} name {}", item_kind.1, name)),
+            }
+        }
+    }
+}
+
+fn parse_actuator(device: &str) -> Result<ItemArg, Infallible> {
+    if let Ok(id) = device.parse() {
+        Ok(ItemArg::Id(id))
+    } else {
+        Ok(ItemArg::Name(device.to_string()))
+    }
+}
+
 #[derive(Debug, Args)]
 struct ActuatorMode {
     /// Actuator specific mode in json format
@@ -254,6 +300,14 @@ enum ActuatorCommand {
     ChangeMode(ActuatorMode),
     /// Display actuator properties
     Properties,
+}
+
+fn parse_console(device: &str) -> Result<ItemArg, Infallible> {
+    if let Ok(id) = device.parse() {
+        Ok(ItemArg::Id(id))
+    } else {
+        Ok(ItemArg::Name(device.to_string()))
+    }
 }
 
 #[derive(Debug, Args)]
@@ -291,6 +345,14 @@ struct BmapWriteArgs {
     target: String,
     /// Path to bmap file
     file: PathBuf,
+}
+
+fn parse_volume(device: &str) -> Result<ItemArg, Infallible> {
+    if let Ok(id) = device.parse() {
+        Ok(ItemArg::Id(id))
+    } else {
+        Ok(ItemArg::Name(device.to_string()))
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -452,21 +514,24 @@ enum Command {
     /// Actuator specific commands
     Actuator {
         /// The actuator to use
-        actuator: u64,
+        #[arg(value_parser = parse_actuator)]
+        actuator: ItemArg,
         #[command(subcommand)]
         command: ActuatorCommand,
     },
     /// Console specific commands
     Console {
         /// The console to use
-        console: u64,
+        #[arg(value_parser = parse_console)]
+        console: ItemArg,
         #[command(subcommand)]
         command: ConsoleCommand,
     },
     /// Volumes specific commands
     Volume {
         /// The volume to use
-        volume: u64,
+        #[arg(value_parser = parse_volume)]
+        volume: ItemArg,
         #[command(subcommand)]
         command: VolumeCommand,
     },
@@ -822,6 +887,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Actuator { actuator, command } => {
+            let actuator = item_lookup(actuator, ItemType::Actuator, boardswarm.clone()).await?;
             match command {
                 ActuatorCommand::ChangeMode(c) => {
                     let p = serde_json::from_str(&c.mode)?;
@@ -838,6 +904,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Console { console, command } => {
+            let console = item_lookup(console, ItemType::Console, boardswarm.clone()).await?;
             match command {
                 ConsoleCommand::Configure(c) => {
                     let p = serde_json::from_str(&c.configuration)?;
@@ -867,6 +934,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Volume { volume, command } => {
+            let volume = item_lookup(volume, ItemType::Volume, boardswarm.clone()).await?;
             match command {
                 VolumeCommand::Info => {
                     let info = boardswarm.volume_info(volume).await?;
