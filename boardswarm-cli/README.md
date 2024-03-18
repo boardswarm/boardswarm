@@ -5,19 +5,19 @@ all options.
 
 ## Setting up new accounts
 
-The `configure` subcommand can be used to configure remote instances. To setup
+The `auth` subcommand can be used to configure remote instances. To setup
 an instance while authenticating against an OIDC server one can simply run:
 ```
-$ boardswarm-cli  --instance <instance name> configure --new  -u <instance url>
+$ boardswarm-cli  --instance <instance name> auth init  -u <instance url>
 ```
 
 To authenticate with a static JWT token it can be passed on the command line as
 well:
 ```
-$ boardswarm-cli  --instance <instance name> configure --new -u <instance url> --token-file <path to token file>
+$ boardswarm-cli  --instance <instance name> auth init -u <instance url> --token-file <path to token file>
 ```
 
-For more information see `boardswarm-cli configure --help`
+For more information see `boardswarm-cli auth --help`
 
 ## Boardswarm UI
 
