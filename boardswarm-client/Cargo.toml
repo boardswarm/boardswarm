@@ -16,7 +16,7 @@ boardswarm-protocol = { version = "0.0.1", path = "../boardswarm-protocol" }
 tokio = { version = "1.30.0", features = ["full"] }
 tonic = { version = "0.11", features = ["tls", "tls-roots"] }
 tracing = "0.1.37"
-thiserror = "1.0.40"
+thiserror = "1.0.58"
 tower = "0.4.13"
 http = "0.2.9"
 serde = "1.0.189"
