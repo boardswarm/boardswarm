@@ -37,4 +37,4 @@ tokio-gpiod = "0.2.3"
 rockusb = "0.1.3"
 jwt-authorizer = { version = "0.12", features = [ "tonic" ] }
 axum = "0.7.4"
-axum-server = { version = "0.5.1", features = ["tls-rustls"] }
+axum-server = { version = "0.6.0", features = ["tls-rustls"] }
