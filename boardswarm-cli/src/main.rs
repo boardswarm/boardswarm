@@ -136,10 +136,13 @@ where
 fn input_stream() -> impl Stream<Item = Bytes> {
     let stdin = tokio::io::stdin();
 
-    let mut stdin_termios = nix::sys::termios::tcgetattr(&stdin).unwrap();
+    let mut stdin_termios = nix::sys::termios::tcgetattr(&stdin)
+        .context("tcgetattr failed")
+        .unwrap();
 
     nix::sys::termios::cfmakeraw(&mut stdin_termios);
     nix::sys::termios::tcsetattr(&stdin, nix::sys::termios::SetArg::TCSANOW, &stdin_termios)
+        .context("tcsetattr failed")
         .unwrap();
 
     futures::stream::unfold(stdin, |mut stdin| async move {

@@ -998,16 +998,22 @@ async fn main() -> anyhow::Result<()> {
             gpio::PROVIDER => {
                 local.spawn_local(gpio::start_provider(
                     p.name,
-                    p.parameters.unwrap(),
+                    p.parameters.context("Missing gpio provider parameters")?,
                     server.clone(),
                 ));
             }
-            pdudaemon::PROVIDER => {
-                pdudaemon::start_provider(p.name, p.parameters.unwrap(), server.clone())
-            }
-            boardswarm_provider::PROVIDER => {
-                boardswarm_provider::start_provider(p.name, p.parameters.unwrap(), server.clone())
-            }
+            pdudaemon::PROVIDER => pdudaemon::start_provider(
+                p.name,
+                p.parameters
+                    .context("Missing pdudaemon provider parameters")?,
+                server.clone(),
+            ),
+            boardswarm_provider::PROVIDER => boardswarm_provider::start_provider(
+                p.name,
+                p.parameters
+                    .context("Missing boardswarm provider parameters")?,
+                server.clone(),
+            ),
             t => warn!("Unknown provider: {t}"),
         }
     }
