@@ -284,21 +284,24 @@ dependencies = [
 
 [[package]]
 name = "axum-server"
-version = "0.5.1"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "447f28c85900215cc1bea282f32d4a2f22d55c5a300afdfbc661c8d6a632e063"
+checksum = "c1ad46c3ec4e12f4a4b6835e173ba21c25e484c9d02b49770bf006ce5367c036"
 dependencies = [
  "arc-swap",
  "bytes",
  "futures-util",
- "http 0.2.11",
- "http-body 0.4.6",
- "hyper 0.14.28",
+ "http 1.1.0",
+ "http-body 1.0.0",
+ "http-body-util",
+ "hyper 1.2.0",
+ "hyper-util",
  "pin-project-lite",
  "rustls 0.21.10",
- "rustls-pemfile 1.0.4",
+ "rustls-pemfile 2.1.1",
  "tokio",
  "tokio-rustls 0.24.1",
+ "tower",
  "tower-service",
 ]
 
