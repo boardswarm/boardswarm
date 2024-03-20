@@ -1087,6 +1087,7 @@ async fn main() -> anyhow::Result<()> {
                         }
                     }
                     rock_download_boot(&mut volume, &path).await?;
+                    volume.wait_unavailable().await;
                 }
             }
             Ok(())
