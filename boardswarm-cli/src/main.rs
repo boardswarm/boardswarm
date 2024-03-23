@@ -430,6 +430,7 @@ enum DeviceCommand {
 
 #[derive(Debug, Subcommand)]
 enum RockCommand {
+    /// Transfer a combined boot file containing images of type 0x471 and 0x472 to a rock device
     DownloadBoot {
         #[arg(short, long)]
         wait: bool,
