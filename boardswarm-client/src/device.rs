@@ -67,6 +67,14 @@ impl DeviceVolume {
         }
     }
 
+    /// Wait until the volume becomes unavailable
+    pub async fn wait_unavailable(&self) {
+        let mut watch = self.device.watch();
+        while self.available() {
+            watch.changed().await;
+        }
+    }
+
     pub async fn info(&mut self) -> Result<VolumeInfoMsg, tonic::Status> {
         if let Some(id) = self.get_id() {
             self.device.client.volume_info(id).await
