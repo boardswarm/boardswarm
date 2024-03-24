@@ -37,7 +37,7 @@ mod ui;
 mod ui_term;
 mod utils;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct ItemTypes(pub ItemType);
 
 impl From<ItemTypes> for ItemType {
@@ -46,9 +46,24 @@ impl From<ItemTypes> for ItemType {
     }
 }
 
-impl std::fmt::Debug for ItemTypes {
+impl From<ItemType> for ItemTypes {
+    fn from(val: ItemType) -> Self {
+        Self(val)
+    }
+}
+
+impl std::fmt::Display for ItemTypes {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
+        if f.alternate() {
+            std::fmt::Debug::fmt(&self.0, f)
+        } else {
+            match self.0 {
+                ItemType::Device => f.write_str("device"),
+                ItemType::Console => f.write_str("console"),
+                ItemType::Actuator => f.write_str("actuator"),
+                ItemType::Volume => f.write_str("volume"),
+            }
+        }
     }
 }
 
@@ -248,21 +263,16 @@ enum ItemArg {
     Name(String),
 }
 
-async fn item_lookup(
+async fn item_lookup<I: Into<ItemTypes>>(
     arg: ItemArg,
-    item_type: ItemType,
+    item_type: I,
     mut client: Boardswarm,
 ) -> Result<u64, anyhow::Error> {
-    let item_kind = match item_type {
-        ItemType::Device => ("Device", "device"),
-        ItemType::Console => ("Console", "console"),
-        ItemType::Actuator => ("Actuator", "actuator"),
-        ItemType::Volume => ("Volume", "volume"),
-    };
+    let item_type: ItemTypes = item_type.into();
     match arg {
         ItemArg::Id(id) => Ok(id),
         ItemArg::Name(name) => {
-            let mut items = client.list(item_type).await?;
+            let mut items = client.list(item_type.into()).await?;
 
             let (name, instance) = name
                 .rsplit_once('@')
@@ -271,10 +281,10 @@ async fn item_lookup(
             items.retain(|i| i.name == name && i.instance.as_deref() == instance);
 
             match items.len() {
-                0 => Err(anyhow!("{} not found", item_kind.0)),
+                0 => bail!("{item_type:#} not found"),
                 1 => Ok(items[0].id),
                 /* The items are uniquely identified only with their ids so this could happen */
-                _ => Err(anyhow!("Duplicate {} name {}", item_kind.1, name)),
+                _ => bail!("Duplicate {item_type} name {name}"),
             }
         }
     }
@@ -863,7 +873,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::List { type_ } => {
             let items = boardswarm.list(type_.into()).await?;
-            println!("{:?}s: ", type_);
+            println!("{type_:#}s: ");
             for i in items {
                 print_item(i);
             }
@@ -871,7 +881,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Monitor { type_ } => {
             let events = boardswarm.monitor(type_.into()).await?;
-            println!("{:?}s: ", type_);
+            println!("{type_:#}s: ");
             pin_mut!(events);
             while let Some(event) = events.next().await {
                 let event = event?;
