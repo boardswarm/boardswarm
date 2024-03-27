@@ -37,7 +37,7 @@ mod ui;
 mod ui_term;
 mod utils;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct ItemTypes(pub ItemType);
 
 impl From<ItemTypes> for ItemType {
@@ -46,9 +46,24 @@ impl From<ItemTypes> for ItemType {
     }
 }
 
-impl std::fmt::Debug for ItemTypes {
+impl From<ItemType> for ItemTypes {
+    fn from(val: ItemType) -> Self {
+        Self(val)
+    }
+}
+
+impl std::fmt::Display for ItemTypes {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
+        if f.alternate() {
+            std::fmt::Debug::fmt(&self.0, f)
+        } else {
+            match self.0 {
+                ItemType::Device => f.write_str("device"),
+                ItemType::Console => f.write_str("console"),
+                ItemType::Actuator => f.write_str("actuator"),
+                ItemType::Volume => f.write_str("volume"),
+            }
+        }
     }
 }
 
@@ -242,6 +257,47 @@ enum AuthCommand {
     Modify(AuthModifyArg),
 }
 
+#[derive(Clone, Debug)]
+enum ItemArg {
+    Id(u64),
+    Name(String),
+}
+
+async fn item_lookup<I: Into<ItemTypes>>(
+    arg: ItemArg,
+    item_type: I,
+    mut client: Boardswarm,
+) -> Result<u64, anyhow::Error> {
+    let item_type: ItemTypes = item_type.into();
+    match arg {
+        ItemArg::Id(id) => Ok(id),
+        ItemArg::Name(name) => {
+            let mut items = client.list(item_type.into()).await?;
+
+            let (name, instance) = name
+                .rsplit_once('@')
+                .map_or((name.as_str(), None), |(n, i)| (n, Some(i)));
+
+            items.retain(|i| i.name == name && i.instance.as_deref() == instance);
+
+            match items.len() {
+                0 => bail!("{item_type:#} not found"),
+                1 => Ok(items[0].id),
+                /* The items are uniquely identified only with their ids so this could happen */
+                _ => bail!("Duplicate {item_type} name {name}"),
+            }
+        }
+    }
+}
+
+fn parse_actuator(device: &str) -> Result<ItemArg, Infallible> {
+    if let Ok(id) = device.parse() {
+        Ok(ItemArg::Id(id))
+    } else {
+        Ok(ItemArg::Name(device.to_string()))
+    }
+}
+
 #[derive(Debug, Args)]
 struct ActuatorMode {
     /// Actuator specific mode in json format
@@ -254,6 +310,14 @@ enum ActuatorCommand {
     ChangeMode(ActuatorMode),
     /// Display actuator properties
     Properties,
+}
+
+fn parse_console(device: &str) -> Result<ItemArg, Infallible> {
+    if let Ok(id) = device.parse() {
+        Ok(ItemArg::Id(id))
+    } else {
+        Ok(ItemArg::Name(device.to_string()))
+    }
 }
 
 #[derive(Debug, Args)]
@@ -291,6 +355,14 @@ struct BmapWriteArgs {
     target: String,
     /// Path to bmap file
     file: PathBuf,
+}
+
+fn parse_volume(device: &str) -> Result<ItemArg, Infallible> {
+    if let Ok(id) = device.parse() {
+        Ok(ItemArg::Id(id))
+    } else {
+        Ok(ItemArg::Name(device.to_string()))
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -452,21 +524,24 @@ enum Command {
     /// Actuator specific commands
     Actuator {
         /// The actuator to use
-        actuator: u64,
+        #[arg(value_parser = parse_actuator)]
+        actuator: ItemArg,
         #[command(subcommand)]
         command: ActuatorCommand,
     },
     /// Console specific commands
     Console {
         /// The console to use
-        console: u64,
+        #[arg(value_parser = parse_console)]
+        console: ItemArg,
         #[command(subcommand)]
         command: ConsoleCommand,
     },
     /// Volumes specific commands
     Volume {
         /// The volume to use
-        volume: u64,
+        #[arg(value_parser = parse_volume)]
+        volume: ItemArg,
         #[command(subcommand)]
         command: VolumeCommand,
     },
@@ -798,7 +873,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::List { type_ } => {
             let items = boardswarm.list(type_.into()).await?;
-            println!("{:?}s: ", type_);
+            println!("{type_:#}s: ");
             for i in items {
                 print_item(i);
             }
@@ -806,7 +881,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Monitor { type_ } => {
             let events = boardswarm.monitor(type_.into()).await?;
-            println!("{:?}s: ", type_);
+            println!("{type_:#}s: ");
             pin_mut!(events);
             while let Some(event) = events.next().await {
                 let event = event?;
@@ -822,6 +897,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Actuator { actuator, command } => {
+            let actuator = item_lookup(actuator, ItemType::Actuator, boardswarm.clone()).await?;
             match command {
                 ActuatorCommand::ChangeMode(c) => {
                     let p = serde_json::from_str(&c.mode)?;
@@ -838,6 +914,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Console { console, command } => {
+            let console = item_lookup(console, ItemType::Console, boardswarm.clone()).await?;
             match command {
                 ConsoleCommand::Configure(c) => {
                     let p = serde_json::from_str(&c.configuration)?;
@@ -867,6 +944,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Volume { volume, command } => {
+            let volume = item_lookup(volume, ItemType::Volume, boardswarm.clone()).await?;
             match command {
                 VolumeCommand::Info => {
                     let info = boardswarm.volume_info(volume).await?;
