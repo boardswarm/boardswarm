@@ -45,6 +45,10 @@ pub async fn start_provider(name: String, parameters: serde_yaml::Value, server:
         (registry::PROVIDER, PROVIDER),
     ];
     let parameters: GpioParameters = serde_yaml::from_value(parameters).unwrap();
+    if parameters.match_.is_empty() {
+        warn!("matches is empty - could match random device");
+    }
+
     let mut registration = None;
     let mut devices = crate::udev::DeviceStream::new("gpio").unwrap();
     while let Some(d) = devices.next().await {
