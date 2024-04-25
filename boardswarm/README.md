@@ -111,6 +111,10 @@ For each item created by a provider the `boardswarm.provider.name` property
 is set to the configured name and the `boardswarm.provider` property is set to
 the provider used.
 
+As a starting point, the [example udev rules](share/99-boardswarm.rules) can be
+used to grant device permissions to boardswarm. It is recommended that these
+rules be used alongside the [example systemd service](share/boardswarm.service).
+
 ### Serial provider
 
 The serial provider creates consoles from local serial ports. No provider specific

@@ -1,0 +1,2 @@
+# USB Serial devices
+ACTION=="add", SUBSYSTEM=="tty", ENV{ID_BUS}=="usb", GROUP="boardswarm"
