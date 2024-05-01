@@ -302,6 +302,31 @@ devices:
             udev.ID_SERIAL: "12345"
 ```
 
+To find suitable match statements, first determine the serial port used as the
+console for the development board. We can use the following command to list the
+consoles that boardswarm has found, the required console should be visible in
+this list:
+
+```
+$ boardswarm-cli list consoles
+```
+
+The following command can be used to list the properties that can potentially
+be used to uniquely identify the console:
+
+```
+$ boardswarm console <console_num_or_name> properties
+```
+
+The recommended property to use to identify USB consoles is `udev.ID_SERIAL`.
+If a multi-port USB serial device is used then `udev.ID_USB_INTERFACE_NUM` will
+also need to be specified. Some USB serial devices don't provide a serial and
+some cheap USB devices are known to not be unique. If that is the case, or the
+serial console is provided by a non-USB port, `udev.ID_PATH` can be used,
+however it must be noted that the USB serial device would then need to remain
+connected to the same USB port and system upgrades might require these values
+to be checked and updated should the enumeration change in the future.
+
 ### Device volumes
 
 The list of volumes linked to this device. Each volume has a name and a match
@@ -316,6 +341,46 @@ devices:
       - name: volume
         match:
           udev.ID_PATH: "pci-0000:00:14.0-usb-0:12.3"
+```
+
+#### DFU Volumes
+
+If the device supports DFU, this can be added as a volume. Power on the
+development board in DFU mode and use `boardswarm-cli` to list the volumes that
+have been found:
+
+```
+$ boardswarm-cli list volumes
+Volumes:
+1 3/17 AM62x_DFU
+```
+
+The vendor and product IDs can be identified using `boardswarm-cli volume
+<volume> properties`:
+
+```
+$ boardswarm-cli volume 1 properties | grep -e "USB_VENDOR_ID" -e "USB_MODEL_ID"
+"udev.ID_USB_MODEL_ID" => "6165"
+"udev.ID_USB_VENDOR_ID" => "0451"
+$
+```
+
+Ensure that the group ownership of usb devices with the given USB vendor and
+product IDs (`0451` and `6165` in the above example) are set to the boardswarm
+group, for example by using udev rules such as the following:
+
+```
+ACTION=="add", SUBSYSTEM=="usb", ATTRS{idVendor}=="0451", ATTRS{idProduct}=="6165", GROUP="boardswarm"
+```
+
+The `ID_PATH`, to be used as a match statement, can also be identified using
+the `boardswarm-cli volume` subcommand:
+
+```
+$ boardswarm-cli volume 1 properties | grep "ID_PATH"
+"udev.ID_PATH" => "pci-0000:00:14.0-usb-0:3.4"
+"udev.ID_PATH_TAG" => "pci-0000_00_14_0-usb-0_3_4"
+$
 ```
 
 ### Device modes
