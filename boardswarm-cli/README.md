@@ -17,6 +17,17 @@ well:
 $ boardswarm-cli  --instance <instance name> auth init -u <instance url> --token-file <path to token file>
 ```
 
+Once initialised, configured servers can be listed by running:
+```
+$ boardswarm-cli auth list
+```
+
+The devices configured on the server(s) can be listed with the following
+command:
+```
+$ boardswarm-cli list devices
+```
+
 For more information see `boardswarm-cli auth --help`
 
 ## Boardswarm UI
@@ -34,3 +45,13 @@ The UI has the follow keyboard shortcuts:
 * ^a k: Scroll up
 * ^a j: Scroll down
 * ^a 0: Reset scrolling state
+
+## Boardswarm device control
+
+If the required modes are configured for the device, basic board control can be
+performed without opening the tui, for example a board can be powered on and
+off:
+```
+$ boardswarm-cli device <device name> mode on
+$ boardswarm-cli device <device name> mode off
+```
