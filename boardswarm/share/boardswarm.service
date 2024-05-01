@@ -6,6 +6,8 @@ Environment="RUST_LOG=info"
 ExecStart=/usr/local/bin/boardswarm /etc/boardswarm/server.conf
 Type=simple
 DynamicUser=yes
+User=boardswarm
+Group=boardswarm
 StateDirectory=boardswarm
 ProtectHome=true
 Restart=on-abnormal
