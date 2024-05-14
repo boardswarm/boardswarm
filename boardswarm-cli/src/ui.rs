@@ -17,6 +17,9 @@ use tokio_util::sync::ReusableBoxFuture;
 
 use crate::ui_term;
 
+const COLUMNS: u16 = 80u16;
+const ROWS: u16 = 24u16;
+
 struct Terminal {
     parser: vt100::Parser,
     tui: TuiTerminal<CrosstermBackend<std::io::Stdout>>,
@@ -60,7 +63,7 @@ impl Terminal {
         self.tui
             .draw(|f| {
                 let size = f.size();
-                let term_area = Rect::new(0, 0, 80.min(size.width), 24.min(size.height));
+                let term_area = Rect::new(0, 0, COLUMNS.min(size.width), ROWS.min(size.height));
                 f.render_widget(term, term_area);
                 if !screen.hide_cursor() && screen.scrollback() == 0 {
                     let cursor = screen.cursor_position();
@@ -178,7 +181,7 @@ pub async fn run_ui(
     )
     .unwrap();
 
-    let mut terminal = Terminal::new(80, 24, terminal).await;
+    let mut terminal = Terminal::new(COLUMNS, ROWS, terminal).await;
     let mut console = match console {
         Some(console) => device.console_by_name(&console),
         None => device.console(),
