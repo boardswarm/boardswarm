@@ -13,6 +13,9 @@ To run boardswarm a yaml configuration file needs to be passed as an argument.
 As a starting point the documented [example configuration](share/server.conf)
 can be used.
 
+To run as a systemd service, the [example systemd service](share/boardswarm.service)
+can be used.
+
 ## Authentication
 
 Boardswarm always validates authentication against [JWT] bearer tokens; The
@@ -107,6 +110,10 @@ providers:
 For each item created by a provider the `boardswarm.provider.name` property
 is set to the configured name and the `boardswarm.provider` property is set to
 the provider used.
+
+As a starting point, the [example udev rules](share/99-boardswarm.rules) can be
+used to grant device permissions to boardswarm. It is recommended that these
+rules be used alongside the [example systemd service](share/boardswarm.service).
 
 ### Serial provider
 
