@@ -86,7 +86,7 @@ where
             if let Some(token) = auth.token().await {
                 req.headers_mut().insert(
                     http::header::AUTHORIZATION.as_str(),
-                    format!("Bearer {}", token).parse().unwrap(),
+                    format!("Bearer {}", token.trim()).parse().unwrap(),
                 );
             }
             inner.call(req).await
