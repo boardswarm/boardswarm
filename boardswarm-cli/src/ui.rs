@@ -205,6 +205,11 @@ where
     }
 }
 
+enum InputMsg {
+    Input(Input),
+    Error(String),
+}
+
 pub async fn run_ui(
     device: boardswarm_client::device::Device,
     console: Option<String>,
@@ -266,10 +271,14 @@ pub async fn run_ui(
                 }
                 Some(input) = input_rx.recv() => {
                     match input {
-                        Input::Up => { terminal.scroll_up(); },
-                        Input::Down => { terminal.scroll_down(); },
-                        Input::ScrollReset => { terminal.scroll_reset(); },
-                        _ => (),
+                        InputMsg::Input(input) =>
+                            match input {
+                                Input::Up => { terminal.scroll_up(); },
+                                Input::Down => { terminal.scroll_down(); },
+                                Input::ScrollReset => { terminal.scroll_reset(); },
+                                _ => (),
+                            },
+                        InputMsg::Error(_) => (),
                     }
                 }
                 Some(new_state) = state_rx.recv() => {
@@ -308,7 +317,7 @@ pub async fn run_ui(
                             None
                         }
                         Input::Up | Input::Down | Input::ScrollReset => {
-                            input_tx.send(i).await.unwrap();
+                            input_tx.send(InputMsg::Input(i)).await.unwrap();
                             None
                         }
                         Input::Bytes(data) => Some(data),
