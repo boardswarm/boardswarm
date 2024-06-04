@@ -6,7 +6,7 @@ use tracing::instrument;
 
 use crate::{
     registry::{self, Properties},
-    Server,
+    ActuatorError, Server,
 };
 
 pub const PROVIDER: &str = "pdudaemon";
@@ -97,17 +97,17 @@ impl crate::Actuator for PduDaemonActuator {
     async fn set_mode(
         &self,
         parameters: Box<dyn erased_serde::Deserializer<'static> + Send>,
-    ) -> Result<(), crate::ActuatorError> {
+    ) -> Result<(), ActuatorError> {
         #[derive(Deserialize)]
         struct ModeParameters {
             mode: String,
         }
         let parameters = ModeParameters::deserialize(parameters).unwrap();
         match parameters.mode.as_str() {
-            "on" => self.daemon.on(&self.hostname, &self.port).await.unwrap(),
-            "off" => self.daemon.off(&self.hostname, &self.port).await.unwrap(),
+            "on" => self.daemon.on(&self.hostname, &self.port).await,
+            "off" => self.daemon.off(&self.hostname, &self.port).await,
             _ => todo!(),
         }
-        Ok(())
+        .map_err(|_e| ActuatorError {})
     }
 }
