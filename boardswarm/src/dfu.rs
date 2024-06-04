@@ -26,14 +26,20 @@ pub async fn start_provider(name: String, server: Server) {
     while let Some(d) = devices.next().await {
         match d {
             DeviceEvent::Add(d) => {
-                let Some(interface) = d.property("ID_USB_INTERFACES") else { continue };
+                let Some(interface) = d.property("ID_USB_INTERFACES") else {
+                    continue;
+                };
                 if interface != ":fe0102:" || d.devnode().is_none() {
                     continue;
                 }
-                let Some(busnum) = d.property_u64("BUSNUM", 10)
-                    .and_then( | v | v.try_into().ok()) else { continue } ;
-                let Some(devnum) = d.property_u64("DEVNUM", 10)
-                    .and_then(|v|v.try_into().ok()) else { continue } ;
+                let Some(busnum) = d.property_u64("BUSNUM", 10).and_then(|v| v.try_into().ok())
+                else {
+                    continue;
+                };
+                let Some(devnum) = d.property_u64("DEVNUM", 10).and_then(|v| v.try_into().ok())
+                else {
+                    continue;
+                };
 
                 let name = if let Some(model) = d.property("ID_MODEL") {
                     format!("{}/{} {}", busnum, devnum, model)

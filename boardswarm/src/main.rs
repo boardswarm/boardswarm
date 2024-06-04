@@ -824,7 +824,9 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
                     };
 
                     let Some(request) = request.target_or_request else {
-                    warn!("Invalid request, no actualy request"); return; };
+                        warn!("Invalid request, no actualy request");
+                        return;
+                    };
 
                     match request {
                         volume_io_request::TargetOrRequest::Target(_) => {

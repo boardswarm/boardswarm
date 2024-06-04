@@ -43,8 +43,8 @@ impl Stream for DeviceStream {
         } else {
             loop {
                 let Some(event) = ready!(Pin::new(&mut me.monitor).poll_next(cx)) else {
-                return Poll::Ready(None)
-            };
+                    return Poll::Ready(None);
+                };
                 let event = match event {
                     Ok(event) => event,
                     Err(e) => {
