@@ -34,6 +34,7 @@ struct Terminal {
     parser: vt100::Parser,
     tui: TuiTerminal<CrosstermBackend<std::io::Stdout>>,
     terminal_mode: Option<TerminalMode>,
+    message: Option<String>,
 }
 
 impl Terminal {
@@ -47,6 +48,7 @@ impl Terminal {
             parser,
             tui,
             terminal_mode: None,
+            message: None,
         };
         this.update().await;
         this
@@ -70,14 +72,21 @@ impl Terminal {
 
     fn set_functioning(&mut self, str: String) {
         self.terminal_mode = Some(TerminalMode::Functioning(str));
+        self.message = None;
     }
 
     fn set_non_functioning(&mut self, str: String) {
         self.terminal_mode = Some(TerminalMode::NonFunctioning(str));
+        self.message = None;
     }
 
     fn set_alternate(&mut self, str: String) {
         self.terminal_mode = Some(TerminalMode::Alternate(str));
+        self.message = None;
+    }
+
+    fn set_message(&mut self, message: String) {
+        self.message = Some(message);
     }
 
     fn process(&mut self, bytes: &[u8]) {
@@ -88,6 +97,7 @@ impl Terminal {
         let screen = self.parser.screen();
         let term = ui_term::UiTerm::new(screen);
         let terminal_mode = self.terminal_mode.clone();
+        let message = self.message.clone();
         self.tui
             .draw(|f| {
                 let size = f.size();
@@ -126,6 +136,14 @@ impl Terminal {
                     .split(area_chunks[1]);
 
                 f.render_widget(mode, status_chunks[0]);
+
+                if let Some(message) = message {
+                    let message_block = Block::default()
+                        .style(Style::reset().fg(Color::Black).bg(Color::LightYellow));
+                    let message = Paragraph::new(message).block(message_block);
+
+                    f.render_widget(message, status_chunks[1]);
+                }
             })
             .unwrap();
     }
@@ -278,7 +296,7 @@ pub async fn run_ui(
                                 Input::ScrollReset => { terminal.scroll_reset(); },
                                 _ => (),
                             },
-                        InputMsg::Error(_) => (),
+                        InputMsg::Error(e) => { terminal.set_message(e); },
                     }
                 }
                 Some(new_state) = state_rx.recv() => {
@@ -304,7 +322,12 @@ pub async fn run_ui(
                 async move {
                     match i {
                         Input::PowerOn => {
-                            device.change_mode("on").await.unwrap();
+                            if let Err(e) = device.change_mode("on").await {
+                                input_tx
+                                    .send(InputMsg::Error(e.message().to_string()))
+                                    .await
+                                    .unwrap();
+                            }
                             None
                         }
                         Input::PowerOff => {
