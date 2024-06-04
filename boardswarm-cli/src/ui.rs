@@ -120,7 +120,12 @@ impl Terminal {
                 let mode_block = Block::default().style(style);
                 let mode = Paragraph::new(text).block(mode_block);
 
-                f.render_widget(mode, area_chunks[1]);
+                let status_chunks = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Ratio(1, 8), Constraint::Ratio(7, 8)])
+                    .split(area_chunks[1]);
+
+                f.render_widget(mode, status_chunks[0]);
             })
             .unwrap();
     }
