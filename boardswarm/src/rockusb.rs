@@ -29,16 +29,24 @@ pub async fn start_provider(name: String, server: Server) {
     while let Some(d) = devices.next().await {
         match d {
             DeviceEvent::Add(d) => {
-                let Some(vendor) = d.property_u64("ID_VENDOR_ID", 16) else { continue };
+                let Some(vendor) = d.property_u64("ID_VENDOR_ID", 16) else {
+                    continue;
+                };
 
                 if vendor != 0x2207 || d.devnode().is_none() {
                     continue;
                 }
 
-                let Some(busnum): Option<u8> = d.property_u64("BUSNUM", 10)
-                    .and_then( | v | v.try_into().ok()) else { continue } ;
-                let Some(devnum): Option<u8> = d.property_u64("DEVNUM", 10)
-                    .and_then(|v|v.try_into().ok()) else { continue } ;
+                let Some(busnum): Option<u8> =
+                    d.property_u64("BUSNUM", 10).and_then(|v| v.try_into().ok())
+                else {
+                    continue;
+                };
+                let Some(devnum): Option<u8> =
+                    d.property_u64("DEVNUM", 10).and_then(|v| v.try_into().ok())
+                else {
+                    continue;
+                };
 
                 let name = if let Some(model) = d.property("ID_MODEL") {
                     format!("{}/{} {}", busnum, devnum, model)
@@ -428,9 +436,12 @@ fn write_maskrom_area(
 }
 
 fn rockusb_thread(bus: u8, dev: u8, mut commands: mpsc::Receiver<RockUsbCommand>) {
-    let Some(device) = crate::utils::usb_device_from_bus_dev(bus, dev) else  {
-        warn!("Failed to start thread for usb device {}/{}, not found", bus, dev);
-        return
+    let Some(device) = crate::utils::usb_device_from_bus_dev(bus, dev) else {
+        warn!(
+            "Failed to start thread for usb device {}/{}, not found",
+            bus, dev
+        );
+        return;
     };
 
     while let Some(command) = commands.blocking_recv() {
