@@ -5,21 +5,36 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen},
 };
-use futures::{pin_mut, ready, Stream, StreamExt};
+use futures::{pin_mut, ready, Stream, StreamExt, TryStreamExt};
 use ratatui::{
     backend::CrosstermBackend,
-    layout::Rect,
-    widgets::{Block, Borders},
+    layout::{Layout, Rect},
+    prelude::{Constraint, Direction},
+    style::{Color, Style},
+    widgets::{Block, Borders, Paragraph},
     Terminal as TuiTerminal,
 };
+
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio_util::sync::ReusableBoxFuture;
 
 use crate::ui_term;
 
+const COLUMNS: u16 = 80u16;
+const ROWS: u16 = 24u16;
+
+#[derive(Clone)]
+pub enum TerminalMode {
+    NonFunctioning(String),
+    Functioning(String),
+    Alternate(String),
+}
+
 struct Terminal {
     parser: vt100::Parser,
     tui: TuiTerminal<CrosstermBackend<std::io::Stdout>>,
+    terminal_mode: Option<TerminalMode>,
+    message: Option<String>,
 }
 
 impl Terminal {
@@ -29,7 +44,12 @@ impl Terminal {
         tui: TuiTerminal<CrosstermBackend<std::io::Stdout>>,
     ) -> Self {
         let parser = vt100::Parser::new(height, width, height as usize * 128);
-        let mut this = Self { parser, tui };
+        let mut this = Self {
+            parser,
+            tui,
+            terminal_mode: None,
+            message: None,
+        };
         this.update().await;
         this
     }
@@ -50,6 +70,25 @@ impl Terminal {
         self.parser.set_scrollback(0)
     }
 
+    fn set_functioning(&mut self, str: String) {
+        self.terminal_mode = Some(TerminalMode::Functioning(str));
+        self.message = None;
+    }
+
+    fn set_non_functioning(&mut self, str: String) {
+        self.terminal_mode = Some(TerminalMode::NonFunctioning(str));
+        self.message = None;
+    }
+
+    fn set_alternate(&mut self, str: String) {
+        self.terminal_mode = Some(TerminalMode::Alternate(str));
+        self.message = None;
+    }
+
+    fn set_message(&mut self, message: String) {
+        self.message = Some(message);
+    }
+
     fn process(&mut self, bytes: &[u8]) {
         self.parser.process(bytes);
     }
@@ -57,14 +96,53 @@ impl Terminal {
     async fn update(&mut self) {
         let screen = self.parser.screen();
         let term = ui_term::UiTerm::new(screen);
+        let terminal_mode = self.terminal_mode.clone();
+        let message = self.message.clone();
         self.tui
             .draw(|f| {
                 let size = f.size();
-                let term_area = Rect::new(0, 0, 80.min(size.width), 24.min(size.height));
-                f.render_widget(term, term_area);
+                let term_area = Rect::new(0, 0, COLUMNS.min(size.width), ROWS.min(size.height));
+                let area_chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Min(1), Constraint::Length(1)])
+                    .split(term_area);
+
+                f.render_widget(term, area_chunks[0]);
                 if !screen.hide_cursor() && screen.scrollback() == 0 {
                     let cursor = screen.cursor_position();
-                    f.set_cursor(cursor.1 + term_area.x, cursor.0 + term_area.y);
+                    f.set_cursor(cursor.1 + area_chunks[0].x, cursor.0 + area_chunks[0].y);
+                }
+
+                let (style, text) = match terminal_mode {
+                    Some(terminal_mode) => match terminal_mode {
+                        TerminalMode::NonFunctioning(s) => {
+                            (Style::reset().fg(Color::Black).bg(Color::LightRed), s)
+                        }
+                        TerminalMode::Functioning(s) => {
+                            (Style::reset().fg(Color::Black).bg(Color::LightGreen), s)
+                        }
+                        TerminalMode::Alternate(s) => {
+                            (Style::reset().fg(Color::Black).bg(Color::LightMagenta), s)
+                        }
+                    },
+                    None => (Style::reset(), "UNKNOWN".to_string()),
+                };
+                let mode_block = Block::default().style(style);
+                let mode = Paragraph::new(text).block(mode_block);
+
+                let status_chunks = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Ratio(1, 8), Constraint::Ratio(7, 8)])
+                    .split(area_chunks[1]);
+
+                f.render_widget(mode, status_chunks[0]);
+
+                if let Some(message) = message {
+                    let message_block = Block::default()
+                        .style(Style::reset().fg(Color::Black).bg(Color::LightYellow));
+                    let message = Paragraph::new(message).block(message_block);
+
+                    f.render_widget(message, status_chunks[1]);
                 }
             })
             .unwrap();
@@ -145,6 +223,11 @@ where
     }
 }
 
+enum InputMsg {
+    Input(Input),
+    Error(String),
+}
+
 pub async fn run_ui(
     device: boardswarm_client::device::Device,
     console: Option<String>,
@@ -178,7 +261,8 @@ pub async fn run_ui(
     )
     .unwrap();
 
-    let mut terminal = Terminal::new(80, 24, terminal).await;
+    /* 1 row for status line at the bottom */
+    let mut terminal = Terminal::new(COLUMNS, ROWS - 1, terminal).await;
     let mut console = match console {
         Some(console) => device.console_by_name(&console),
         None => device.console(),
@@ -189,9 +273,11 @@ pub async fn run_ui(
     let output = output_console.stream_output().await?;
 
     let (input_tx, input_rx) = tokio::sync::mpsc::channel(16);
+    let (state_tx, state_rx) = tokio::sync::mpsc::channel(16);
     let _writer = tokio::spawn(async move {
         pin_mut!(output);
         pin_mut!(input_rx);
+        pin_mut!(state_rx);
         loop {
             tokio::select! {
                 data = output.next() => {
@@ -203,10 +289,22 @@ pub async fn run_ui(
                 }
                 Some(input) = input_rx.recv() => {
                     match input {
-                        Input::Up => { terminal.scroll_up(); },
-                        Input::Down => { terminal.scroll_down(); },
-                        Input::ScrollReset => { terminal.scroll_reset(); },
-                        _ => (),
+                        InputMsg::Input(input) =>
+                            match input {
+                                Input::Up => { terminal.scroll_up(); },
+                                Input::Down => { terminal.scroll_down(); },
+                                Input::ScrollReset => { terminal.scroll_reset(); },
+                                _ => (),
+                            },
+                        InputMsg::Error(e) => { terminal.set_message(e); },
+                    }
+                }
+                Some(new_state) = state_rx.recv() => {
+                    let state: String = new_state;
+                    match state.as_str() {
+                        "on" => terminal.set_functioning("ON".to_string()),
+                        "off" => terminal.set_non_functioning("OFF".to_string()),
+                        other => terminal.set_alternate(other.to_uppercase()),
                     }
                 }
             }
@@ -214,6 +312,7 @@ pub async fn run_ui(
         }
     });
 
+    let dev_clone = device.clone();
     let reader = tokio::spawn(async move {
         let input = InputStream::new(stdin);
         console
@@ -223,7 +322,12 @@ pub async fn run_ui(
                 async move {
                     match i {
                         Input::PowerOn => {
-                            device.change_mode("on").await.unwrap();
+                            if let Err(e) = device.change_mode("on").await {
+                                input_tx
+                                    .send(InputMsg::Error(e.message().to_string()))
+                                    .await
+                                    .unwrap();
+                            }
                             None
                         }
                         Input::PowerOff => {
@@ -236,7 +340,7 @@ pub async fn run_ui(
                             None
                         }
                         Input::Up | Input::Down | Input::ScrollReset => {
-                            input_tx.send(i).await.unwrap();
+                            input_tx.send(InputMsg::Input(i)).await.unwrap();
                             None
                         }
                         Input::Bytes(data) => Some(data),
@@ -244,6 +348,18 @@ pub async fn run_ui(
                 }
             }))
             .await
+    });
+
+    let _device_state_watcher = tokio::spawn(async move {
+        let mut d = dev_clone.device_info().await.unwrap();
+        let mut current_mode = None;
+
+        while let Some(device) = d.try_next().await.unwrap() {
+            if device.current_mode != current_mode {
+                current_mode = device.current_mode;
+                state_tx.send(current_mode.clone().unwrap()).await.unwrap();
+            }
+        }
     });
 
     let r = reader.await;

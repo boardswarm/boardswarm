@@ -232,6 +232,15 @@ impl Device {
         Ok(())
     }
 
+    /// Get this device information
+    pub async fn device_info(
+        &self,
+    ) -> Result<impl Stream<Item = Result<boardswarm_protocol::Device, tonic::Status>>, tonic::Status>
+    {
+        let mut client = self.client.clone();
+        client.device_info(self.id).await
+    }
+
     /// Get the default console
     pub fn console(&self) -> Option<DeviceConsole> {
         let d = self.inner.device.lock().unwrap();
