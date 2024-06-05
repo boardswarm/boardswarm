@@ -110,9 +110,23 @@ impl Server {
     }
 }
 
+fn upto_whitespace<'de, D>(de: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut s = String::deserialize(de)?;
+    if let Some(offset) = s.find(char::is_whitespace) {
+        s.truncate(offset);
+    }
+
+    Ok(s)
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum Auth {
-    Token(String),
+    // If the token ended up in the config file with whitespace (e.g. trialing newline) simply cut
+    // that of on deserialization
+    Token(#[serde(deserialize_with = "upto_whitespace")] String),
     Oidc {
         uri: url::Url,
         client_id: String,
