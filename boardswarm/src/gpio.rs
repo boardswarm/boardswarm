@@ -38,13 +38,17 @@ impl GpioParameters {
     }
 }
 
-#[instrument(skip(parameters, server))]
+#[instrument(fields(name), skip_all, level = "error")]
 pub async fn start_provider(name: String, parameters: serde_yaml::Value, server: Server) {
     let provider_properties = &[
         (registry::PROVIDER_NAME, name.as_str()),
         (registry::PROVIDER, PROVIDER),
     ];
     let parameters: GpioParameters = serde_yaml::from_value(parameters).unwrap();
+    if parameters.match_.is_empty() {
+        warn!("matches is empty - will match any gpio device");
+    }
+
     let mut registration = None;
     let mut devices = crate::udev::DeviceStream::new("gpio").unwrap();
     while let Some(d) = devices.next().await {

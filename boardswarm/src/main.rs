@@ -20,7 +20,7 @@ use thiserror::Error;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Streaming;
-use tracing::{info, warn};
+use tracing::{info, instrument, warn};
 
 mod boardswarm_provider;
 mod config;
@@ -239,19 +239,31 @@ trait DeviceConfigItem {
 }
 
 impl DeviceConfigItem for config::Console {
+    #[instrument(fields(name = self.name), skip_all, level="error")]
     fn matches(&self, properties: &Properties) -> bool {
+        if self.match_.is_empty() {
+            warn!("Console matches is empty - will match any console");
+        }
         properties.matches(&self.match_)
     }
 }
 
 impl DeviceConfigItem for config::Volume {
+    #[instrument(fields(name = self.name), skip_all, level="error")]
     fn matches(&self, properties: &Properties) -> bool {
+        if self.match_.is_empty() {
+            warn!("Volume matches is empty - will match any volume");
+        }
         properties.matches(&self.match_)
     }
 }
 
 impl DeviceConfigItem for config::ModeStep {
+    #[instrument(skip_all, level = "error")]
     fn matches(&self, properties: &Properties) -> bool {
+        if self.match_.is_empty() {
+            warn!("ModeStep matches is empty - will match any device");
+        }
         properties.matches(&self.match_)
     }
 }
