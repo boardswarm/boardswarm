@@ -115,7 +115,7 @@ fn trim_whitespace<'de, D>(de: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let s = String::deserialize(de)?;
+    let s = <&str>::deserialize(de)?;
     Ok(s.trim_start().trim_end().to_string())
 }
 
