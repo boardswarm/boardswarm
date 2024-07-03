@@ -97,6 +97,7 @@ impl Token {
         let mut f = tokio::fs::File::options()
             .write(true)
             .create(true)
+            .truncate(true)
             .mode(0o600)
             .open(path)
             .await?;
