@@ -36,6 +36,10 @@ impl Properties {
         self.properties.get(prop).map(String::as_ref)
     }
 
+    /// Tests if matches is a subset of the properties
+    ///
+    /// If properties is from a remote instance (`boardswarm.instance` is set) that has to be
+    /// explicitly matched otherwise it's a pure subset match (e.g. an empty set matches)
     pub fn matches<K, V, I>(&self, matches: I) -> bool
     where
         K: AsRef<str>,
@@ -259,6 +263,9 @@ mod test {
         let mut t = HashMap::new();
         t.insert(NAME.to_string(), "test".to_string());
         assert!(props.matches(&t));
+
+        let empty: HashMap<String, String> = HashMap::new();
+        assert!(props.matches(empty));
 
         assert!(props.matches([(NAME, "test")]));
         assert!(props.matches([("udev.BADGER", "5")]));
