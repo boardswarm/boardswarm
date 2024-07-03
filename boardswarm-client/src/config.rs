@@ -11,12 +11,12 @@ pub enum Error {
     Yaml(#[from] serde_yaml::Error),
 }
 
-#[derive(Clone, Default, Debug, Deserialize, Serialize)]
+#[derive(Clone, Default, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ConfigFile {
     servers: Vec<Server>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Config {
     path: PathBuf,
     config: ConfigFile,
@@ -30,13 +30,14 @@ impl Config {
         }
     }
 
+    fn from_slice(slice: &[u8], path: PathBuf) -> Result<Config, Error> {
+        let config = serde_yaml::from_slice(slice)?;
+        Ok(Config { path, config })
+    }
+
     pub async fn from_file<P: AsRef<Path>>(path: P) -> Result<Config, Error> {
         let content = tokio::fs::read(&path).await?;
-        let config = serde_yaml::from_slice(&content)?;
-        Ok(Config {
-            path: path.as_ref().into(),
-            config,
-        })
+        Self::from_slice(&content, path.as_ref().into())
     }
 
     pub async fn write(&self) -> Result<(), Error> {
@@ -94,7 +95,7 @@ impl Config {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Server {
     pub name: String,
     #[serde(with = "http_serde::uri")]
@@ -110,12 +111,64 @@ impl Server {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+fn trim_whitespace<'de, D>(de: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(de)?;
+    Ok(s.trim_start().trim_end().to_string())
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub enum Auth {
-    Token(String),
+    // If the token ended up in the config file with whitespace (e.g. trialing newline) simply cut
+    // that of on deserialization
+    Token(#[serde(deserialize_with = "trim_whitespace")] String),
     Oidc {
         uri: url::Url,
         client_id: String,
         token_cache: PathBuf,
     },
+}
+
+#[test]
+fn token_parsing() {
+    let p = PathBuf::from("config.yaml");
+    let mut expected = Config::new(p.clone());
+    expected.config.servers = vec![Server {
+        name: String::from("server1"),
+        uri: "https://example.com:6683".parse().unwrap(),
+        auth: Auth::Token(String::from("tokentokentoken")),
+    }];
+
+    let t = b"
+servers:
+- name: server1
+  uri: https://example.com:6683
+  auth: !Token tokentokentoken
+";
+    let config = Config::from_slice(t, p.clone()).unwrap();
+    assert_eq!(config, expected, "normal");
+
+    let t = b"
+servers:
+- name: server1
+  uri: https://example.com:6683
+  auth: !Token
+    tokentokentoken
+
+";
+    let config = Config::from_slice(t, p.clone()).unwrap();
+    assert_eq!(config, expected, "trailing whitespace");
+
+    let t = b"
+servers:
+- name: server1
+  uri: https://example.com:6683
+  auth: !Token |
+
+    tokentokentoken
+";
+    let config = Config::from_slice(t, p.clone()).unwrap();
+    assert_eq!(config, expected, "leading whitespace");
 }
