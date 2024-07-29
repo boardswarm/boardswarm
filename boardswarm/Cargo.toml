@@ -12,7 +12,7 @@ readme = "README.md"
 anyhow = "1.0.68"
 async-trait = "0.1.74"
 bytes = "1.4.0"
-clap = { version = "~4.4.18", features = ["derive"] }
+clap = { version = "~4.5.11", features = ["derive"] }
 futures = "0.3.25"
 humantime-serde = "1.1.1"
 pdudaemon-client = "0.1.0"
