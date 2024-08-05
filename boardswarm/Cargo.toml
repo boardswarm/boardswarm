@@ -11,7 +11,7 @@ readme = "README.md"
 [dependencies]
 anyhow = "1.0.68"
 async-trait = "0.1.74"
-bytes = "1.4.0"
+bytes = "1.7.1"
 clap = { version = "~4.4.18", features = ["derive"] }
 futures = "0.3.25"
 humantime-serde = "1.1.1"
