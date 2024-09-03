@@ -17,12 +17,12 @@ tokio = { version = "1.30.0", features = ["full"] }
 tonic = { version = "0.12", features = ["tls", "tls-roots"] }
 tracing = "0.1.37"
 thiserror = "1.0.40"
-tower = "0.4.13"
+tower = "0.5"
 http = "1.1.0"
 serde = "1.0.189"
 http-serde = "2.1"
 serde_yaml = "0.9.25"
-oauth2 = "4.4.2"
-reqwest = { version = "0.11.22", features = ["json"] }
+oauth2 = "5.0.0-alpha.4"
+reqwest = { version = "0.12", features = ["json"] }
 async-trait = "0.1.74"
 url = { version = "2.4.1", features = ["serde"] }

@@ -32,7 +32,6 @@ serde = "1.0.189"
 http-serde = "2.1"
 serde_yaml = "0.9.25"
 dirs = "5.0.1"
-reqwest = { version = "0.11.22", features = ["json"] }
 json = "0.12.4"
 async-trait = "0.1.74"
 url = { version = "2.4.1", features = ["serde"] }
