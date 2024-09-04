@@ -11,16 +11,16 @@ readme = "README.md"
 [dependencies]
 bytes = "1.4.0"
 futures = "0.3.25"
-prost = "0.12.1"
-prost-types = "0.12.1"
+prost = "0.13"
+prost-types = "0.13"
 serde = { version = "1.0.189", features = ["derive"] }
 tokio = { version = "1.30.0", features = ["full"] }
-tonic = "0.11"
+tonic = "0.12"
 
 [build-dependencies]
-prost-build = "0.12.1"
-prost-wkt-build = "0.5.0"
-tonic-build = "0.11"
+prost-build = "0.13.1"
+prost-wkt-build = "0.6"
+tonic-build = "0.12"
 
 [dev-dependencies]
 serde_json = "1.0.91"

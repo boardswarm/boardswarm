@@ -15,23 +15,21 @@ impl Parameters {
 }
 
 impl prost::Message for Parameters {
-    fn encode_raw<B>(&self, buf: &mut B)
+    fn encode_raw(&self, buf: &mut impl bytes::BufMut)
     where
-        B: bytes::BufMut,
         Self: Sized,
     {
         self.0.encode_raw(buf)
     }
 
-    fn merge_field<B>(
+    fn merge_field(
         &mut self,
         tag: u32,
         wire_type: prost::encoding::WireType,
-        buf: &mut B,
+        buf: &mut impl bytes::Buf,
         ctx: prost::encoding::DecodeContext,
     ) -> Result<(), prost::DecodeError>
     where
-        B: bytes::Buf,
         Self: Sized,
     {
         self.0.merge_field(tag, wire_type, buf, ctx)

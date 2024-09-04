@@ -10,10 +10,11 @@ use anyhow::bail;
 use anyhow::Result;
 use oauth2::basic::BasicClient;
 use oauth2::basic::BasicTokenResponse;
-use oauth2::devicecode::StandardDeviceAuthorizationResponse;
-use oauth2::reqwest::async_http_client;
 use oauth2::DeviceCodeErrorResponseType;
+use oauth2::EndpointNotSet;
+use oauth2::EndpointSet;
 use oauth2::RequestTokenError;
+use oauth2::StandardDeviceAuthorizationResponse;
 use oauth2::StandardErrorResponse;
 
 use oauth2::RefreshToken;
@@ -115,7 +116,7 @@ pub enum LoginError {
     #[error("Response error: {0}")]
     Response(
         RequestTokenError<
-            oauth2::reqwest::Error<reqwest::Error>,
+            oauth2::HttpClientError<oauth2::reqwest::Error>,
             StandardErrorResponse<DeviceCodeErrorResponseType>,
         >,
     ),
@@ -125,7 +126,8 @@ type LoginResult = Result<BasicTokenResponse, LoginError>;
 
 #[derive(Debug)]
 pub struct LoginRequest {
-    client: BasicClient,
+    client: DeviceAuthClient,
+    http_client: reqwest::Client,
     details: StandardDeviceAuthorizationResponse,
 }
 
@@ -134,7 +136,7 @@ impl LoginRequest {
         let token = self
             .client
             .exchange_device_access_token(&self.details)
-            .request_async(async_http_client, tokio::time::sleep, None)
+            .request_async(&self.http_client, tokio::time::sleep, None)
             .await
             .map_err(LoginError::Response)?;
         Ok(token)
@@ -231,6 +233,11 @@ impl OidcClientBuilder {
     }
 
     pub fn build(self) -> OidcClient {
+        let http_client = reqwest::ClientBuilder::new()
+            // Following redirects opens the client up to SSRF vulnerabilities.
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("Client should build");
         OidcClient {
             url: self.url,
             client_id: self.client_id,
@@ -238,33 +245,35 @@ impl OidcClientBuilder {
             client: None,
             token: None,
             token_cache: self.token_cache,
+            http_client,
         }
     }
 }
+
+type DeviceAuthClient =
+    BasicClient<EndpointSet, EndpointSet, EndpointNotSet, EndpointNotSet, EndpointSet>;
 
 #[derive(Clone, Debug)]
 pub struct OidcClient {
     url: Url,
     client_id: String,
     login_provider: Arc<dyn LoginProvider>,
-    client: Option<BasicClient>,
+    client: Option<DeviceAuthClient>,
+    http_client: reqwest::Client,
     token: Option<Token>,
     token_cache: Option<PathBuf>,
 }
 
 impl OidcClient {
-    async fn client(&mut self) -> Option<BasicClient> {
+    async fn client(&mut self) -> Option<DeviceAuthClient> {
         if self.client.is_none() {
             let discovery = OidcDiscovery::from_uri(self.url.clone()).await.unwrap();
             let device_auth_url =
                 DeviceAuthorizationUrl::new(discovery.device_authorization_endpoint).unwrap();
-            let client = BasicClient::new(
-                ClientId::new(self.client_id.clone()),
-                None,
-                AuthUrl::new(discovery.authorization_endpoint).unwrap(),
-                Some(TokenUrl::new(discovery.token_endpoint).unwrap()),
-            )
-            .set_device_authorization_url(device_auth_url);
+            let client = BasicClient::new(ClientId::new(self.client_id.clone()))
+                .set_auth_uri(AuthUrl::new(discovery.authorization_endpoint).unwrap())
+                .set_token_uri(TokenUrl::new(discovery.token_endpoint).unwrap())
+                .set_device_authorization_url(device_auth_url);
             self.client = Some(client);
         }
         self.client.clone()
@@ -291,15 +300,17 @@ impl OidcClient {
     #[tracing::instrument(skip(self))]
     pub async fn auth(&mut self) -> Result<()> {
         let client = self.client().await.unwrap();
+        let http_client = self.http_client.clone();
         let details: StandardDeviceAuthorizationResponse = client
-            .exchange_device_code()?
+            .exchange_device_code()
             .add_scope(Scope::new("read".to_string()))
-            .request_async(async_http_client)
+            .request_async(&http_client)
             .await?;
 
         let request = LoginRequest {
             client: client.clone(),
             details,
+            http_client,
         };
 
         info!("Requesting login from provider");
@@ -316,7 +327,7 @@ impl OidcClient {
             debug!("Refreshing token");
             match client
                 .exchange_refresh_token(refresh)
-                .request_async(async_http_client)
+                .request_async(&self.http_client)
                 .await
             {
                 Ok(token) => {

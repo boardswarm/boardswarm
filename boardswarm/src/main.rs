@@ -1032,13 +1032,13 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let boardswarm = tonic::transport::server::Routes::new(
+    let boardswarm = tonic::service::Routes::new(
         boardswarm_protocol::boardswarm_server::BoardswarmServer::new(server.clone()),
     );
 
     let auth = setup_auth_layer(&server.inner.auth_info).await?;
     let router = boardswarm
-        .into_router()
+        .into_axum_router()
         .layer(auth.into_layer())
         .route_service(
             &format!("/{}/LoginInfo",
