@@ -61,7 +61,8 @@ impl BoardswarmBuilder {
     }
 
     pub async fn connect(self) -> Result<Boardswarm, tonic::transport::Error> {
-        let endpoint = tonic::transport::Endpoint::from(self.uri);
+        let endpoint = tonic::transport::Endpoint::from(self.uri)
+            .tls_config(tonic::transport::ClientTlsConfig::new().with_enabled_roots())?;
         let channel = endpoint.connect().await?;
         let authenticator = match self.auth {
             Some(Auth::Token(t)) => Authenticator::from_static(t),

@@ -31,6 +31,7 @@ pub enum Authentication {
         description: String,
         uri: String,
         client: String,
+        audience: Vec<String>,
     },
     #[serde(rename = "jwks")]
     Jwks { path: PathBuf },
