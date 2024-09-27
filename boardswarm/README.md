@@ -44,6 +44,10 @@ server:
       # The client identifier to be used by the client to be included in the
       # device authorization request
       client: "boardswarm"
+      # The audience that are expected to be present in the jwt token used for
+      # authorization
+      audience:
+        - account
 ...
 ```
 

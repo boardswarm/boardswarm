@@ -10,7 +10,7 @@ use clap::Parser;
 use futures::prelude::*;
 use futures::stream::BoxStream;
 use futures::Sink;
-use jwt_authorizer::{Authorizer, IntoLayer, JwtAuthorizer, RegisteredClaims};
+use jwt_authorizer::{Authorizer, IntoLayer, JwtAuthorizer, RegisteredClaims, Validation};
 use registry::{Properties, Registry};
 use std::net::{AddrParseError, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -536,6 +536,7 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
                     description,
                     uri,
                     client,
+                    ..
                 } => Some(boardswarm_protocol::LoginInfo {
                     description: description.clone(),
                     method: Some(boardswarm_protocol::login_info::Method::Oidc(
@@ -918,8 +919,10 @@ async fn setup_auth_layer(config: &[config::Authentication]) -> anyhow::Result<V
     let mut authorizers = Vec::new();
     for auth in config {
         let a = match auth {
-            config::Authentication::Oidc { uri, .. } => {
+            config::Authentication::Oidc { uri, audience, .. } => {
+                let v = Validation::new().aud(audience);
                 JwtAuthorizer::<RegisteredClaims>::from_oidc(uri)
+                    .validation(v)
                     .build()
                     .await?
             }
