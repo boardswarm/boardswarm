@@ -96,7 +96,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}/${{ matrix.binary }}
+          images: ghcr.io/${{ github.repository }}/${{ matrix.binary }}${{ github.ref != 'refs/heads/main' && '-ci' }}
           tags: |
             "type=ref,event=branch"
             "type=ref,suffix=-{{sha}},event=branch"
@@ -113,7 +113,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: ${{ github.event_name != 'pull_request' }}
+          push: ${{ github.event_name == 'push' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           file: ${{ matrix.binary }}/Dockerfile
