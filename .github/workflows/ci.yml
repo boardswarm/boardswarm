@@ -54,7 +54,23 @@ jobs:
         with:
           toolchain: "nightly-2024-05-05"
           components: clippy
+      - run: rm Cargo.lock
       - run: cargo check -Z direct-minimal-versions
+
+  cargo-deny:
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        checks:
+          - advisories
+          - bans licenses sources
+    # Prevent sudden announcement of a new advisory from failing ci:
+    continue-on-error: ${{ matrix.checks == 'advisories' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v1
+        with:
+          command: check ${{ matrix.checks }}
 
   docker:
     name: docker ${{ matrix.binary }}
@@ -105,6 +121,7 @@ jobs:
   allgreen:
     if: always()
     needs:
+    - cargo-deny
     - test
     - fmt
     - clippy

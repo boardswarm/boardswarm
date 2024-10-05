@@ -12,10 +12,11 @@ readme = "README.md"
 bytes = "1.4.0"
 futures = "0.3.25"
 prost = "0.13"
+prost-derive = "0.13"
 prost-types = "0.13"
-serde = { version = "1.0.189", features = ["derive"] }
-tokio = { version = "1.30.0", features = ["full"] }
-tonic = "0.12"
+serde = { version = "1.0.194", features = ["derive"] }
+tokio = { version = "1.37", features = ["full"] }
+tonic = "0.12.2"
 
 [build-dependencies]
 prost-build = "0.13.1"

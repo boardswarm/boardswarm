@@ -17,14 +17,14 @@ futures = "0.3.25"
 humantime-serde = "1.1.1"
 pdudaemon-client = "0.1.1"
 boardswarm-protocol = { version = "0.0.1", path = "../boardswarm-protocol" }
-serde = { version = "1.0.189", features = ["derive"] }
+serde = { version = "1.0.194", features = ["derive"] }
 serde_yaml = "0.9.25"
 thiserror = "1.0.40"
-tokio = { version = "1.30.0", features = ["full"] }
+tokio = { version = "1.37", features = ["full"] }
 tokio-serial = "5.4.4"
 tokio-udev = "0.9"
 tokio-util = "0.7.4"
-tonic = "0.12"
+tonic = "0.12.2"
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
 url = "2.4.1"
@@ -35,7 +35,6 @@ rusb = "0.9.1"
 boardswarm-client = { version = "0.0.1", path = "../boardswarm-client" }
 tokio-gpiod = "0.2.3"
 rockusb = "0.1.3"
-jwt-authorizer = { version = "0.15", features = [ "tonic" ] }
+jwt-authorizer = { version = "0.15", default-features = false, features = [ "tonic", "rustls-tls-native-roots", "chrono" ] }
 axum = "0.7.4"
-axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
-
+axum-server = { version = "0.7.1", features = ["tls-rustls-no-provider"] }
