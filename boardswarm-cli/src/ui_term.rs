@@ -38,7 +38,7 @@ impl Widget for UiTerm<'_> {
                             sub_modifier: Modifier::empty(),
                         };
                         to_cell.set_style(style);
-                        to_cell.set_symbol(&cell.contents());
+                        to_cell.set_symbol(cell.contents());
                     } else {
                         // Cell doesn't have content.
                         to_cell.set_char(' ');
