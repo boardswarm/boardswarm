@@ -982,9 +982,9 @@ checksum = "32085ea23f3234fc7846555e85283ba4de91e21016dc0455a16286d87a292d64"
 
 [[package]]
 name = "gpiod-core"
-version = "0.2.3"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e40a9a5455e6b1fb75d0020d14d8628932ce5f8020cd5fe378feb13761a98bf"
+checksum = "15a60e3beb5444643d049a3f8769b47ce246ec1f57e6cd1aed1e417d57a47110"
 dependencies = [
  "nix 0.26.4",
 ]
@@ -1960,7 +1960,7 @@ checksum = "0c1318b19085f08681016926435853bbf7858f9c082d0999b80550ff5d9abe15"
 dependencies = [
  "bytes",
  "heck",
- "itertools 0.12.1",
+ "itertools 0.13.0",
  "log",
  "multimap",
  "once_cell",
@@ -1980,7 +1980,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9552f850d5f0964a4e4d0bf306459ac29323ddfbae05e35a7c0d35cb0803cc5"
 dependencies = [
  "anyhow",
- "itertools 0.12.1",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "syn 2.0.79",
@@ -2850,11 +2850,12 @@ dependencies = [
 
 [[package]]
 name = "tokio-gpiod"
-version = "0.2.3"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f95cbf8c7b56e467b15fec8936c40017aac04630103cb5f888240448ab51600"
+checksum = "ce15fa0021a7acacd2be506f72aeb5044a0a8b53d684963f133b37ace5c57f47"
 dependencies = [
  "gpiod-core",
+ "libc",
  "tokio",
 ]
 
