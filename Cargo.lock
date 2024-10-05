@@ -369,7 +369,7 @@ dependencies = [
  "http",
  "http-serde",
  "indicatif",
- "itertools 0.12.1",
+ "itertools 0.13.0",
  "mprocs-vt100",
  "nix 0.29.0",
  "ratatui",
