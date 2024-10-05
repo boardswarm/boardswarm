@@ -54,6 +54,7 @@ jobs:
         with:
           toolchain: "nightly-2024-05-05"
           components: clippy
+      - run: rm Cargo.lock
       - run: cargo check -Z direct-minimal-versions
 
   cargo-deny:
