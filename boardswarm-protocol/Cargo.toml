@@ -16,7 +16,7 @@ prost-derive = "0.13"
 prost-types = "0.13"
 serde = { version = "1.0.194", features = ["derive"] }
 tokio = { version = "1.37", features = ["full"] }
-tonic = "0.12.2"
+tonic = "0.12.3"
 
 [build-dependencies]
 prost-build = "0.13.1"

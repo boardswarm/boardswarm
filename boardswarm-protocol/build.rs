@@ -6,7 +6,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .extern_path(".google.protobuf.Struct", "Parameters");
 
     let empty: &[&str] = &[];
-    tonic_build::configure().compile_with_config(config, &["proto/boardswarm.proto"], empty)?;
+    tonic_build::configure().compile_protos_with_config(
+        config,
+        &["proto/boardswarm.proto"],
+        empty,
+    )?;
 
     Ok(())
 }
