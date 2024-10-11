@@ -15,7 +15,7 @@ bytes = "1.4.0"
 clap = { version = "4.5", features = ["derive"] }
 futures = "0.3.25"
 humantime-serde = "1.1.1"
-pdudaemon-client = "0.1.1"
+pdudaemon-client = { version = "0.1.2", default-features=false }
 boardswarm-protocol = { version = "0.0.1", path = "../boardswarm-protocol" }
 serde = { version = "1.0.194", features = ["derive"] }
 serde_yaml = "0.9.25"
@@ -24,12 +24,12 @@ tokio = { version = "1.37", features = ["full"] }
 tokio-serial = "5.4.4"
 tokio-udev = "0.9"
 tokio-util = "0.7.4"
-tonic = "0.12.2"
+tonic = "0.12.3"
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
 url = "2.4.1"
 erased-serde = "0.4.4"
-tokio-stream = { version = "0.1.11", features = ["sync"] }
+tokio-stream = { version = "0.1.16", features = ["sync"] }
 dfu-libusb = "0.5.0"
 rusb = "0.9.1"
 boardswarm-client = { version = "0.0.1", path = "../boardswarm-client" }

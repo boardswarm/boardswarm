@@ -8,8 +8,7 @@ RUN apt-get update && \
       pkg-config \
       protobuf-compiler \
       libudev-dev \
-      libssl-dev && \
-    rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/src/boardswarm
 
@@ -34,8 +33,7 @@ LABEL org.opencontainers.image.source="https://github.com/boardswarm/boardswarm"
 RUN apt update && \
     apt install --yes \
       libudev1 \
-      libssl3 && \
-    rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/src/boardswarm/target/release/boardswarm \
                     /usr/local/bin/boardswarm
