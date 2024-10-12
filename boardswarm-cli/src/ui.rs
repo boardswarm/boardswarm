@@ -1,10 +1,6 @@
-use std::{os::fd::AsFd, task::Poll};
+use std::task::Poll;
 
 use bytes::Bytes;
-use crossterm::{
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen},
-};
 use futures::{pin_mut, ready, Stream, StreamExt};
 use ratatui::{
     backend::CrosstermBackend,
@@ -149,12 +145,7 @@ pub async fn run_ui(
     device: boardswarm_client::device::Device,
     console: Option<String>,
 ) -> anyhow::Result<()> {
-    enable_raw_mode()?;
-
-    let mut stdout = std::io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = TuiTerminal::new(backend).unwrap();
+    let mut terminal = ratatui::init();
 
     terminal.draw(|f| {
         let area = f.area();
@@ -163,10 +154,6 @@ pub async fn run_ui(
     })?;
 
     let stdin = tokio::io::stdin();
-    let stdin_fd = stdin
-        .as_fd()
-        .try_clone_to_owned()
-        .expect("Couldn't clone stdin fd");
     let stdin_termios = nix::sys::termios::tcgetattr(&stdin).unwrap();
 
     let mut stdin_termios_mod = stdin_termios.clone();
@@ -247,19 +234,8 @@ pub async fn run_ui(
     });
 
     let r = reader.await;
-    nix::sys::termios::tcsetattr(
-        stdin_fd,
-        nix::sys::termios::SetArg::TCSAFLUSH,
-        &stdin_termios,
-    )
-    .unwrap();
 
-    // restore terminal
-    disable_raw_mode()?;
-    //let mut terminal = terminal.inner();
-    //execute!(terminal.backend_mut(), LeaveAlternateScreen,)?;
-    //terminal.show_cursor()?;
-    //
+    ratatui::restore();
     match r {
         Ok(_) => Ok(()),
         //Ok(Ok(_)) => Ok(()),
