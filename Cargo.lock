@@ -390,7 +390,6 @@ dependencies = [
  "boardswarm-protocol",
  "bytes",
  "clap",
- "crossterm 0.28.1",
  "dirs 5.0.1",
  "futures",
  "http",
