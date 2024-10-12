@@ -14,7 +14,7 @@ bytes = "1.4.0"
 clap = { version = "4.5", features = ["derive"] }
 crossterm = "0.28.1"
 futures = "0.3.25"
-mprocs-vt100 = "0.1.1"
+mprocs-vt100 = "0.7.0"
 nix = { version = "0.29.0", features = ["term"] }
 boardswarm-protocol = { version = "0.0.1", path = "../boardswarm-protocol" }
 boardswarm-client = { version = "0.0.1", path = "../boardswarm-client" }
@@ -35,4 +35,4 @@ dirs = "5.0.1"
 async-trait = "0.1.74"
 url = { version = "2.4.1", features = ["serde"] }
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
-ratatui = "0.26.1"
+ratatui = "0.26.2"
