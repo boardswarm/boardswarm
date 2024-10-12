@@ -21,7 +21,7 @@ impl Widget for UiTerm<'_> {
 
         for row in 0..area.height {
             for col in 0..area.width {
-                let to_cell = buf.get_mut(area.x + col, area.y + row);
+                let to_cell = &mut buf[(area.x + col, area.y + row)];
                 if let Some(cell) = screen.cell(row, col) {
                     if cell.has_contents() {
                         let mut mods = Modifier::empty();

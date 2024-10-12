@@ -35,4 +35,4 @@ dirs = "5.0.1"
 async-trait = "0.1.74"
 url = { version = "2.4.1", features = ["serde"] }
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
-ratatui = "0.26.2"
+ratatui = "0.28.1"

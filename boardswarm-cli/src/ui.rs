@@ -59,12 +59,12 @@ impl Terminal {
         let term = ui_term::UiTerm::new(screen);
         self.tui
             .draw(|f| {
-                let size = f.size();
-                let term_area = Rect::new(0, 0, 80.min(size.width), 24.min(size.height));
+                let area = f.area();
+                let term_area = Rect::new(0, 0, 80.min(area.width), 24.min(area.height));
                 f.render_widget(term, term_area);
                 if !screen.hide_cursor() && screen.scrollback() == 0 {
                     let cursor = screen.cursor_position();
-                    f.set_cursor(cursor.1 + term_area.x, cursor.0 + term_area.y);
+                    f.set_cursor_position((cursor.1 + term_area.x, cursor.0 + term_area.y));
                 }
             })
             .unwrap();
@@ -157,9 +157,9 @@ pub async fn run_ui(
     let mut terminal = TuiTerminal::new(backend).unwrap();
 
     terminal.draw(|f| {
-        let size = f.size();
+        let area = f.area();
         let block = Block::default().title("Block").borders(Borders::ALL);
-        f.render_widget(block, size);
+        f.render_widget(block, area);
     })?;
 
     let stdin = tokio::io::stdin();
