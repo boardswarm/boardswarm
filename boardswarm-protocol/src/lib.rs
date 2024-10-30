@@ -264,6 +264,7 @@ macro_rules! deserialize_number_as_int {
             if let Some(prost_types::value::Kind::NumberValue(v)) = self.0.kind {
                 if v.fract() == 0.0 {
                     let v = v as i64;
+                    #[allow(irrefutable_let_patterns)]
                     if let Ok(v) = v.try_into() {
                         return visitor.$visit(v);
                     }
