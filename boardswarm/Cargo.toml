@@ -30,8 +30,6 @@ tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
 url = "2.4.1"
 erased-serde = "0.4.4"
 tokio-stream = { version = "0.1.16", features = ["sync"] }
-dfu-libusb = "0.5.0"
-rusb = "0.9.1"
 boardswarm-client = { version = "0.0.1", path = "../boardswarm-client" }
 tokio-gpiod = "0.3.0"
 rockusb = { version = "0.2.0", features = [ "nusb" ] }
@@ -39,3 +37,4 @@ jwt-authorizer = { version = "0.15", default-features = false, features = [ "ton
 axum = "0.7.4"
 axum-server = { version = "0.7.1", features = ["tls-rustls-no-provider"] }
 nusb = "0.1.10"
+dfu-nusb = "0.1.0"

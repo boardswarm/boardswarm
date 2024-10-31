@@ -6,6 +6,3 @@ The following packages are expected to be installed on the system
 For boardswarm-cli:
 * zlib1g
 * libzstd1
-
-For boardswarm:
-* libusb-1.0-0

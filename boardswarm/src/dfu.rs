@@ -1,12 +1,16 @@
-use std::{collections::HashMap, io::Read};
+use std::{collections::HashMap, time::Duration};
 
 use anyhow::bail;
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
+use dfu_nusb::{DfuASync, DfuNusb};
 use futures::StreamExt;
+use nusb::descriptors::language_id::US_ENGLISH;
 use tokio::sync::{
     mpsc::{self, Receiver},
     oneshot,
 };
+use tokio_stream::wrappers::ReceiverStream;
+use tokio_util::{compat::TokioAsyncReadCompatExt, io::StreamReader};
 use tracing::instrument;
 use tracing::{info, warn};
 
@@ -131,54 +135,12 @@ impl VolumeTarget for DfuTarget {
 }
 
 #[derive(Debug)]
-struct DfuRead {
-    receiver: Receiver<Bytes>,
-    bytes: Option<Bytes>,
-}
-
-impl DfuRead {
-    fn new(receiver: Receiver<Bytes>) -> Self {
-        DfuRead {
-            receiver,
-            bytes: None,
-        }
-    }
-}
-
-impl Read for DfuRead {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let left = if let Some(left) = &mut self.bytes {
-            left
-        } else {
-            self.bytes = self.receiver.blocking_recv();
-            match &mut self.bytes {
-                Some(b) => b,
-                None => return Ok(0),
-            }
-        };
-
-        let bytes_left = left.len();
-        let copied = if buf.len() >= bytes_left {
-            left.copy_to_slice(&mut buf[0..bytes_left]);
-            self.bytes = None;
-            bytes_left
-        } else {
-            let mut copy = left.split_to(buf.len());
-            copy.copy_to_slice(buf);
-            buf.len()
-        };
-
-        Ok(copied)
-    }
-}
-
-#[derive(Debug)]
 enum DfuCommand {
     Targets(oneshot::Sender<Vec<String>>),
     Download {
         target: String,
         length: u32,
-        reader: DfuRead,
+        data: Receiver<Bytes>,
     },
     Reset(oneshot::Sender<()>),
 }
@@ -188,7 +150,7 @@ struct DfuDevice(mpsc::Sender<DfuCommand>);
 impl DfuDevice {
     fn new(bus: u8, dev: u8) -> Self {
         let (tx, rx) = tokio::sync::mpsc::channel(1);
-        std::thread::spawn(move || dfu_thread(bus, dev, rx));
+        tokio::spawn(dfu_task(bus, dev, rx));
         Self(tx)
     }
 
@@ -199,13 +161,11 @@ impl DfuDevice {
     }
 
     async fn start_download(&self, target: String, length: u32) -> mpsc::Sender<Bytes> {
-        let (tx, rx) = tokio::sync::mpsc::channel(1);
-        let reader = DfuRead::new(rx);
-
+        let (tx, data) = tokio::sync::mpsc::channel(1);
         let command = DfuCommand::Download {
             target,
             length,
-            reader,
+            data,
         };
 
         self.0.send(command).await.unwrap();
@@ -219,9 +179,17 @@ impl DfuDevice {
     }
 }
 
-struct DfuData<C: rusb::UsbContext> {
-    device: rusb::Device<C>,
+struct DfuData {
+    device: nusb::Device,
     interfaces: HashMap<String, DfuInterface>,
+}
+
+impl DfuData {
+    fn open(&self, interface: &DfuInterface) -> anyhow::Result<DfuASync> {
+        let i = self.device.claim_interface(interface.interface)?;
+        let dfu = DfuNusb::open(self.device.clone(), i, interface.alt)?;
+        Ok(dfu.into_async_dfu())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -230,22 +198,25 @@ struct DfuInterface {
     alt: u8,
 }
 
-fn setup_device(bus: u8, dev: u8) -> anyhow::Result<DfuData<rusb::GlobalContext>> {
-    let Some(device) = crate::utils::usb_device_from_bus_dev(bus, dev) else {
+fn setup_device(bus: u8, dev: u8) -> anyhow::Result<DfuData> {
+    let Some(info) = crate::utils::nusb_info_from_bus_dev(bus, dev) else {
         bail!("Couldn't find device")
     };
-    let handle = device.open()?;
+    let device = info.open()?;
     let mut interfaces = HashMap::new();
 
-    let desc = device.device_descriptor()?;
-    for c in 0..desc.num_configurations() {
-        let config = device.config_descriptor(c)?;
-        for i in config.interfaces() {
-            for i_desc in i.descriptors() {
-                if i_desc.class_code() == 0xfe && i_desc.sub_class_code() == 0x1 {
-                    info!("{:?}", device);
-                    info!(" interface: {}", i_desc.setting_number());
-                    match i_desc.protocol_code() {
+    for c in device.configurations() {
+        for i in c.interfaces() {
+            for alt in i.alt_settings() {
+                if alt.class() == 0xfe && alt.subclass() == 0x1 {
+                    info!(
+                        "Bus {bus} Device {dev}: ID {} {}",
+                        info.vendor_id(),
+                        info.product_id()
+                    );
+                    info!(" interface: {}", i.interface_number());
+                    info!(" alt: {}", alt.alternate_setting());
+                    match alt.protocol() {
                         0x1 => {
                             info!("     Application mode");
                             continue;
@@ -256,14 +227,19 @@ fn setup_device(bus: u8, dev: u8) -> anyhow::Result<DfuData<rusb::GlobalContext>
                             continue;
                         }
                     }
-                    if let Some(s_i) = i_desc.description_string_index() {
-                        let descriptor = handle.read_string_descriptor_ascii(s_i)?;
+                    if let Some(s_i) = alt.string_index() {
+                        let lang = device
+                            .get_string_descriptor_supported_languages(Duration::from_millis(250))?
+                            .next()
+                            .unwrap_or(US_ENGLISH);
+                        let descriptor =
+                            device.get_string_descriptor(s_i, lang, Duration::from_millis(250))?;
                         info!("  descriptor: {}", descriptor);
                         interfaces.insert(
                             descriptor,
                             DfuInterface {
-                                interface: i.number(),
-                                alt: i_desc.setting_number(),
+                                interface: i.interface_number(),
+                                alt: alt.alternate_setting(),
                             },
                         );
                     }
@@ -275,40 +251,28 @@ fn setup_device(bus: u8, dev: u8) -> anyhow::Result<DfuData<rusb::GlobalContext>
     Ok(DfuData { device, interfaces })
 }
 
-fn dfu_download<C: rusb::UsbContext>(
-    device: &DfuData<C>,
+async fn dfu_download(
+    device: &DfuData,
     interface: &DfuInterface,
     length: u32,
-    reader: DfuRead,
+    data: Receiver<Bytes>,
 ) -> anyhow::Result<()> {
-    let handle = device.device.open()?;
-    let mut dfu = dfu_libusb::DfuLibusb::from_usb_device(
-        device.device.clone(),
-        handle,
-        interface.interface,
-        interface.alt,
-    )?;
-    dfu.download(reader, length)?;
+    let mut dfu = device.open(interface)?;
+    let stream = ReceiverStream::new(data);
+    let reader = StreamReader::new(stream.map(Ok::<_, std::io::Error>));
+    let reader = TokioAsyncReadCompatExt::compat(reader);
+    dfu.download(reader, length).await?;
     Ok(())
 }
 
-fn dfu_reset<C: rusb::UsbContext>(
-    device: &DfuData<C>,
-    interface: &DfuInterface,
-) -> anyhow::Result<()> {
-    let handle = device.device.open()?;
-    let dfu = dfu_libusb::DfuLibusb::from_usb_device(
-        device.device.clone(),
-        handle,
-        interface.interface,
-        interface.alt,
-    )?;
-    let _ = dfu.detach();
-    dfu.usb_reset()?;
+async fn dfu_reset(device: &DfuData, interface: &DfuInterface) -> anyhow::Result<()> {
+    let dfu = device.open(interface)?;
+    let _ = dfu.detach().await;
+    dfu.usb_reset().await?;
     Ok(())
 }
 
-fn dfu_thread(bus: u8, dev: u8, mut control: mpsc::Receiver<DfuCommand>) {
+async fn dfu_task(bus: u8, dev: u8, mut control: mpsc::Receiver<DfuCommand>) {
     let device = match setup_device(bus, dev) {
         Ok(d) => d,
         Err(e) => {
@@ -317,7 +281,7 @@ fn dfu_thread(bus: u8, dev: u8, mut control: mpsc::Receiver<DfuCommand>) {
         }
     };
 
-    while let Some(command) = control.blocking_recv() {
+    while let Some(command) = control.recv().await {
         match command {
             DfuCommand::Targets(tx) => {
                 let _ = tx.send(device.interfaces.keys().cloned().collect());
@@ -325,10 +289,10 @@ fn dfu_thread(bus: u8, dev: u8, mut control: mpsc::Receiver<DfuCommand>) {
             DfuCommand::Download {
                 target,
                 length,
-                reader,
+                data,
             } => {
                 if let Some(interface) = device.interfaces.get(&target) {
-                    if let Err(e) = dfu_download(&device, interface, length, reader) {
+                    if let Err(e) = dfu_download(&device, interface, length, data).await {
                         warn!("Download failed: {}", e);
                     }
                 } else {
@@ -338,7 +302,7 @@ fn dfu_thread(bus: u8, dev: u8, mut control: mpsc::Receiver<DfuCommand>) {
             DfuCommand::Reset(tx) => {
                 // Shouldn't really matter what interface gets reset;  on the first interface
                 if let Some(interface) = device.interfaces.values().next() {
-                    if let Err(e) = dfu_reset(&device, interface) {
+                    if let Err(e) = dfu_reset(&device, interface).await {
                         warn!("Reset failed: {}", e);
                     }
                 } else {
