@@ -10,7 +10,7 @@ readme = "README.md"
 
 [dependencies]
 bytes = "1.8.0"
-futures = "0.3.25"
+futures = "0.3.31"
 prost = "0.13"
 prost-derive = "0.13"
 prost-types = "0.13"
