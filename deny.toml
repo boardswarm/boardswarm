@@ -22,6 +22,7 @@ allow = [
 confidence-threshold = 0.8
 exceptions = [
     { allow = ["Unicode-DFS-2016"], crate = "unicode-ident" },
+    { allow = ["Unicode-DFS-2016"], crate = "finl_unicode" },
     { allow = ["Unicode-DFS-2016"], crate = "wezterm-bidi" },
     { allow = ["OpenSSL"], crate = "ring" },
 ]
