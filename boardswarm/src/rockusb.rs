@@ -1,12 +1,9 @@
-use std::{
-    collections::HashMap,
-    io::{Read, Seek, SeekFrom, Write},
-};
+use std::{collections::HashMap, io::SeekFrom};
 
 use bytes::{Bytes, BytesMut};
-use futures::StreamExt;
-use rockusb::libusb::Transport;
-use rusb::GlobalContext;
+use futures::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, StreamExt};
+use nusb::DeviceInfo;
+use rockusb::nusb::Transport;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tracing::instrument;
@@ -82,12 +79,10 @@ pub enum RockUsbError {
     CommandsSend,
     #[error("Failed to getting reply from rockusb thread: {0}")]
     CommandsRecv(oneshot::error::RecvError),
-    #[error("usb error: {0}")]
-    Usb(#[from] rusb::Error),
     #[error("Rockusb usb error: {0}")]
-    RockUsb(#[from] rockusb::libusb::Error),
+    RockUsb(#[from] rockusb::nusb::Error),
     #[error("Rockusb device not available: {0}")]
-    RockDeviceUnavailable(#[from] rockusb::libusb::DeviceUnavalable),
+    RockDeviceUnavailable(#[from] rockusb::nusb::DeviceUnavalable),
 }
 
 impl From<RockUsbError> for tonic::Status {
@@ -96,9 +91,7 @@ impl From<RockUsbError> for tonic::Status {
             RockUsbError::CommandsSend | RockUsbError::CommandsRecv(_) => {
                 tonic::Status::internal(e.to_string())
             }
-            RockUsbError::Usb(_) | RockUsbError::RockUsb(_) => {
-                tonic::Status::aborted(e.to_string())
-            }
+            RockUsbError::RockUsb(_) => tonic::Status::aborted(e.to_string()),
             RockUsbError::RockDeviceUnavailable(_) => tonic::Status::unavailable(e.to_string()),
         }
     }
@@ -109,9 +102,9 @@ impl From<RockUsbError> for VolumeError {
         match e {
             RockUsbError::CommandsSend => VolumeError::Internal(e.to_string()),
             RockUsbError::CommandsRecv(_) => VolumeError::Internal(e.to_string()),
-            RockUsbError::RockDeviceUnavailable(_)
-            | RockUsbError::RockUsb(_)
-            | RockUsbError::Usb(_) => VolumeError::Failure(e.to_string()),
+            RockUsbError::RockDeviceUnavailable(_) | RockUsbError::RockUsb(_) => {
+                VolumeError::Failure(e.to_string())
+            }
         }
     }
 }
@@ -132,7 +125,7 @@ pub struct Rockusb {
 impl Rockusb {
     pub async fn new(bus: u8, dev: u8) -> Result<Self, RockUsbError> {
         let (commands, rx) = tokio::sync::mpsc::channel(1);
-        std::thread::spawn(move || rockusb_thread(bus, dev, rx));
+        tokio::spawn(rockusb_task(bus, dev, rx));
 
         let mode = Self::determine_mode(&commands).await?;
 
@@ -357,23 +350,22 @@ enum RockUsbIO {
     Flush(oneshot::Sender<Result<(), std::io::Error>>),
 }
 
-fn open_device(device: &rusb::Device<GlobalContext>) -> Result<Transport, RockUsbError> {
-    let handle = device.open()?;
-    Ok(Transport::from_usb_device(handle)?)
+fn open_device(info: DeviceInfo) -> Result<Transport, RockUsbError> {
+    Ok(Transport::from_usb_device_info(info)?)
 }
 
-fn handle_io(
-    device: &rusb::Device<GlobalContext>,
+async fn handle_io(
+    info: DeviceInfo,
     tx: oneshot::Sender<Result<mpsc::Sender<RockUsbIO>, RockUsbError>>,
 ) {
-    let transport = match open_device(device) {
+    let transport = match open_device(info) {
         Ok(t) => t,
         Err(e) => {
             let _ = tx.send(Err(e));
             return;
         }
     };
-    let mut io = match transport.into_io() {
+    let mut io = match transport.into_io().await {
         Ok(io) => io,
         Err(e) => {
             let _ = tx.send(Err(e.into()));
@@ -384,39 +376,42 @@ fn handle_io(
     let (operations_tx, mut operations) = mpsc::channel(1);
     let _ = tx.send(Ok(operations_tx));
 
-    while let Some(op) = operations.blocking_recv() {
+    while let Some(op) = operations.recv().await {
         match op {
             RockUsbIO::Write(data, offset, tx) => {
-                let r = io
-                    .seek(SeekFrom::Start(offset))
-                    .and_then(|_| io.write_all(&data));
+                let r = match io.seek(SeekFrom::Start(offset)).await {
+                    Ok(_) => io.write_all(&data).await,
+                    Err(e) => Err(e),
+                };
                 let _ = tx.send(r);
             }
             RockUsbIO::Read(length, offset, tx) => {
                 let mut data = BytesMut::zeroed(length as usize);
-                let r = io
-                    .seek(SeekFrom::Start(offset))
-                    .and_then(|_| io.read(&mut data))
-                    .map(|read| {
-                        data.truncate(read);
-                        data.into()
-                    });
+                let r = match io.seek(SeekFrom::Start(offset)).await {
+                    Ok(_) => io.read(&mut data).await,
+                    Err(e) => Err(e),
+                }
+                .map(|read| {
+                    data.truncate(read);
+                    data.into()
+                });
                 let _ = tx.send(r);
             }
             RockUsbIO::Flush(tx) => {
-                let r = io.flush();
+                let r = io.flush().await;
                 let _ = tx.send(r);
             }
         }
     }
 }
 
-fn determine_mode(device: &rusb::Device<GlobalContext>) -> Result<RockUsbMode, RockUsbError> {
+async fn determine_mode(device: DeviceInfo) -> Result<RockUsbMode, RockUsbError> {
     let mut transport = open_device(device)?;
-    match transport.flash_info() {
+    match transport.flash_info().await {
         Ok(info) => {
             let name = transport
                 .flash_id()
+                .await
                 .map(|f| f.to_str().trim_end().to_string())
                 .unwrap_or_else(|_| "unknown".to_string());
             Ok(RockUsbMode::Loader((name, info.size())))
@@ -425,34 +420,34 @@ fn determine_mode(device: &rusb::Device<GlobalContext>) -> Result<RockUsbMode, R
     }
 }
 
-fn write_maskrom_area(
-    device: &rusb::Device<GlobalContext>,
+async fn write_maskrom_area(
+    device: DeviceInfo,
     area: u16,
     data: Bytes,
 ) -> Result<(), RockUsbError> {
     let mut transport = open_device(device)?;
-    transport.write_maskrom_area(area, &data)?;
+    transport.write_maskrom_area(area, &data).await?;
     Ok(())
 }
 
-fn rockusb_thread(bus: u8, dev: u8, mut commands: mpsc::Receiver<RockUsbCommand>) {
-    let Some(device) = crate::utils::usb_device_from_bus_dev(bus, dev) else {
+async fn rockusb_task(bus: u8, dev: u8, mut commands: mpsc::Receiver<RockUsbCommand>) {
+    let Some(info) = crate::utils::nusb_info_from_bus_dev(bus, dev) else {
         warn!(
-            "Failed to start thread for usb device {}/{}, not found",
+            "Failed to start task for usb device {}/{}, not found",
             bus, dev
         );
         return;
     };
 
-    while let Some(command) = commands.blocking_recv() {
+    while let Some(command) = commands.recv().await {
         match command {
             RockUsbCommand::Mode(tx) => {
-                let _ = tx.send(determine_mode(&device));
+                let _ = tx.send(determine_mode(info.clone()).await);
             }
             RockUsbCommand::WriteMaskromArea((tx, area, data)) => {
-                let _ = tx.send(write_maskrom_area(&device, area, data));
+                let _ = tx.send(write_maskrom_area(info.clone(), area, data).await);
             }
-            RockUsbCommand::Open(tx) => handle_io(&device, tx),
+            RockUsbCommand::Open(tx) => handle_io(info.clone(), tx).await,
         }
     }
 }

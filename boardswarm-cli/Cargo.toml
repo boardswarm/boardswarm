@@ -12,7 +12,7 @@ readme = "README.md"
 anyhow = "1.0.68"
 bytes = "1.8.0"
 clap = { version = "4.5", features = ["derive"] }
-futures = "0.3.25"
+futures = "0.3.31"
 mprocs-vt100 = "0.7.0"
 nix = { version = "0.29.0", features = ["term"] }
 boardswarm-protocol = { version = "0.0.1", path = "../boardswarm-protocol" }
