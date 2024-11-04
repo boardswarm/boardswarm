@@ -32,6 +32,6 @@ http-serde = "2.1"
 serde_yaml = "0.9.25"
 dirs = "5.0.1"
 async-trait = "0.1.74"
-url = { version = "2.4.1", features = ["serde"] }
+url = { version = "2.5.3", features = ["serde"] }
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
 ratatui = "0.29.0"
