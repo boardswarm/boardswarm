@@ -17,6 +17,7 @@ allow = [
     "MPL-2.0",
     "ISC",
     "WTFPL",
+    "Unicode-3.0",
     "Zlib"
 ]
 confidence-threshold = 0.8
