@@ -192,7 +192,7 @@ async fn rock_download_entry(
 
         let mut target = volume.open(target, Some(data.len() as u64)).await?;
         target.write_all(&data).await?;
-        target.flush().await?;
+        target.shutdown().await?;
 
         println!("Done!... waiting {}ms", entry.data_delay);
         if entry.data_delay > 0 {
@@ -977,7 +977,7 @@ async fn main() -> anyhow::Result<()> {
                         rw.seek(SeekFrom::Start(offset)).await?;
                     }
                     tokio::io::copy(&mut f, &mut rw).await?;
-                    f.flush().await?;
+                    rw.shutdown().await?;
                     drop(rw);
                 }
                 VolumeCommand::WriteBmap(write) => {
@@ -1065,7 +1065,7 @@ async fn main() -> anyhow::Result<()> {
                         rw.seek(SeekFrom::Start(offset)).await?;
                     }
                     tokio::io::copy(&mut f, &mut rw).await?;
-                    f.flush().await?;
+                    rw.shutdown().await.context("Volume shutdown")?;
                     drop(rw);
 
                     if commit {

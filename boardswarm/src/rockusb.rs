@@ -232,7 +232,7 @@ impl RockUsbMaskromTarget {
         }
     }
 
-    async fn flush(&mut self) -> Result<(), RockUsbError> {
+    async fn shutdown(&mut self) -> Result<(), RockUsbError> {
         let (tx, rx) = oneshot::channel();
         self.commands
             .send(RockUsbCommand::WriteMaskromArea((
@@ -261,8 +261,8 @@ impl VolumeTarget for RockUsbMaskromTarget {
         }
     }
 
-    async fn flush(&mut self, completion: crate::FlushCompletion) {
-        let r = self.flush().await;
+    async fn shutdown(&mut self, completion: crate::ShutdownCompletion) {
+        let r = self.shutdown().await;
         completion.complete(r.map_err(Into::into));
     }
 }

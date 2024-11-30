@@ -192,6 +192,12 @@ message VolumeIoFlush {
 message VolumeIoFlushReply {
 }
 
+message VolumeIoShutdown {
+}
+
+message VolumeIoShutdownReply {
+}
+
 
 message VolumeIoRequest {
   oneof TargetOrRequest {
@@ -199,6 +205,7 @@ message VolumeIoRequest {
      VolumeIoRead read = 2;
      VolumeIoWrite write = 3;
      VolumeIoFlush flush = 4;
+     VolumeIoShutdown shutdown = 5;
   }
 }
 
@@ -208,6 +215,7 @@ message VolumeIoReply {
         VolumeIoReadReply read = 1;
         VolumeIoWriteReply write = 2;
         VolumeIoFlushReply flush = 3;
+        VolumeIoShutdownReply shutdown = 4;
   }
 }
 
