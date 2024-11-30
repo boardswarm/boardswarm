@@ -29,36 +29,40 @@ pub async fn start_provider(name: String, server: Server) {
     let mut devices = crate::udev::DeviceStream::new("usb").unwrap();
     while let Some(d) = devices.next().await {
         match d {
-            DeviceEvent::Add(d) => {
-                let Some(interface) = d.property("ID_USB_INTERFACES") else {
+            DeviceEvent::Add { device, .. } => {
+                let Some(interface) = device.property("ID_USB_INTERFACES") else {
                     continue;
                 };
-                if interface != ":fe0102:" || d.devnode().is_none() {
+                if interface != ":fe0102:" || device.devnode().is_none() {
                     continue;
                 }
-                let Some(busnum) = d.property_u64("BUSNUM", 10).and_then(|v| v.try_into().ok())
+                let Some(busnum) = device
+                    .property_u64("BUSNUM", 10)
+                    .and_then(|v| v.try_into().ok())
                 else {
                     continue;
                 };
-                let Some(devnum) = d.property_u64("DEVNUM", 10).and_then(|v| v.try_into().ok())
+                let Some(devnum) = device
+                    .property_u64("DEVNUM", 10)
+                    .and_then(|v| v.try_into().ok())
                 else {
                     continue;
                 };
 
-                let name = if let Some(model) = d.property("ID_MODEL") {
+                let name = if let Some(model) = device.property("ID_MODEL") {
                     format!("{}/{} {}", busnum, devnum, model)
                 } else {
                     format!("{}/{}", devnum, devnum)
                 };
 
                 let dfu = Dfu::new(busnum, devnum).await;
-                let mut properties = d.properties(name);
+                let mut properties = device.properties(name);
                 properties.extend(provider_properties);
                 let id = server.register_volume(properties, dfu);
-                registrations.insert(d.syspath().to_path_buf(), id);
+                registrations.insert(device.syspath().to_path_buf(), id);
             }
-            DeviceEvent::Remove(d) => {
-                if let Some(id) = registrations.remove(d.syspath()) {
+            DeviceEvent::Remove(device) => {
+                if let Some(id) = registrations.remove(device.syspath()) {
                     server.unregister_volume(id)
                 }
             }

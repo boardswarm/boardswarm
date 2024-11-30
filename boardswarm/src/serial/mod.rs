@@ -32,19 +32,19 @@ pub async fn start_provider(name: String, server: Server) {
     let mut devices = crate::udev::DeviceStream::new("tty").unwrap();
     while let Some(d) = devices.next().await {
         match d {
-            DeviceEvent::Add(d) => {
-                if d.parent().is_none() {
+            DeviceEvent::Add { device, .. } => {
+                if device.parent().is_none() {
                     continue;
                 }
-                if let Some(node) = d.devnode() {
+                if let Some(node) = device.devnode() {
                     if let Some(name) = node.file_name() {
                         let name = name.to_string_lossy().into_owned();
                         let path = node.to_string_lossy().into_owned();
                         let console = SerialPort::new(path);
-                        let mut properties = d.properties(name);
+                        let mut properties = device.properties(name);
                         properties.extend(provider_properties);
                         let id = server.register_console(properties, console);
-                        registrations.insert(d.syspath().to_path_buf(), id);
+                        registrations.insert(device.syspath().to_path_buf(), id);
                     }
                 }
             }

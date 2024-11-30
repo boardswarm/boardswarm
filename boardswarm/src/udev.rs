@@ -6,7 +6,7 @@ use tokio_udev::{AsyncMonitorSocket, Enumerator};
 use tracing::warn;
 
 pub struct DeviceStream {
-    existing: VecDeque<Device>,
+    existing: VecDeque<(u64, Device)>,
     monitor: AsyncMonitorSocket,
 }
 
@@ -19,14 +19,19 @@ impl DeviceStream {
 
         let mut enumerator = Enumerator::new()?;
         enumerator.match_subsystem(&subsystem)?;
-        let existing = enumerator.scan_devices()?.map(Device).collect();
+        let existing = enumerator
+            .scan_devices()?
+            .map(Device)
+            .enumerate()
+            .map(|(i, d)| (i as u64, d))
+            .collect();
 
         Ok(Self { existing, monitor })
     }
 }
 
 pub enum DeviceEvent {
-    Add(Device),
+    Add { device: Device, seqnum: u64 },
     Remove(Device),
 }
 
@@ -38,8 +43,8 @@ impl Stream for DeviceStream {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
         let me = self.get_mut();
-        if let Some(device) = me.existing.pop_front() {
-            Poll::Ready(Some(DeviceEvent::Add(device)))
+        if let Some((seqnum, device)) = me.existing.pop_front() {
+            Poll::Ready(Some(DeviceEvent::Add { device, seqnum }))
         } else {
             loop {
                 let Some(event) = ready!(Pin::new(&mut me.monitor).poll_next(cx)) else {
@@ -54,7 +59,10 @@ impl Stream for DeviceStream {
                 };
                 match event.event_type() {
                     tokio_udev::EventType::Add => {
-                        return Poll::Ready(Some(DeviceEvent::Add(Device(event.device()))))
+                        return Poll::Ready(Some(DeviceEvent::Add {
+                            device: Device(event.device()),
+                            seqnum: event.sequence_number(),
+                        }))
                     }
                     tokio_udev::EventType::Remove => {
                         return Poll::Ready(Some(DeviceEvent::Remove(Device(event.device()))))
