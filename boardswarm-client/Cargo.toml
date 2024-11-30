@@ -25,4 +25,4 @@ serde_yaml = "0.9.25"
 oauth2 = { version = "5.0.0-rc.1", default-features = false, features = ["reqwest"] }
 reqwest = { version = "0.12.4", default-features = false, features = ["json", "rustls-tls-native-roots"] }
 async-trait = "0.1.74"
-url = { version = "2.4.1", features = ["serde"] }
+url = { version = "2.5.3", features = ["serde"] }
