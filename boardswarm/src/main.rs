@@ -11,6 +11,7 @@ use futures::prelude::*;
 use futures::stream::BoxStream;
 use futures::Sink;
 use jwt_authorizer::{Authorizer, IntoLayer, JwtAuthorizer, RegisteredClaims, Validation};
+use mediatek_brom::MediatekBromProvider;
 use registry::{Properties, Registry};
 use std::net::{AddrParseError, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -27,6 +28,7 @@ mod config;
 mod config_device;
 mod dfu;
 mod gpio;
+mod mediatek_brom;
 mod pdudaemon;
 mod registry;
 mod rockusb;
@@ -1048,6 +1050,12 @@ async fn main() -> anyhow::Result<()> {
             dfu::PROVIDER => {
                 local.spawn_local(dfu::start_provider(p.name, server.clone()));
             }
+            mediatek_brom::PROVIDER => match serial {
+                Some(ref s) => s.add_provider(MediatekBromProvider::new(p.name, server.clone())),
+                None => {
+                    bail!("Mediatek brom provider requires the serial provider to be enabled")
+                }
+            },
             rockusb::PROVIDER => {
                 local.spawn_local(rockusb::start_provider(p.name, server.clone()));
             }
