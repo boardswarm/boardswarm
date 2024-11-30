@@ -1038,6 +1038,11 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let local = tokio::task::LocalSet::new();
+    let serial = config
+        .providers
+        .iter()
+        .find(|p| p.name == serial::PROVIDER)
+        .map(|p| serial::SerialDevices::new(&p.name, server.clone()));
     for p in config.providers {
         match p.provider.as_str() {
             dfu::PROVIDER => {
@@ -1047,7 +1052,7 @@ async fn main() -> anyhow::Result<()> {
                 local.spawn_local(rockusb::start_provider(p.name, server.clone()));
             }
             serial::PROVIDER => {
-                local.spawn_local(serial::start_provider(p.name, server.clone()));
+                // Precreated already
             }
             gpio::PROVIDER => {
                 local.spawn_local(gpio::start_provider(
@@ -1070,6 +1075,9 @@ async fn main() -> anyhow::Result<()> {
             ),
             t => warn!("Unknown provider: {t}"),
         }
+    }
+    if let Some(serial) = serial {
+        local.spawn_local(serial.start());
     }
 
     let boardswarm = tonic::service::Routes::new(
