@@ -20,7 +20,7 @@ boardswarm-protocol = { version = "0.0.1", path = "../boardswarm-protocol" }
 serde = { version = "1.0.194", features = ["derive"] }
 serde_yaml = "0.9.25"
 thiserror = "2.0.1"
-tokio = { version = "1.41", features = ["full"] }
+tokio = { version = "1.41.1", features = ["full"] }
 tokio-serial = "5.4.4"
 tokio-udev = "0.9"
 tokio-util = { version = "0.7.4", features = ["compat"]}
