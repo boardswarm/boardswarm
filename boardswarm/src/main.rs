@@ -108,6 +108,7 @@ enum VolumeIoReply {
     Read(oneshot::Receiver<Result<Bytes, tonic::Status>>),
     Write(oneshot::Receiver<Result<u64, tonic::Status>>),
     Flush(oneshot::Receiver<Result<(), tonic::Status>>),
+    Shutdown(oneshot::Receiver<Result<(), tonic::Status>>),
     FatalError(tonic::Status),
 }
 
@@ -147,6 +148,14 @@ impl VolumeIoReplies {
                             )),
                         })
                     }
+                    VolumeIoReply::Shutdown(s) => {
+                        let Ok(s) = s.await else { break };
+                        s.map(|_| boardswarm_protocol::VolumeIoReply {
+                            reply: Some(volume_io_reply::Reply::Shutdown(
+                                boardswarm_protocol::VolumeIoShutdownReply {},
+                            )),
+                        })
+                    }
                     VolumeIoReply::FatalError(e) => Err(e),
                 };
                 if reply_tx.send(reply).await.is_err() {
@@ -167,6 +176,10 @@ impl VolumeIoReplies {
 
     fn enqueue_flush_reply(&mut self, rx: oneshot::Receiver<Result<(), tonic::Status>>) {
         let _ = self.completion_tx.send(VolumeIoReply::Flush(rx));
+    }
+
+    fn enqueue_shutdown_reply(&mut self, rx: oneshot::Receiver<Result<(), tonic::Status>>) {
+        let _ = self.completion_tx.send(VolumeIoReply::Shutdown(rx));
     }
 
     fn enqueue_fatal_error(&mut self, error: tonic::Status) {
@@ -219,6 +232,17 @@ impl FlushCompletion {
     }
 }
 
+pub struct ShutdownCompletion(oneshot::Sender<Result<(), tonic::Status>>);
+impl ShutdownCompletion {
+    fn new() -> (Self, oneshot::Receiver<Result<(), tonic::Status>>) {
+        let (tx, rx) = oneshot::channel();
+        (Self(tx), rx)
+    }
+    pub fn complete(self, result: Result<(), tonic::Status>) {
+        let _ = self.0.send(result);
+    }
+}
+
 #[async_trait::async_trait]
 pub trait VolumeTarget: Send {
     async fn read(&mut self, _length: u64, _offset: u64, completion: ReadCompletion) {
@@ -231,6 +255,14 @@ pub trait VolumeTarget: Send {
 
     async fn flush(&mut self, completion: FlushCompletion) {
         completion.complete(Ok(()))
+    }
+
+    async fn shutdown(&mut self, completion: ShutdownCompletion) {
+        // Take advantage of flush and shutdown returning an result, so we can convert one into
+        // the other
+        let rx = completion.0;
+        let completion = FlushCompletion(rx);
+        self.flush(completion).await
     }
 }
 
@@ -862,6 +894,11 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
                             let (completion, rx) = FlushCompletion::new();
                             reply.enqueue_flush_reply(rx);
                             target.flush(completion).await;
+                        }
+                        volume_io_request::TargetOrRequest::Shutdown(_s) => {
+                            let (completion, rx) = ShutdownCompletion::new();
+                            reply.enqueue_shutdown_reply(rx);
+                            target.shutdown(completion).await;
                         }
                     }
                 }
