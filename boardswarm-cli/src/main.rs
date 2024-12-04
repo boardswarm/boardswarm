@@ -566,12 +566,16 @@ enum Command {
         #[arg(value_enum)]
         /// The type of items to list
         type_: ItemTypes,
+        #[clap(long, short)]
+        verbose: bool,
     },
     /// Monitor registered items of a given type
     Monitor {
         #[arg(value_enum)]
         /// The type of items to monitor
         type_: ItemTypes,
+        #[clap(long, short)]
+        verbose: bool,
     },
     /// Open the UI for a given device
     Ui {
@@ -754,13 +758,25 @@ struct Opts {
     command: Command,
 }
 
-fn print_item(i: boardswarm_protocol::Item) {
-    print!("{} {}", i.id, i.name);
-    if let Some(instance) = i.instance {
+async fn print_item(
+    boardswarm: &mut Boardswarm,
+    item_type: ItemType,
+    item: &boardswarm_protocol::Item,
+    verbose: bool,
+) -> anyhow::Result<()> {
+    print!("{} {}", item.id, item.name);
+    if let Some(ref instance) = item.instance {
         println!(" on {instance}");
     } else {
         println!();
     }
+    if verbose {
+        let properties = boardswarm.properties(item_type, item.id).await?;
+        for key in properties.keys().sorted_unstable() {
+            println!(r#""{}" => "{}""#, key, properties[key]);
+        }
+    }
+    Ok(())
 }
 
 #[tokio::main]
@@ -871,15 +887,15 @@ async fn main() -> anyhow::Result<()> {
             println!("Info: {:#?}", boardswarm.login_info().await?);
             Ok(())
         }
-        Command::List { type_ } => {
+        Command::List { type_, verbose } => {
             let items = boardswarm.list(type_.into()).await?;
             println!("{type_:#}s: ");
             for i in items {
-                print_item(i);
+                print_item(&mut boardswarm, type_.into(), &i, verbose).await?;
             }
             Ok(())
         }
-        Command::Monitor { type_ } => {
+        Command::Monitor { type_, verbose } => {
             let events = boardswarm.monitor(type_.into()).await?;
             println!("{type_:#}s: ");
             pin_mut!(events);
@@ -888,7 +904,7 @@ async fn main() -> anyhow::Result<()> {
                 match event {
                     ItemEvent::Added(items) => {
                         for i in items {
-                            print_item(i)
+                            print_item(&mut boardswarm, type_.into(), &i, verbose).await?;
                         }
                     }
                     ItemEvent::Removed(removed) => println!("Removed: {}", removed),
