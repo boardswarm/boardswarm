@@ -1,8 +1,4 @@
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-    sync::{Arc, Mutex},
-};
+use std::path::PathBuf;
 
 use bytes::{Bytes, BytesMut};
 use mediatek_brom::{io::BromExecuteAsync, Brom};
@@ -13,90 +9,23 @@ use tracing::{info, instrument, warn};
 use crate::{
     registry::{self, Properties},
     serial::SerialProvider,
+    udev::{Device, DeviceRegistrations, PreRegistration},
     Server, Volume, VolumeError, VolumeTarget, VolumeTargetInfo,
 };
 
 pub const PROVIDER: &str = "mediatek-brom";
 pub const TARGET: &str = "brom";
 
-#[derive(Debug)]
-enum RegistrationState {
-    /// Pending registration for a given udev sequence number
-    Pending(u64),
-    /// Registered with volume id
-    Registered(u64),
-}
-
-#[derive(Clone)]
-struct Registrations {
-    server: Server,
-    registrations: Arc<Mutex<HashMap<PathBuf, RegistrationState>>>,
-}
-
-impl Registrations {
-    fn pre_register(&self, syspath: &Path, seqnum: u64) {
-        let mut registrations = self.registrations.lock().unwrap();
-        if let Some(existing) =
-            registrations.insert(syspath.to_path_buf(), RegistrationState::Pending(seqnum))
-        {
-            warn!("Pre-registering with known previous item: {:?}", existing);
-            if let RegistrationState::Registered(id) = existing {
-                self.server.unregister_volume(id)
-            }
-        }
-    }
-    fn failed(&self, syspath: &Path, seqnum: u64) {
-        let mut registrations = self.registrations.lock().unwrap();
-        match registrations.get(syspath) {
-            Some(RegistrationState::Pending(s)) if *s == seqnum => {
-                registrations.remove(syspath);
-            }
-            _ => {
-                info!("Ignoring outdated failure (seqnum: {seqnum})")
-            }
-        }
-    }
-
-    fn register(
-        &self,
-        syspath: &Path,
-        seqnum: u64,
-        volume: MediatekBromVolume,
-        properties: Properties,
-    ) {
-        let mut registrations = self.registrations.lock().unwrap();
-        match registrations.get(syspath) {
-            Some(RegistrationState::Pending(s)) if *s == seqnum => {
-                let id = self.server.register_volume(properties, volume);
-                registrations.insert(syspath.to_path_buf(), RegistrationState::Registered(id));
-            }
-            _ => {
-                info!("Ignoring outdated registration (seqnum: {seqnum})")
-            }
-        }
-    }
-
-    fn remove(&self, syspath: &Path) {
-        let mut registrations = self.registrations.lock().unwrap();
-        if let Some(RegistrationState::Registered(id)) = registrations.remove(syspath) {
-            self.server.unregister_volume(id);
-        }
-    }
-}
-
 pub struct MediatekBromProvider {
     name: String,
-    registrations: Registrations,
+    registrations: DeviceRegistrations<MediatekBromVolume>,
 }
 
 impl MediatekBromProvider {
     pub fn new(name: String, server: Server) -> Self {
         Self {
             name,
-            registrations: Registrations {
-                server,
-                registrations: Default::default(),
-            },
+            registrations: DeviceRegistrations::new(server),
         }
     }
 }
@@ -116,17 +45,11 @@ impl SerialProvider for MediatekBromProvider {
 
         if let Some(node) = device.devnode() {
             if let Some(name) = node.file_name() {
-                self.registrations.pre_register(device.syspath(), seqnum);
+                let prereg = self.registrations.pre_register(device, seqnum);
 
                 let mut properties = device.properties(name.to_string_lossy());
                 properties.extend(provider_properties);
-                tokio::spawn(setup_volume(
-                    self.registrations.clone(),
-                    device.syspath().to_path_buf(),
-                    node.to_path_buf(),
-                    properties,
-                    seqnum,
-                ));
+                tokio::spawn(setup_volume(prereg, node.to_path_buf(), properties));
 
                 return true;
             }
@@ -134,25 +57,22 @@ impl SerialProvider for MediatekBromProvider {
         false
     }
 
-    fn remove(&mut self, path: &Path) {
-        self.registrations.remove(path);
+    fn remove(&mut self, device: &Device) {
+        self.registrations.remove(device);
     }
 }
 
 #[instrument(skip(r, properties))]
 async fn setup_volume(
-    r: Registrations,
-    syspath: PathBuf,
+    r: PreRegistration<MediatekBromVolume>,
     node: PathBuf,
     mut properties: Properties,
-    seqnum: u64,
 ) {
     info!("Setting up brom volume for {}", node.display());
     let mut port = match tokio_serial::new(node.to_string_lossy(), 115200).open_native_async() {
         Ok(port) => port,
         Err(e) => {
             warn!("Failed to open serial port: {e}");
-            r.failed(&syspath, seqnum);
             return;
         }
     };
@@ -171,7 +91,7 @@ async fn setup_volume(
 
     let volume = MediatekBromVolume::new(port, brom);
 
-    r.register(&syspath, seqnum, volume, properties);
+    r.register(properties, volume);
 }
 
 enum BromCommand {
