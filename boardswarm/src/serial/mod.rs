@@ -4,7 +4,6 @@ use futures::ready;
 use serde::Deserialize;
 use std::{
     collections::HashMap,
-    path::Path,
     pin::Pin,
     sync::{Arc, Mutex},
     task::{Context, Poll},
@@ -25,7 +24,7 @@ pub const PROVIDER: &str = "serial";
 
 pub trait SerialProvider {
     fn handle(&mut self, device: &crate::udev::Device, seqnum: u64) -> bool;
-    fn remove(&mut self, path: &Path);
+    fn remove(&mut self, device: &crate::udev::Device);
 }
 
 pub struct SerialDevices {
@@ -80,10 +79,9 @@ impl SerialDevices {
                     }
                 }
                 DeviceEvent::Remove(device) => {
-                    let syspath = device.syspath();
                     let mut providers = self.providers.lock().unwrap();
-                    providers.iter_mut().for_each(|p| p.remove(syspath));
-                    if let Some(id) = registrations.remove(syspath) {
+                    providers.iter_mut().for_each(|p| p.remove(&device));
+                    if let Some(id) = registrations.remove(device.syspath()) {
                         self.server.unregister_console(id)
                     }
                 }
