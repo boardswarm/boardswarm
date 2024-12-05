@@ -781,9 +781,10 @@ async fn print_item(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
-
     let opt = Opts::parse();
+    if !matches!(opt.command, Command::Ui { .. }) {
+        tracing_subscriber::fmt::init();
+    }
 
     let config_path = opt.config.clone().unwrap_or_else(|| {
         let mut c = dirs::config_dir().expect("Config directory not found");
