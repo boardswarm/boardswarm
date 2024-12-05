@@ -149,4 +149,84 @@ impl Device {
     pub fn parent(&self) -> Option<Device> {
         self.0.parent().map(Device)
     }
+
+    pub fn is_usb_device(&self) -> bool {
+        self.0.subsystem() == Some(OsStr::new("usb_device"))
+    }
+
+    pub fn usb_interfaces(&self) -> Option<Vec<UsbInterface>> {
+        if self.is_usb_device() {
+            Some(UsbInterface::from_udev(
+                self.0.property_value("ID_USB_INTERFACES")?.to_str()?,
+            ))
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct UsbInterface {
+    pub class: u8,
+    pub subclass: u8,
+    pub protocol: u8,
+}
+
+impl UsbInterface {
+    // Create from udev ID_USB_INTERFACES property
+    pub fn from_udev(property: &str) -> Vec<UsbInterface> {
+        property
+            .split(':')
+            .filter_map(|intf| {
+                if intf.len() == 6 {
+                    let class = u8::from_str_radix(&intf[0..2], 16).ok()?;
+                    let subclass = u8::from_str_radix(&intf[2..4], 16).ok()?;
+                    let protocol = u8::from_str_radix(&intf[4..6], 16).ok()?;
+                    Some(UsbInterface {
+                        class,
+                        subclass,
+                        protocol,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+}
+
+#[test]
+fn udev_interface_string() {
+    let tests: &[(_, &[_])] = &[
+        (
+            ":123456:",
+            &[UsbInterface {
+                class: 0x12,
+                subclass: 0x34,
+                protocol: 0x56,
+            }],
+        ),
+        (
+            ":123456:673489:",
+            &[
+                UsbInterface {
+                    class: 0x12,
+                    subclass: 0x34,
+                    protocol: 0x56,
+                },
+                UsbInterface {
+                    class: 0x67,
+                    subclass: 0x34,
+                    protocol: 0x89,
+                },
+            ],
+        ),
+        ("::", &[]),
+        (":", &[]),
+        ("", &[]),
+    ];
+    for (prop, expected) in tests {
+        let v = UsbInterface::from_udev(prop);
+        assert_eq!(&v, expected, "Unexpected result for {prop}");
+    }
 }
