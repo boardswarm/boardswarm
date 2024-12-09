@@ -22,35 +22,68 @@ use tokio_serial::{SerialPortBuilderExt, SerialStream};
 
 pub const PROVIDER: &str = "serial";
 
-#[instrument(skip(server))]
-pub async fn start_provider(name: String, server: Server) {
-    let provider_properties = &[
-        (registry::PROVIDER_NAME, name.as_str()),
-        (registry::PROVIDER, PROVIDER),
-    ];
-    let mut registrations = HashMap::new();
-    let mut devices = crate::udev::DeviceStream::new("tty").unwrap();
-    while let Some(d) = devices.next().await {
-        match d {
-            DeviceEvent::Add(d) => {
-                if d.parent().is_none() {
-                    continue;
-                }
-                if let Some(node) = d.devnode() {
-                    if let Some(name) = node.file_name() {
-                        let name = name.to_string_lossy().into_owned();
-                        let path = node.to_string_lossy().into_owned();
-                        let console = SerialPort::new(path);
-                        let mut properties = d.properties(name);
-                        properties.extend(provider_properties);
-                        let id = server.register_console(properties, console);
-                        registrations.insert(d.syspath().to_path_buf(), id);
+pub trait SerialProvider {
+    fn handle(&mut self, device: &crate::udev::Device, seqnum: u64) -> bool;
+    fn remove(&mut self, device: &crate::udev::Device);
+}
+
+pub struct SerialDevices {
+    name: String,
+    server: Server,
+    providers: Arc<Mutex<Vec<Box<dyn SerialProvider>>>>,
+}
+
+impl SerialDevices {
+    pub fn new<S: Into<String>>(name: S, server: Server) -> Self {
+        Self {
+            name: name.into(),
+            server,
+            providers: Default::default(),
+        }
+    }
+
+    pub fn add_provider<P: SerialProvider + 'static>(&self, provider: P) {
+        let mut providers = self.providers.lock().unwrap();
+        providers.push(Box::from(provider));
+    }
+
+    #[instrument(skip_all)]
+    pub async fn start(self) {
+        let provider_properties = &[
+            (registry::PROVIDER_NAME, self.name.as_str()),
+            (registry::PROVIDER, PROVIDER),
+        ];
+        let mut registrations = HashMap::new();
+        let mut devices = crate::udev::DeviceStream::new("tty").unwrap();
+        while let Some(event) = devices.next().await {
+            match event {
+                DeviceEvent::Add { device, seqnum } => {
+                    if device.parent().is_none() {
+                        continue;
+                    }
+                    let mut providers = self.providers.lock().unwrap();
+                    // Check if one of the providers wants to handle it, if so skip
+                    if providers.iter_mut().any(|p| p.handle(&device, seqnum)) {
+                        continue;
+                    }
+                    if let Some(node) = device.devnode() {
+                        if let Some(name) = node.file_name() {
+                            let name = name.to_string_lossy().into_owned();
+                            let path = node.to_string_lossy().into_owned();
+                            let console = SerialPort::new(path);
+                            let mut properties = device.properties(name);
+                            properties.extend(provider_properties);
+                            let id = self.server.register_console(properties, console);
+                            registrations.insert(device.syspath().to_path_buf(), id);
+                        }
                     }
                 }
-            }
-            DeviceEvent::Remove(d) => {
-                if let Some(id) = registrations.remove(d.syspath()) {
-                    server.unregister_console(id)
+                DeviceEvent::Remove(device) => {
+                    let mut providers = self.providers.lock().unwrap();
+                    providers.iter_mut().for_each(|p| p.remove(&device));
+                    if let Some(id) = registrations.remove(device.syspath()) {
+                        self.server.unregister_console(id)
+                    }
                 }
             }
         }

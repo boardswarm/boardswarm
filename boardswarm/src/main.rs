@@ -11,6 +11,7 @@ use futures::prelude::*;
 use futures::stream::BoxStream;
 use futures::Sink;
 use jwt_authorizer::{Authorizer, IntoLayer, JwtAuthorizer, RegisteredClaims, Validation};
+use mediatek_brom::MediatekBromProvider;
 use registry::{Properties, Registry};
 use std::net::{AddrParseError, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -26,7 +27,9 @@ mod boardswarm_provider;
 mod config;
 mod config_device;
 mod dfu;
+mod fastboot;
 mod gpio;
+mod mediatek_brom;
 mod pdudaemon;
 mod registry;
 mod rockusb;
@@ -108,6 +111,7 @@ enum VolumeIoReply {
     Read(oneshot::Receiver<Result<Bytes, tonic::Status>>),
     Write(oneshot::Receiver<Result<u64, tonic::Status>>),
     Flush(oneshot::Receiver<Result<(), tonic::Status>>),
+    Shutdown(oneshot::Receiver<Result<(), tonic::Status>>),
     FatalError(tonic::Status),
 }
 
@@ -147,6 +151,14 @@ impl VolumeIoReplies {
                             )),
                         })
                     }
+                    VolumeIoReply::Shutdown(s) => {
+                        let Ok(s) = s.await else { break };
+                        s.map(|_| boardswarm_protocol::VolumeIoReply {
+                            reply: Some(volume_io_reply::Reply::Shutdown(
+                                boardswarm_protocol::VolumeIoShutdownReply {},
+                            )),
+                        })
+                    }
                     VolumeIoReply::FatalError(e) => Err(e),
                 };
                 if reply_tx.send(reply).await.is_err() {
@@ -167,6 +179,10 @@ impl VolumeIoReplies {
 
     fn enqueue_flush_reply(&mut self, rx: oneshot::Receiver<Result<(), tonic::Status>>) {
         let _ = self.completion_tx.send(VolumeIoReply::Flush(rx));
+    }
+
+    fn enqueue_shutdown_reply(&mut self, rx: oneshot::Receiver<Result<(), tonic::Status>>) {
+        let _ = self.completion_tx.send(VolumeIoReply::Shutdown(rx));
     }
 
     fn enqueue_fatal_error(&mut self, error: tonic::Status) {
@@ -219,6 +235,17 @@ impl FlushCompletion {
     }
 }
 
+pub struct ShutdownCompletion(oneshot::Sender<Result<(), tonic::Status>>);
+impl ShutdownCompletion {
+    fn new() -> (Self, oneshot::Receiver<Result<(), tonic::Status>>) {
+        let (tx, rx) = oneshot::channel();
+        (Self(tx), rx)
+    }
+    pub fn complete(self, result: Result<(), tonic::Status>) {
+        let _ = self.0.send(result);
+    }
+}
+
 #[async_trait::async_trait]
 pub trait VolumeTarget: Send {
     async fn read(&mut self, _length: u64, _offset: u64, completion: ReadCompletion) {
@@ -231,6 +258,14 @@ pub trait VolumeTarget: Send {
 
     async fn flush(&mut self, completion: FlushCompletion) {
         completion.complete(Ok(()))
+    }
+
+    async fn shutdown(&mut self, completion: ShutdownCompletion) {
+        // Take advantage of flush and shutdown returning an result, so we can convert one into
+        // the other
+        let rx = completion.0;
+        let completion = FlushCompletion(rx);
+        self.flush(completion).await
     }
 }
 
@@ -863,6 +898,11 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
                             reply.enqueue_flush_reply(rx);
                             target.flush(completion).await;
                         }
+                        volume_io_request::TargetOrRequest::Shutdown(_s) => {
+                            let (completion, rx) = ShutdownCompletion::new();
+                            reply.enqueue_shutdown_reply(rx);
+                            target.shutdown(completion).await;
+                        }
                     }
                 }
             });
@@ -1001,16 +1041,34 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let local = tokio::task::LocalSet::new();
+    let serial = config
+        .providers
+        .iter()
+        .find(|p| p.name == serial::PROVIDER)
+        .map(|p| serial::SerialDevices::new(&p.name, server.clone()));
     for p in config.providers {
         match p.provider.as_str() {
             dfu::PROVIDER => {
                 local.spawn_local(dfu::start_provider(p.name, server.clone()));
             }
+            mediatek_brom::PROVIDER => match serial {
+                Some(ref s) => s.add_provider(MediatekBromProvider::new(p.name, server.clone())),
+                None => {
+                    bail!("Mediatek brom provider requires the serial provider to be enabled")
+                }
+            },
             rockusb::PROVIDER => {
                 local.spawn_local(rockusb::start_provider(p.name, server.clone()));
             }
             serial::PROVIDER => {
-                local.spawn_local(serial::start_provider(p.name, server.clone()));
+                // Precreated already
+            }
+            fastboot::PROVIDER => {
+                local.spawn_local(fastboot::start_provider(
+                    p.name,
+                    p.parameters,
+                    server.clone(),
+                ));
             }
             gpio::PROVIDER => {
                 local.spawn_local(gpio::start_provider(
@@ -1033,6 +1091,9 @@ async fn main() -> anyhow::Result<()> {
             ),
             t => warn!("Unknown provider: {t}"),
         }
+    }
+    if let Some(serial) = serial {
+        local.spawn_local(serial.start());
     }
 
     let boardswarm = tonic::service::Routes::new(

@@ -10,8 +10,8 @@ use boardswarm_protocol::{
     boardswarm_client::BoardswarmClient, console_input_request, volume_io_reply, volume_io_request,
     ActuatorModeRequest, ConsoleConfigureRequest, ConsoleInputRequest, ConsoleOutputRequest,
     DeviceModeRequest, DeviceRequest, Item, ItemPropertiesRequest, ItemType, ItemTypeRequest,
-    VolumeInfoMsg, VolumeIoFlush, VolumeIoRead, VolumeIoReply, VolumeIoRequest, VolumeIoTarget,
-    VolumeIoWrite, VolumeRequest, VolumeTarget,
+    VolumeInfoMsg, VolumeIoFlush, VolumeIoRead, VolumeIoReply, VolumeIoRequest, VolumeIoShutdown,
+    VolumeIoTarget, VolumeIoWrite, VolumeRequest, VolumeTarget,
 };
 use bytes::Bytes;
 use futures::{future::BoxFuture, stream, FutureExt, Stream, StreamExt};
@@ -410,10 +410,34 @@ impl Future for VolumeIoFlushRequest {
 }
 
 #[derive(Debug)]
+pub struct VolumeIoShutdownRequest {
+    rx: oneshot::Receiver<Result<(), tonic::Status>>,
+}
+
+impl Future for VolumeIoShutdownRequest {
+    type Output = Result<(), tonic::Status>;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let mut me = self.as_mut();
+        Pin::new(&mut me.rx).poll(cx).map(|r| {
+            r.unwrap_or_else(|e| {
+                Err(tonic::Status::aborted(format!(
+                    "Shutdown request not received: {e:?}"
+                )))
+            })
+        })
+    }
+}
+
+#[derive(Debug)]
 enum Outstanding {
     Write(oneshot::Sender<Result<u64, tonic::Status>>),
     Read(oneshot::Sender<Result<Bytes, tonic::Status>>),
     Flush(oneshot::Sender<Result<(), tonic::Status>>),
+    Shutdown(oneshot::Sender<Result<(), tonic::Status>>),
 }
 
 impl Outstanding {
@@ -426,6 +450,9 @@ impl Outstanding {
                 let _ = tx.send(Err(status));
             }
             Outstanding::Flush(tx) => {
+                let _ = tx.send(Err(status));
+            }
+            Outstanding::Shutdown(tx) => {
                 let _ = tx.send(Err(status));
             }
         }
@@ -468,6 +495,9 @@ impl VolumeIo {
                             let _ = tx.send(Ok(w.written));
                         }
                         (Outstanding::Flush(tx), volume_io_reply::Reply::Flush(_f)) => {
+                            let _ = tx.send(Ok(()));
+                        }
+                        (Outstanding::Shutdown(tx), volume_io_reply::Reply::Shutdown(_s)) => {
                             let _ = tx.send(Ok(()));
                         }
                         (_o, _r) => {
@@ -563,14 +593,41 @@ impl VolumeIo {
         self.send_request(request).await?;
         Ok(flush)
     }
+
+    fn prepare_shutdown() -> ((VolumeIoRequest, Outstanding), VolumeIoShutdownRequest) {
+        let (tx, rx) = oneshot::channel();
+        let request = VolumeIoRequest {
+            target_or_request: Some(volume_io_request::TargetOrRequest::Shutdown(
+                VolumeIoShutdown {},
+            )),
+        };
+
+        let outstanding = Outstanding::Shutdown(tx);
+        ((request, outstanding), VolumeIoShutdownRequest { rx })
+    }
+
+    pub async fn request_shutdown(
+        &mut self,
+    ) -> Result<VolumeIoShutdownRequest, VolumeIoNoMoreRequests> {
+        let (request, shutdown) = Self::prepare_shutdown();
+        self.send_request(request).await?;
+        Ok(shutdown)
+    }
 }
 
 type ReservedRequestPermit = mpsc::OwnedPermit<(VolumeIoRequest, Outstanding)>;
 enum IoWrapperState {
     Idle,
     ReserveRequest(BoxFuture<'static, Result<ReservedRequestPermit, mpsc::error::SendError<()>>>),
-    Flush(VolumeIoFlushRequest),
+    Flush,
+    Shutdown,
     Read(VolumeIoReadRequest),
+}
+
+enum Pending {
+    Write(VolumeIoWriteRequest),
+    Flush(VolumeIoFlushRequest),
+    Shutdown(VolumeIoShutdownRequest),
 }
 
 pub struct VolumeIoRW {
@@ -580,7 +637,7 @@ pub struct VolumeIoRW {
     pos: u64,
     state: IoWrapperState,
     pending_seek: Option<std::io::SeekFrom>,
-    outstanding_writes: VecDeque<VolumeIoWriteRequest>,
+    pending_requests: VecDeque<Pending>,
     buffered_read: Bytes,
 }
 
@@ -592,7 +649,7 @@ impl VolumeIoRW {
             pos: 0,
             state: IoWrapperState::Idle,
             pending_seek: None,
-            outstanding_writes: VecDeque::new(),
+            pending_requests: VecDeque::new(),
             buffered_read: Bytes::new(),
         }
     }
@@ -617,16 +674,21 @@ impl VolumeIoRW {
         self.info.size
     }
 
-    fn cleanup_outstanding_writes(
+    fn cleanup_pending_requests(
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Result<(), std::io::Error> {
         // Clean up outstanding writes
-        while let Some(o) = self.outstanding_writes.front_mut() {
-            match Pin::new(o).poll(cx) {
+        while let Some(r) = self.pending_requests.front_mut() {
+            let r = match r {
+                // TODO short writes?
+                Pending::Write(w) => Pin::new(w).poll(cx).map_ok(|_| ()),
+                Pending::Flush(f) => Pin::new(f).poll(cx),
+                Pending::Shutdown(s) => Pin::new(s).poll(cx),
+            };
+            match r {
                 Poll::Ready(r) => {
-                    // TODO handle short writes?
-                    self.outstanding_writes.pop_front();
+                    self.pending_requests.pop_front();
                     r.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
                 }
                 Poll::Pending => break,
@@ -667,7 +729,7 @@ impl AsyncWrite for VolumeIoRW {
         let mut me = self.as_mut();
 
         me.invalidate_read_buffer();
-        if let Err(e) = me.cleanup_outstanding_writes(cx) {
+        if let Err(e) = me.cleanup_pending_requests(cx) {
             return Poll::Ready(Err(e));
         }
 
@@ -694,7 +756,7 @@ impl AsyncWrite for VolumeIoRW {
                         };
                         let bytes = Bytes::copy_from_slice(&buf[0..len]);
                         let (request, write) = VolumeIo::prepare_write(bytes, me.pos);
-                        me.outstanding_writes.push_back(write);
+                        me.pending_requests.push_back(Pending::Write(write));
                         p.send(request);
 
                         me.pos = me.pos.saturating_add(len as u64);
@@ -710,8 +772,8 @@ impl AsyncWrite for VolumeIoRW {
                         )))
                     }
                 },
-                IoWrapperState::Flush(_) | IoWrapperState::Read(_) => {
-                    // Drop the outstanding flush and read
+                IoWrapperState::Flush | IoWrapperState::Shutdown | IoWrapperState::Read(_) => {
+                    // Drop the outstanding flush, shutdown and read
                     me.state = IoWrapperState::Idle;
                 }
             }
@@ -724,15 +786,12 @@ impl AsyncWrite for VolumeIoRW {
     ) -> Poll<Result<(), std::io::Error>> {
         let mut me = self.as_mut();
 
-        if let Err(e) = me.cleanup_outstanding_writes(cx) {
-            return Poll::Ready(Err(e));
-        }
-
-        if me.outstanding_writes.is_empty() {
-            return Poll::Ready(Ok(()));
-        }
-
         loop {
+            if let Err(e) = me.cleanup_pending_requests(cx) {
+                me.state = IoWrapperState::Idle;
+                return Poll::Ready(Err(e));
+            }
+
             match me.state {
                 IoWrapperState::Idle => {
                     let reserve = me.io.requests.clone().reserve_owned();
@@ -741,7 +800,65 @@ impl AsyncWrite for VolumeIoRW {
                 IoWrapperState::ReserveRequest(ref mut r) => match ready!(r.as_mut().poll(cx)) {
                     Ok(p) => {
                         let (request, flush) = VolumeIo::prepare_flush();
-                        me.state = IoWrapperState::Flush(flush);
+                        me.pending_requests.push_back(Pending::Flush(flush));
+                        me.state = IoWrapperState::Flush;
+                        p.send(request);
+                    }
+                    Err(e) => {
+                        return Poll::Ready(Err(std::io::Error::new(
+                            std::io::ErrorKind::NotConnected,
+                            e,
+                        )));
+                    }
+                },
+                IoWrapperState::Flush => {
+                    // Flush is done if all the pending requests have been pushed through
+                    if me.pending_requests.is_empty() {
+                        me.state = IoWrapperState::Idle;
+                        return Poll::Ready(Ok(()));
+                    } else {
+                        return Poll::Pending;
+                    }
+                }
+                IoWrapperState::Read(_) => {
+                    // Drop outstanding read
+                    me.state = IoWrapperState::Idle;
+                }
+
+                IoWrapperState::Shutdown => {
+                    // Write actions after shutdown isn't valid
+                    return Poll::Ready(Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        Box::<dyn std::error::Error + Send + Sync + 'static>::from(
+                            "Flush after shutdown",
+                        ),
+                    )));
+                }
+            }
+        }
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        let mut me = self.as_mut();
+
+        loop {
+            if let Err(e) = me.cleanup_pending_requests(cx) {
+                me.state = IoWrapperState::Idle;
+                return Poll::Ready(Err(e));
+            }
+            match me.state {
+                IoWrapperState::Idle => {
+                    let reserve = me.io.requests.clone().reserve_owned();
+                    me.state = IoWrapperState::ReserveRequest(reserve.boxed());
+                }
+                IoWrapperState::ReserveRequest(ref mut r) => match ready!(r.as_mut().poll(cx)) {
+                    Ok(p) => {
+                        let (request, shutdown) = VolumeIo::prepare_shutdown();
+                        me.pending_requests.push_back(Pending::Shutdown(shutdown));
+                        me.state = IoWrapperState::Shutdown;
                         p.send(request);
                     }
                     Err(e) => {
@@ -751,25 +868,21 @@ impl AsyncWrite for VolumeIoRW {
                         )))
                     }
                 },
-                IoWrapperState::Flush(ref mut flush) => {
-                    let res = ready!(Pin::new(flush).poll(cx));
-                    me.state = IoWrapperState::Idle;
-                    let res = res.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
-                    return Poll::Ready(res);
+                IoWrapperState::Shutdown => {
+                    // shutdown is done if all the pending requests have been pushed through
+                    if me.pending_requests.is_empty() {
+                        me.state = IoWrapperState::Idle;
+                        return Poll::Ready(Ok(()));
+                    } else {
+                        return Poll::Pending;
+                    }
                 }
-                IoWrapperState::Read(_) => {
-                    // Drop outstanding read
+                IoWrapperState::Read(_) | IoWrapperState::Flush => {
+                    // Drop outstanding read or flush
                     me.state = IoWrapperState::Idle;
                 }
             }
         }
-    }
-
-    fn poll_shutdown(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<(), std::io::Error>> {
-        self.poll_flush(cx)
     }
 }
 
@@ -828,8 +941,8 @@ impl AsyncRead for VolumeIoRW {
                         }
                     }
                 }
-                IoWrapperState::Flush(_) => {
-                    // Drop the previous flush
+                IoWrapperState::Flush | IoWrapperState::Shutdown => {
+                    // Drop the previous flush or shutdown
                     me.state = IoWrapperState::Idle;
                 }
             }

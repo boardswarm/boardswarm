@@ -57,5 +57,7 @@ include:
 * rockusb: Rock Usb flash protocol volumes
 * pdudaemon: pdudaemon based actuators
 * gpio: Gpio line based actuators
+* fastboot: Fastboot usb volumes
+* mediatek-brom: Mediatek bootrom over usb serial volumes
 * boardswarm: client for other boardswarm instance, re-exposing all items
 

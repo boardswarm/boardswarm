@@ -25,27 +25,29 @@ pub async fn start_provider(name: String, server: Server) {
     let mut devices = crate::udev::DeviceStream::new("usb").unwrap();
     while let Some(d) = devices.next().await {
         match d {
-            DeviceEvent::Add(d) => {
-                let Some(vendor) = d.property_u64("ID_VENDOR_ID", 16) else {
+            DeviceEvent::Add { device, .. } => {
+                let Some(vendor) = device.property_u64("ID_VENDOR_ID", 16) else {
                     continue;
                 };
 
-                if vendor != 0x2207 || d.devnode().is_none() {
+                if vendor != 0x2207 || device.devnode().is_none() {
                     continue;
                 }
 
-                let Some(busnum): Option<u8> =
-                    d.property_u64("BUSNUM", 10).and_then(|v| v.try_into().ok())
+                let Some(busnum): Option<u8> = device
+                    .property_u64("BUSNUM", 10)
+                    .and_then(|v| v.try_into().ok())
                 else {
                     continue;
                 };
-                let Some(devnum): Option<u8> =
-                    d.property_u64("DEVNUM", 10).and_then(|v| v.try_into().ok())
+                let Some(devnum): Option<u8> = device
+                    .property_u64("DEVNUM", 10)
+                    .and_then(|v| v.try_into().ok())
                 else {
                     continue;
                 };
 
-                let name = if let Some(model) = d.property("ID_MODEL") {
+                let name = if let Some(model) = device.property("ID_MODEL") {
                     format!("{}/{} {}", busnum, devnum, model)
                 } else {
                     format!("{}/{}", devnum, devnum)
@@ -54,18 +56,18 @@ pub async fn start_provider(name: String, server: Server) {
 
                 match Rockusb::new(busnum, devnum).await {
                     Ok(rockusb) => {
-                        let mut properties = d.properties(name);
+                        let mut properties = device.properties(name);
                         properties.extend(provider_properties);
                         let id = server.register_volume(properties, rockusb);
-                        registrations.insert(d.syspath().to_path_buf(), id);
+                        registrations.insert(device.syspath().to_path_buf(), id);
                     }
                     Err(e) => {
                         warn!("Rockusb device setup failure: {}", e);
                     }
                 }
             }
-            DeviceEvent::Remove(d) => {
-                if let Some(id) = registrations.remove(d.syspath()) {
+            DeviceEvent::Remove(device) => {
+                if let Some(id) = registrations.remove(device.syspath()) {
                     server.unregister_volume(id)
                 }
             }
@@ -232,7 +234,7 @@ impl RockUsbMaskromTarget {
         }
     }
 
-    async fn flush(&mut self) -> Result<(), RockUsbError> {
+    async fn shutdown(&mut self) -> Result<(), RockUsbError> {
         let (tx, rx) = oneshot::channel();
         self.commands
             .send(RockUsbCommand::WriteMaskromArea((
@@ -261,8 +263,8 @@ impl VolumeTarget for RockUsbMaskromTarget {
         }
     }
 
-    async fn flush(&mut self, completion: crate::FlushCompletion) {
-        let r = self.flush().await;
+    async fn shutdown(&mut self, completion: crate::ShutdownCompletion) {
+        let r = self.shutdown().await;
         completion.complete(r.map_err(Into::into));
     }
 }

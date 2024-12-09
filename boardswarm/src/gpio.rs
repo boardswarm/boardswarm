@@ -53,19 +53,19 @@ pub async fn start_provider(name: String, parameters: serde_yaml::Value, server:
     let mut devices = crate::udev::DeviceStream::new("gpio").unwrap();
     while let Some(d) = devices.next().await {
         match d {
-            DeviceEvent::Add(d) => {
+            DeviceEvent::Add { device, .. } => {
                 if registration.is_some() {
                     continue;
                 }
-                if let Some(path) = d.devnode() {
+                if let Some(path) = device.devnode() {
                     if let Some(name) = path.file_name() {
                         let name = name.to_string_lossy().into_owned();
-                        let mut properties = d.properties(name);
+                        let mut properties = device.properties(name);
 
                         if !properties.matches(&parameters.match_) {
                             debug!(
                                 "Ignoring gpio device {} - {:?}",
-                                d.syspath().display(),
+                                device.syspath().display(),
                                 properties,
                             );
 
@@ -77,14 +77,14 @@ pub async fn start_provider(name: String, parameters: serde_yaml::Value, server:
                             setup_gpio_chip(path.to_path_buf(), &parameters, properties, &server)
                                 .await
                         {
-                            registration = Some((d.syspath().to_owned(), ids));
+                            registration = Some((device.syspath().to_owned(), ids));
                         }
                     }
                 }
             }
-            DeviceEvent::Remove(d) => {
+            DeviceEvent::Remove(device) => {
                 if let Some((p, ids)) = registration.as_ref() {
-                    if d.syspath() == p {
+                    if device.syspath() == p {
                         for i in ids {
                             server.unregister_actuator(*i);
                         }
