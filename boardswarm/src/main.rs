@@ -27,6 +27,7 @@ mod boardswarm_provider;
 mod config;
 mod config_device;
 mod dfu;
+mod fastboot;
 mod gpio;
 mod mediatek_brom;
 mod pdudaemon;
@@ -1061,6 +1062,13 @@ async fn main() -> anyhow::Result<()> {
             }
             serial::PROVIDER => {
                 // Precreated already
+            }
+            fastboot::PROVIDER => {
+                local.spawn_local(fastboot::start_provider(
+                    p.name,
+                    p.parameters,
+                    server.clone(),
+                ));
             }
             gpio::PROVIDER => {
                 local.spawn_local(gpio::start_provider(
