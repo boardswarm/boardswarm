@@ -20,7 +20,7 @@ boardswarm-client = { version = "0.0.1", path = "../boardswarm-client" }
 tokio = { version = "1.41.1", features = ["full"] }
 tokio-util = { version = "0.7.4", features = ["compat"] }
 serde_json = "1.0.91"
-tracing = "0.1.37"
+tracing = "0.1.40"
 indicatif = { version = "0.17.3", features = ["improved_unicode"] }
 itertools = "0.13.0"
 bmap-parser = "0.2.0"
