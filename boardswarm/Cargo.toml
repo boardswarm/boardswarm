@@ -36,6 +36,8 @@ rockusb = { version = "0.2.0", features = [ "nusb" ] }
 jwt-authorizer = { version = "0.15", default-features = false, features = [ "tonic", "rustls-tls-native-roots", "chrono" ] }
 axum = "0.7.4"
 axum-server = { version = "0.7.1", features = ["tls-rustls-no-provider"] }
-nusb = "0.1.10"
+nusb = "0.1.11"
 dfu-nusb = "0.1.0"
 mediatek-brom = { version = "0.1.0", features = ["tokio"] }
+fastboot-protocol = "0.2.1"
+android-sparse-image = "0.1.2"
