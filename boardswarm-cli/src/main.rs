@@ -967,7 +967,24 @@ async fn main() -> anyhow::Result<()> {
             match command {
                 VolumeCommand::Info => {
                     let info = boardswarm.volume_info(volume).await?;
-                    println!("{:#?}", info);
+                    println!("Volume targets:");
+                    for target in &info.target {
+                        print!("* {}: ", target.name);
+                        if let Some(size) = target.size {
+                            print!("size: {size}, ");
+                        } else {
+                            print!("size: unknown, ");
+                        }
+                        if let Some(blocksize) = target.blocksize {
+                            print!("blocksize: {blocksize}, ");
+                        } else {
+                            print!("blocksize: unknown, ");
+                        }
+                        println!(
+                            "readable: {}, writable: {}, seekable: {}",
+                            target.readable, target.writable, target.seekable
+                        );
+                    }
                 }
                 VolumeCommand::Write(write) => {
                     let mut f = tokio::fs::File::open(write.file).await?;
