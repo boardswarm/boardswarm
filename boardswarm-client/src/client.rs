@@ -619,9 +619,15 @@ type ReservedRequestPermit = mpsc::OwnedPermit<(VolumeIoRequest, Outstanding)>;
 enum IoWrapperState {
     Idle,
     ReserveRequest(BoxFuture<'static, Result<ReservedRequestPermit, mpsc::error::SendError<()>>>),
+    Flush,
+    Shutdown,
+    Read(VolumeIoReadRequest),
+}
+
+enum Pending {
+    Write(VolumeIoWriteRequest),
     Flush(VolumeIoFlushRequest),
     Shutdown(VolumeIoShutdownRequest),
-    Read(VolumeIoReadRequest),
 }
 
 pub struct VolumeIoRW {
@@ -631,7 +637,7 @@ pub struct VolumeIoRW {
     pos: u64,
     state: IoWrapperState,
     pending_seek: Option<std::io::SeekFrom>,
-    outstanding_writes: VecDeque<VolumeIoWriteRequest>,
+    pending_requests: VecDeque<Pending>,
     buffered_read: Bytes,
 }
 
@@ -643,7 +649,7 @@ impl VolumeIoRW {
             pos: 0,
             state: IoWrapperState::Idle,
             pending_seek: None,
-            outstanding_writes: VecDeque::new(),
+            pending_requests: VecDeque::new(),
             buffered_read: Bytes::new(),
         }
     }
@@ -668,16 +674,21 @@ impl VolumeIoRW {
         self.info.size
     }
 
-    fn cleanup_outstanding_writes(
+    fn cleanup_pending_requests(
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Result<(), std::io::Error> {
         // Clean up outstanding writes
-        while let Some(o) = self.outstanding_writes.front_mut() {
-            match Pin::new(o).poll(cx) {
+        while let Some(r) = self.pending_requests.front_mut() {
+            let r = match r {
+                // TODO short writes?
+                Pending::Write(w) => Pin::new(w).poll(cx).map_ok(|_| ()),
+                Pending::Flush(f) => Pin::new(f).poll(cx),
+                Pending::Shutdown(s) => Pin::new(s).poll(cx),
+            };
+            match r {
                 Poll::Ready(r) => {
-                    // TODO handle short writes?
-                    self.outstanding_writes.pop_front();
+                    self.pending_requests.pop_front();
                     r.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
                 }
                 Poll::Pending => break,
@@ -718,7 +729,7 @@ impl AsyncWrite for VolumeIoRW {
         let mut me = self.as_mut();
 
         me.invalidate_read_buffer();
-        if let Err(e) = me.cleanup_outstanding_writes(cx) {
+        if let Err(e) = me.cleanup_pending_requests(cx) {
             return Poll::Ready(Err(e));
         }
 
@@ -745,7 +756,7 @@ impl AsyncWrite for VolumeIoRW {
                         };
                         let bytes = Bytes::copy_from_slice(&buf[0..len]);
                         let (request, write) = VolumeIo::prepare_write(bytes, me.pos);
-                        me.outstanding_writes.push_back(write);
+                        me.pending_requests.push_back(Pending::Write(write));
                         p.send(request);
 
                         me.pos = me.pos.saturating_add(len as u64);
@@ -761,9 +772,7 @@ impl AsyncWrite for VolumeIoRW {
                         )))
                     }
                 },
-                IoWrapperState::Flush(_)
-                | IoWrapperState::Shutdown(_)
-                | IoWrapperState::Read(_) => {
+                IoWrapperState::Flush | IoWrapperState::Shutdown | IoWrapperState::Read(_) => {
                     // Drop the outstanding flush, shutdown and read
                     me.state = IoWrapperState::Idle;
                 }
@@ -777,15 +786,12 @@ impl AsyncWrite for VolumeIoRW {
     ) -> Poll<Result<(), std::io::Error>> {
         let mut me = self.as_mut();
 
-        if let Err(e) = me.cleanup_outstanding_writes(cx) {
-            return Poll::Ready(Err(e));
-        }
-
-        if me.outstanding_writes.is_empty() {
-            return Poll::Ready(Ok(()));
-        }
-
         loop {
+            if let Err(e) = me.cleanup_pending_requests(cx) {
+                me.state = IoWrapperState::Idle;
+                return Poll::Ready(Err(e));
+            }
+
             match me.state {
                 IoWrapperState::Idle => {
                     let reserve = me.io.requests.clone().reserve_owned();
@@ -794,28 +800,32 @@ impl AsyncWrite for VolumeIoRW {
                 IoWrapperState::ReserveRequest(ref mut r) => match ready!(r.as_mut().poll(cx)) {
                     Ok(p) => {
                         let (request, flush) = VolumeIo::prepare_flush();
-                        me.state = IoWrapperState::Flush(flush);
+                        me.pending_requests.push_back(Pending::Flush(flush));
+                        me.state = IoWrapperState::Flush;
                         p.send(request);
                     }
                     Err(e) => {
                         return Poll::Ready(Err(std::io::Error::new(
                             std::io::ErrorKind::NotConnected,
                             e,
-                        )))
+                        )));
                     }
                 },
-                IoWrapperState::Flush(ref mut flush) => {
-                    let res = ready!(Pin::new(flush).poll(cx));
-                    me.state = IoWrapperState::Idle;
-                    let res = res.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
-                    return Poll::Ready(res);
+                IoWrapperState::Flush => {
+                    // Flush is done if all the pending requests have been pushed through
+                    if me.pending_requests.is_empty() {
+                        me.state = IoWrapperState::Idle;
+                        return Poll::Ready(Ok(()));
+                    } else {
+                        return Poll::Pending;
+                    }
                 }
                 IoWrapperState::Read(_) => {
                     // Drop outstanding read
                     me.state = IoWrapperState::Idle;
                 }
 
-                IoWrapperState::Shutdown(_) => {
+                IoWrapperState::Shutdown => {
                     // Write actions after shutdown isn't valid
                     return Poll::Ready(Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
@@ -834,11 +844,11 @@ impl AsyncWrite for VolumeIoRW {
     ) -> Poll<Result<(), std::io::Error>> {
         let mut me = self.as_mut();
 
-        if let Err(e) = me.cleanup_outstanding_writes(cx) {
-            return Poll::Ready(Err(e));
-        }
-
         loop {
+            if let Err(e) = me.cleanup_pending_requests(cx) {
+                me.state = IoWrapperState::Idle;
+                return Poll::Ready(Err(e));
+            }
             match me.state {
                 IoWrapperState::Idle => {
                     let reserve = me.io.requests.clone().reserve_owned();
@@ -847,7 +857,8 @@ impl AsyncWrite for VolumeIoRW {
                 IoWrapperState::ReserveRequest(ref mut r) => match ready!(r.as_mut().poll(cx)) {
                     Ok(p) => {
                         let (request, shutdown) = VolumeIo::prepare_shutdown();
-                        me.state = IoWrapperState::Shutdown(shutdown);
+                        me.pending_requests.push_back(Pending::Shutdown(shutdown));
+                        me.state = IoWrapperState::Shutdown;
                         p.send(request);
                     }
                     Err(e) => {
@@ -857,13 +868,16 @@ impl AsyncWrite for VolumeIoRW {
                         )))
                     }
                 },
-                IoWrapperState::Shutdown(ref mut shutdown) => {
-                    let res = ready!(Pin::new(shutdown).poll(cx));
-                    me.state = IoWrapperState::Idle;
-                    let res = res.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
-                    return Poll::Ready(res);
+                IoWrapperState::Shutdown => {
+                    // shutdown is done if all the pending requests have been pushed through
+                    if me.pending_requests.is_empty() {
+                        me.state = IoWrapperState::Idle;
+                        return Poll::Ready(Ok(()));
+                    } else {
+                        return Poll::Pending;
+                    }
                 }
-                IoWrapperState::Read(_) | IoWrapperState::Flush(_) => {
+                IoWrapperState::Read(_) | IoWrapperState::Flush => {
                     // Drop outstanding read or flush
                     me.state = IoWrapperState::Idle;
                 }
@@ -927,7 +941,7 @@ impl AsyncRead for VolumeIoRW {
                         }
                     }
                 }
-                IoWrapperState::Flush(_) | IoWrapperState::Shutdown(_) => {
+                IoWrapperState::Flush | IoWrapperState::Shutdown => {
                     // Drop the previous flush or shutdown
                     me.state = IoWrapperState::Idle;
                 }
