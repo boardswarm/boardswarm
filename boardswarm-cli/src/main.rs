@@ -192,7 +192,7 @@ async fn rock_download_entry(
 
         let mut target = volume.open(target, Some(data.len() as u64)).await?;
         target.write_all(&data).await?;
-        target.flush().await?;
+        target.shutdown().await?;
 
         println!("Done!... waiting {}ms", entry.data_delay);
         if entry.data_delay > 0 {
@@ -783,7 +783,9 @@ async fn print_item(
 async fn main() -> anyhow::Result<()> {
     let opt = Opts::parse();
     if !matches!(opt.command, Command::Ui { .. }) {
-        tracing_subscriber::fmt::init();
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .init();
     }
 
     let config_path = opt.config.clone().unwrap_or_else(|| {
@@ -965,7 +967,24 @@ async fn main() -> anyhow::Result<()> {
             match command {
                 VolumeCommand::Info => {
                     let info = boardswarm.volume_info(volume).await?;
-                    println!("{:#?}", info);
+                    println!("Volume targets:");
+                    for target in &info.target {
+                        print!("* {}: ", target.name);
+                        if let Some(size) = target.size {
+                            print!("size: {size}, ");
+                        } else {
+                            print!("size: unknown, ");
+                        }
+                        if let Some(blocksize) = target.blocksize {
+                            print!("blocksize: {blocksize}, ");
+                        } else {
+                            print!("blocksize: unknown, ");
+                        }
+                        println!(
+                            "readable: {}, writable: {}, seekable: {}",
+                            target.readable, target.writable, target.seekable
+                        );
+                    }
                 }
                 VolumeCommand::Write(write) => {
                     let mut f = tokio::fs::File::open(write.file).await?;
@@ -977,7 +996,7 @@ async fn main() -> anyhow::Result<()> {
                         rw.seek(SeekFrom::Start(offset)).await?;
                     }
                     tokio::io::copy(&mut f, &mut rw).await?;
-                    f.flush().await?;
+                    rw.shutdown().await?;
                     drop(rw);
                 }
                 VolumeCommand::WriteBmap(write) => {
@@ -1065,7 +1084,7 @@ async fn main() -> anyhow::Result<()> {
                         rw.seek(SeekFrom::Start(offset)).await?;
                     }
                     tokio::io::copy(&mut f, &mut rw).await?;
-                    f.flush().await?;
+                    rw.shutdown().await.context("Volume shutdown")?;
                     drop(rw);
 
                     if commit {
