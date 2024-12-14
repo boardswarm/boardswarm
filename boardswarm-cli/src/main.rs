@@ -783,9 +783,7 @@ async fn print_item(
 async fn main() -> anyhow::Result<()> {
     let opt = Opts::parse();
     if !matches!(opt.command, Command::Ui { .. }) {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::WARN)
-            .init();
+        tracing_subscriber::fmt::init();
     }
 
     let config_path = opt.config.clone().unwrap_or_else(|| {
