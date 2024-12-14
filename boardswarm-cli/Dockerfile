@@ -35,5 +35,5 @@ RUN apt-get update && \
 COPY --from=builder /usr/src/boardswarm/target/release/boardswarm-cli \
                     /usr/local/bin/boardswarm-cli
 
-# TODO: add config file
-ENTRYPOINT ["/usr/local/bin/boardswarm-cli"]
+VOLUME ["/boardswarm"]
+ENTRYPOINT ["/usr/local/bin/boardswarm-cli", "-c", "/boardswarm/config.yaml"]
