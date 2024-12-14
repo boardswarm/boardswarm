@@ -195,7 +195,7 @@ impl<'de> serde::Deserialize<'de> for ParamValue {
     }
 }
 
-impl<'de> serde::de::IntoDeserializer<'de, serde::de::value::Error> for ParamValue {
+impl serde::de::IntoDeserializer<'_, serde::de::value::Error> for ParamValue {
     type Deserializer = Self;
 
     fn into_deserializer(self) -> Self::Deserializer {
