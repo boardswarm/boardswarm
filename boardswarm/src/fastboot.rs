@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use android_sparse_image::{ChunkHeader, CHUNK_HEADER_BYTES_LEN};
+use android_sparse_image::{ChunkHeader, CHUNK_HEADER_BYTES_LEN, FILE_HEADER_BYTES_LEN};
 use anyhow::Context;
 use bytes::{Bytes, BytesMut};
-use fastboot_protocol::nusb::NusbFastBoot;
+use fastboot_protocol::nusb::{DownloadError, NusbFastBoot};
 use serde::Deserialize;
 use tokio::sync::oneshot;
 use tokio_stream::StreamExt;
@@ -100,6 +100,17 @@ pub async fn start_provider(name: String, parameters: Option<serde_yaml::Value>,
 
 const FASTBOOT_BLOCKSIZE: usize = 4096;
 
+fn fastboot_volume_target<S: Into<String>>(target: S, size: Option<u64>) -> VolumeTargetInfo {
+    VolumeTargetInfo {
+        name: target.into(),
+        readable: false,
+        writable: true,
+        seekable: true,
+        size,
+        blocksize: Some(FASTBOOT_BLOCKSIZE as u32),
+    }
+}
+
 #[instrument(skip(r, properties))]
 async fn setup_volume(
     r: PreRegistration<FastbootVolume>,
@@ -124,32 +135,12 @@ async fn setup_volume(
             if let Some(name) = k.strip_prefix("partition-size:") {
                 let size = fastboot_protocol::protocol::parse_u64_hex(v).ok();
                 debug!("Fastboot Partition: {name} - size: {size:?}");
-                Some(VolumeTargetInfo {
-                    name: name.to_string(),
-                    readable: false,
-                    writable: true,
-                    seekable: true,
-                    size,
-                    blocksize: Some(FASTBOOT_BLOCKSIZE as u32),
-                })
+                Some(fastboot_volume_target(name, size))
             } else {
                 None
             }
         })
         .collect();
-
-    for k in known_targets {
-        if !targets.iter().any(|t| t.name == k) {
-            targets.push(VolumeTargetInfo {
-                name: k,
-                readable: false,
-                writable: true,
-                seekable: true,
-                size: None,
-                blocksize: Some(FASTBOOT_BLOCKSIZE as u32),
-            });
-        }
-    }
 
     let max_download = fastboot_protocol::protocol::parse_u32_hex(
         &fb.get_var("max-download-size")
@@ -162,7 +153,23 @@ async fn setup_volume(
 
     debug!("Fastboot version: {version}");
     properties.insert(format!("{PROVIDER}.version"), version);
-    let volume = FastbootVolume::new(fb, max_download, targets);
+
+    let (tx, exec) = tokio::sync::mpsc::channel(1);
+    tokio::spawn(process(fb, exec));
+
+    let device = FastbootDevice(tx);
+    for k in known_targets {
+        if !targets.iter().any(|t| t.name == k) {
+            match device.probe(&k).await {
+                Ok(info) => targets.push(info),
+                Err(e) => {
+                    debug!("Known target {k} not found: {e}")
+                }
+            }
+        }
+    }
+
+    let volume = FastbootVolume::new(device, max_download, targets);
     r.register(properties, volume);
     Ok(())
 }
@@ -237,7 +244,7 @@ impl FastbootData {
 
     // Calculate the size required for flashing this chunks
     fn flash_size(&self) -> usize {
-        android_sparse_image::FILE_HEADER_BYTES_LEN
+        FILE_HEADER_BYTES_LEN
             + self.chunks
             .iter()
             .map(|chunk|
@@ -308,6 +315,10 @@ enum FastbootCommand {
         data: FastbootData,
         result: oneshot::Sender<Result<(), fastboot_protocol::nusb::DownloadError>>,
     },
+    Probe {
+        target: String,
+        result: oneshot::Sender<Result<VolumeTargetInfo, fastboot_protocol::nusb::DownloadError>>,
+    },
     Ping {
         sender: oneshot::Sender<()>,
     },
@@ -371,6 +382,42 @@ async fn process(
                 };
                 let _ = result.send(r);
             }
+            FastbootCommand::Probe { target, result } => {
+                debug!("Probing: {target}");
+                let size = match fastboot
+                    .get_var(&format!("partition-size:{}", target))
+                    .await
+                {
+                    Ok(v) => {
+                        debug!("Size: {target}: {v}");
+                        fastboot_protocol::protocol::parse_u64_hex(&v).ok()
+                    }
+                    Err(e) => {
+                        debug!("Failed to get size for {target}: {e}");
+                        None
+                    }
+                };
+                if size.is_none() {
+                    async fn do_dummy_flash(
+                        fastboot: &mut NusbFastBoot,
+                        target: &str,
+                    ) -> Result<(), DownloadError> {
+                        // Try probing by flashing no data
+                        let download = fastboot.download(0).await?;
+                        download.finish().await?;
+                        fastboot.flash(target).await?;
+                        Ok(())
+                    }
+                    debug!("Probing via dummy empty flash");
+                    if let Err(e) = do_dummy_flash(&mut fastboot, &target).await {
+                        debug!("target {target} not found: {e}");
+                        let _ = result.send(Err(e));
+                        continue;
+                    };
+                }
+                debug!("target {target} found");
+                let _ = result.send(Ok(fastboot_volume_target(target, size)));
+            }
             FastbootCommand::Ping { sender } => {
                 let _ = sender.send(());
             }
@@ -412,6 +459,21 @@ impl FastbootDevice {
         Ok(FlashResult(result))
     }
 
+    async fn probe<S: Into<String>>(&self, target: S) -> Result<VolumeTargetInfo, tonic::Status> {
+        let (result, rx) = oneshot::channel();
+        let cmd = FastbootCommand::Probe {
+            target: target.into(),
+            result,
+        };
+        self.0
+            .send(cmd)
+            .await
+            .map_err(|e| tonic::Status::internal(e.to_string()))?;
+        rx.await
+            .map_err(|e| tonic::Status::internal(e.to_string()))?
+            .map_err(|e| tonic::Status::failed_precondition(e.to_string()))
+    }
+
     async fn ping(&self) -> Result<(), tonic::Status> {
         let (sender, rx) = oneshot::channel();
         let cmd = FastbootCommand::Ping { sender };
@@ -431,12 +493,10 @@ struct FastbootVolume {
 }
 
 impl FastbootVolume {
-    fn new(fastboot: NusbFastBoot, max_download: u32, targets: Vec<VolumeTargetInfo>) -> Self {
-        let (device, exec) = tokio::sync::mpsc::channel(1);
-        tokio::spawn(process(fastboot, exec));
+    fn new(device: FastbootDevice, max_download: u32, targets: Vec<VolumeTargetInfo>) -> Self {
         Self {
             targets,
-            device: FastbootDevice(device),
+            device,
             max_download,
         }
     }
@@ -453,11 +513,17 @@ impl Volume for FastbootVolume {
         target: &str,
         _length: Option<u64>,
     ) -> Result<(VolumeTargetInfo, Box<dyn VolumeTarget>), VolumeError> {
-        let Some(info) = self.targets.iter().find(|t| t.name == target) else {
-            return Err(VolumeError::UnknownTargetRequested);
+        let info = match self.targets.iter().find(|t| t.name == target).cloned() {
+            Some(info) => info,
+            None => self.device.probe(target).await.unwrap_or_else(|e| {
+                // Not all fastboot implementation respond to probing; So ignore the missing probe
+                // and leave it to the first actual flash
+                debug!("Ignoring probe failure: {e}");
+                fastboot_volume_target(target, None)
+            }),
         };
         Ok((
-            info.clone(),
+            info,
             Box::new(FastbootVolumeTarget::new(
                 self.device.clone(),
                 target.to_string(),
