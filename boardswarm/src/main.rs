@@ -3,7 +3,8 @@ use boardswarm_protocol::item_event::Event;
 use boardswarm_protocol::{
     console_input_request, volume_io_reply, volume_io_request, ConsoleConfigureRequest,
     ConsoleInputRequest, ConsoleOutputRequest, ItemEvent, ItemList, ItemPropertiesMsg,
-    ItemPropertiesRequest, ItemTypeRequest, LoginInfoList, Property, VolumeInfoMsg, VolumeRequest,
+    ItemPropertiesRequest, ItemTypeRequest, LoginInfoList, Property, VolumeInfoMsg,
+    VolumeIoTargetReply, VolumeRequest,
 };
 use bytes::Bytes;
 use clap::Parser;
@@ -108,6 +109,7 @@ type VolumeIoReplyStream =
     ReceiverStream<Result<boardswarm_protocol::VolumeIoReply, tonic::Status>>;
 
 enum VolumeIoReply {
+    Target(VolumeTargetInfo),
     Read(oneshot::Receiver<Result<Bytes, tonic::Status>>),
     Write(oneshot::Receiver<Result<u64, tonic::Status>>),
     Flush(oneshot::Receiver<Result<(), tonic::Status>>),
@@ -127,6 +129,11 @@ impl VolumeIoReplies {
         tokio::spawn(async move {
             while let Some(completion) = completion_rx.recv().await {
                 let reply = match completion {
+                    VolumeIoReply::Target(t) => Ok(boardswarm_protocol::VolumeIoReply {
+                        reply: Some(volume_io_reply::Reply::Target(VolumeIoTargetReply {
+                            target: Some(t),
+                        })),
+                    }),
                     VolumeIoReply::Read(r) => {
                         let Ok(r) = r.await else { break };
                         r.map(|data| boardswarm_protocol::VolumeIoReply {
@@ -169,6 +176,10 @@ impl VolumeIoReplies {
         (Self { completion_tx }, ReceiverStream::new(reply_rx))
     }
 
+    fn enqueue_target_reply(&mut self, info: VolumeTargetInfo) {
+        let _ = self.completion_tx.send(VolumeIoReply::Target(info));
+    }
+
     fn enqueue_write_reply(&mut self, rx: oneshot::Receiver<Result<u64, tonic::Status>>) {
         let _ = self.completion_tx.send(VolumeIoReply::Write(rx));
     }
@@ -193,12 +204,13 @@ impl VolumeIoReplies {
 type VolumeTargetInfo = boardswarm_protocol::VolumeTarget;
 #[async_trait::async_trait]
 pub trait Volume: std::fmt::Debug + Send + Sync {
-    fn targets(&self) -> &[VolumeTargetInfo];
+    /// List of known targets and whether it's exhaustive
+    fn targets(&self) -> (&[VolumeTargetInfo], bool);
     async fn open(
         &self,
         target: &str,
         length: Option<u64>,
-    ) -> Result<Box<dyn VolumeTarget>, VolumeError>;
+    ) -> Result<(VolumeTargetInfo, Box<dyn VolumeTarget>), VolumeError>;
     async fn commit(&self) -> Result<(), VolumeError>;
 }
 
@@ -858,9 +870,10 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
                 .map(registry::Item::into_inner)
                 .ok_or_else(|| tonic::Status::not_found("No volume by that name"))?;
 
-            let mut target = volume.open(&target.target, target.length).await?;
-
             let (mut reply, reply_stream) = VolumeIoReplies::new();
+            let (info, mut target) = volume.open(&target.target, target.length).await?;
+            reply.enqueue_target_reply(info);
+
             tokio::spawn(async move {
                 while let Some(msg) = rx.message().await.transpose() {
                     let request = match msg {
@@ -937,10 +950,13 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         let request = request.into_inner();
         let volume = self
             .get_volume(request.volume)
-            .ok_or_else(|| tonic::Status::not_found("Uploader not found"))?;
+            .ok_or_else(|| tonic::Status::not_found("Volume not found"))?;
+
+        let (target, exhaustive) = volume.targets();
 
         let info = VolumeInfoMsg {
-            target: volume.targets().to_vec(),
+            target: target.to_vec(),
+            exhaustive,
         };
         Ok(tonic::Response::new(info))
     }

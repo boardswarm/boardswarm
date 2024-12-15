@@ -8,42 +8,41 @@ pub struct BoardswarmVolume {
     id: u64,
     remote: Boardswarm,
     targets: Vec<VolumeTargetInfo>,
+    exhaustive: bool,
 }
 
 impl BoardswarmVolume {
     pub async fn new(id: u64, mut remote: Boardswarm) -> Result<Self, tonic::Status> {
-        let targets = remote.volume_info(id).await?.target;
+        let info = remote.volume_info(id).await?;
 
         Ok(Self {
             id,
             remote,
-            targets,
+            targets: info.target,
+            exhaustive: info.exhaustive,
         })
     }
 }
 
 #[async_trait::async_trait]
 impl Volume for BoardswarmVolume {
-    fn targets(&self) -> &[VolumeTargetInfo] {
-        &self.targets
+    fn targets(&self) -> (&[VolumeTargetInfo], bool) {
+        (&self.targets, self.exhaustive)
     }
 
     async fn open(
         &self,
         target: &str,
         length: Option<u64>,
-    ) -> Result<Box<dyn VolumeTarget>, VolumeError> {
-        if !self.targets.iter().any(|t| t.name == target) {
-            return Err(VolumeError::UnknownTargetRequested);
-        }
-        let io = self
+    ) -> Result<(VolumeTargetInfo, Box<dyn VolumeTarget>), VolumeError> {
+        let (info, io) = self
             .remote
             .clone()
             .volume_io(self.id, target, length)
             .await
             .map_err(|e| VolumeError::Internal(e.to_string()))?;
 
-        Ok(Box::new(BoardswarmVolumeTarget { io }))
+        Ok((info.clone(), Box::new(BoardswarmVolumeTarget { io })))
     }
 
     async fn commit(&self) -> Result<(), VolumeError> {

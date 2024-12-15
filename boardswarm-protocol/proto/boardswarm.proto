@@ -149,13 +149,16 @@ message VolumeTarget {
   bool seekable = 4;
   /// target size in bytes if known
   optional uint64 size = 5;
-  /// blocksize of the underlying media; For optimal performance read/write request should be done 
+  /// blocksize of the underlying media; For optimal performance read/write request should be done
   /// at that size
   optional uint32 blocksize = 6;
 }
 
 message VolumeInfoMsg {
    repeated VolumeTarget target = 1;
+   /// Whether the list of target is exhaustive. If false there may be more
+   /// valid names then listend
+   bool exhaustive = 2;
 }
 
 message VolumeRequest {
@@ -166,6 +169,10 @@ message VolumeIoTarget {
   uint64 volume = 1;
   string target = 2;
   optional uint64 length = 3;
+}
+
+message VolumeIoTargetReply {
+  VolumeTarget target = 1;
 }
 
 message VolumeIoRead {
@@ -198,7 +205,6 @@ message VolumeIoShutdown {
 message VolumeIoShutdownReply {
 }
 
-
 message VolumeIoRequest {
   oneof TargetOrRequest {
      VolumeIoTarget target = 1;
@@ -209,13 +215,14 @@ message VolumeIoRequest {
   }
 }
 
-// One result per read request -> should furfill full read request unless eof is reached
+// Each IO request has a matching reply
 message VolumeIoReply {
   oneof Reply {
-        VolumeIoReadReply read = 1;
-        VolumeIoWriteReply write = 2;
-        VolumeIoFlushReply flush = 3;
-        VolumeIoShutdownReply shutdown = 4;
+        VolumeIoTargetReply target = 1;
+        VolumeIoReadReply read = 2;
+        VolumeIoWriteReply write = 3;
+        VolumeIoFlushReply flush = 4;
+        VolumeIoShutdownReply shutdown = 5;
   }
 }
 

@@ -149,17 +149,20 @@ impl MediatekBromVolume {
 
 #[async_trait::async_trait]
 impl Volume for MediatekBromVolume {
-    fn targets(&self) -> &[VolumeTargetInfo] {
-        &self.targets
+    fn targets(&self) -> (&[VolumeTargetInfo], bool) {
+        (&self.targets, true)
     }
 
     async fn open(
         &self,
         target: &str,
         length: Option<u64>,
-    ) -> Result<Box<dyn VolumeTarget>, VolumeError> {
+    ) -> Result<(VolumeTargetInfo, Box<dyn VolumeTarget>), VolumeError> {
         if target == TARGET {
-            Ok(Box::new(BromVolumeTarget::new(self.device.clone(), length)))
+            Ok((
+                self.targets[0].clone(),
+                Box::new(BromVolumeTarget::new(self.device.clone(), length)),
+            ))
         } else {
             Err(VolumeError::UnknownTargetRequested)
         }

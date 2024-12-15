@@ -967,7 +967,12 @@ async fn main() -> anyhow::Result<()> {
             match command {
                 VolumeCommand::Info => {
                     let info = boardswarm.volume_info(volume).await?;
-                    println!("Volume targets:");
+                    if info.exhaustive {
+                        println!("Volume targets:");
+                    } else {
+                        println!("Volume targets (non-exhaustive):");
+                    }
+
                     for target in &info.target {
                         print!("* {}: ", target.name);
                         if let Some(size) = target.size {

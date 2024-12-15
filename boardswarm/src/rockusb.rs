@@ -184,32 +184,33 @@ impl Rockusb {
 
 #[async_trait::async_trait]
 impl Volume for Rockusb {
-    fn targets(&self) -> &[VolumeTargetInfo] {
-        &self.targets
+    fn targets(&self) -> (&[VolumeTargetInfo], bool) {
+        (&self.targets, true)
     }
 
     async fn open(
         &self,
         target: &str,
         _length: Option<u64>,
-    ) -> Result<Box<dyn VolumeTarget>, VolumeError> {
-        match &self.mode {
+    ) -> Result<(VolumeTargetInfo, Box<dyn VolumeTarget>), VolumeError> {
+        let Some(info) = self.targets.iter().find(|t| t.name == target) else {
+            return Err(VolumeError::UnknownTargetRequested);
+        };
+        let target: Box<dyn VolumeTarget> = match &self.mode {
             RockUsbMode::MaskRom => {
                 let area = match target {
                     "471" => 0x471,
                     "472" => 0x472,
                     _ => Err(VolumeError::UnknownTargetRequested)?,
                 };
-                Ok(Box::new(RockUsbMaskromTarget::new(
-                    area,
-                    self.commands.clone(),
-                )))
+                Box::new(RockUsbMaskromTarget::new(area, self.commands.clone()))
             }
             RockUsbMode::Loader((name, _size)) if name == target => {
-                Ok(Box::new(RockUsbTarget::new(self.commands.clone()).await?))
+                Box::new(RockUsbTarget::new(self.commands.clone()).await?)
             }
-            _ => Err(VolumeError::UnknownTargetRequested),
-        }
+            _ => return Err(VolumeError::UnknownTargetRequested)?,
+        };
+        Ok((info.clone(), target))
     }
 
     async fn commit(&self) -> Result<(), VolumeError> {
