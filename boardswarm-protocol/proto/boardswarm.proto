@@ -168,6 +168,10 @@ message VolumeIoTarget {
   optional uint64 length = 3;
 }
 
+message VolumeIoTargetReply {
+  VolumeTarget target = 1;
+}
+
 message VolumeIoRead {
   uint64 length = 1;
   uint64 offset = 2;
@@ -198,7 +202,6 @@ message VolumeIoShutdown {
 message VolumeIoShutdownReply {
 }
 
-
 message VolumeIoRequest {
   oneof TargetOrRequest {
      VolumeIoTarget target = 1;
@@ -209,13 +212,14 @@ message VolumeIoRequest {
   }
 }
 
-// One result per read request -> should furfill full read request unless eof is reached
+// Each IO request has a matching reply
 message VolumeIoReply {
   oneof Reply {
-        VolumeIoReadReply read = 1;
-        VolumeIoWriteReply write = 2;
-        VolumeIoFlushReply flush = 3;
-        VolumeIoShutdownReply shutdown = 4;
+        VolumeIoTargetReply target = 1;
+        VolumeIoReadReply read = 2;
+        VolumeIoWriteReply write = 3;
+        VolumeIoFlushReply flush = 4;
+        VolumeIoShutdownReply shutdown = 5;
   }
 }
 

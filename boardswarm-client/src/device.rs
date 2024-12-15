@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use boardswarm_protocol::VolumeInfoMsg;
+use boardswarm_protocol::{VolumeInfoMsg, VolumeTarget};
 use bytes::Bytes;
 use futures::{pin_mut, Stream, StreamExt};
 use tokio::{select, sync::broadcast};
@@ -87,7 +87,7 @@ impl DeviceVolume {
         &mut self,
         target: &str,
         length: Option<u64>,
-    ) -> Result<VolumeIo, tonic::Status> {
+    ) -> Result<(VolumeTarget, VolumeIo), tonic::Status> {
         let id = self
             .get_id()
             .ok_or_else(|| tonic::Status::unavailable("Volume currently not available"))?;

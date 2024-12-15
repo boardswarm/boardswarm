@@ -291,13 +291,7 @@ impl Boardswarm {
         target: S,
         length: Option<u64>,
     ) -> Result<VolumeIoRW, tonic::Status> {
-        let info = self.volume_info(volume).await?;
-        let info = info
-            .target
-            .into_iter()
-            .find(|t| t.name == target.as_ref())
-            .ok_or_else(|| tonic::Status::unavailable("Target not found in volume"))?;
-        let io = self.volume_io(volume, target, length).await?;
+        let (info, io) = self.volume_io(volume, target, length).await?;
 
         Ok(VolumeIoRW::new(io, info))
     }
@@ -307,12 +301,12 @@ impl Boardswarm {
         volume: u64,
         target: S,
         length: Option<u64>,
-    ) -> Result<VolumeIo, tonic::Status> {
+    ) -> Result<(VolumeTarget, VolumeIo), tonic::Status> {
         let (requests, requests_rx) = mpsc::channel(1);
         let (outstanding_tx, outstanding_rx) = mpsc::unbounded_channel();
 
         let target = target.into();
-        let replies = self
+        let mut replies = self
             .client
             .volume_io(
                 stream::once(async move {
@@ -335,9 +329,18 @@ impl Boardswarm {
                     },
                 )),
             )
-            .await?;
-        let io = VolumeIo::new(requests, replies.into_inner(), outstanding_rx);
-        Ok(io)
+            .await?
+            .into_inner();
+        let target = match replies.message().await?.and_then(|r| r.reply) {
+            Some(volume_io_reply::Reply::Target(target)) => target
+                .target
+                .ok_or(tonic::Status::failed_precondition("Empty target reply")),
+            _ => Err(tonic::Status::failed_precondition(
+                "Didn't get Target reply as expected",
+            )),
+        }?;
+        let io = VolumeIo::new(requests, replies, outstanding_rx);
+        Ok((target, io))
     }
 
     pub async fn volume_commit(&mut self, volume: u64) -> Result<(), tonic::Status> {
@@ -442,6 +445,7 @@ enum Outstanding {
 
 impl Outstanding {
     fn fail(self, status: tonic::Status) {
+        warn!("Outstanding request failed: {status}");
         match self {
             Outstanding::Write(tx) => {
                 let _ = tx.send(Err(status));
@@ -500,14 +504,18 @@ impl VolumeIo {
                         (Outstanding::Shutdown(tx), volume_io_reply::Reply::Shutdown(_s)) => {
                             let _ = tx.send(Ok(()));
                         }
-                        (_o, _r) => {
-                            warn!("Unmatched request and reply");
+                        (o, _r) => {
+                            o.fail(tonic::Status::failed_precondition(
+                                "Unmatched client request and server reply",
+                            ));
                             break;
                         }
                     }
                 }
                 Ok(None) => {
-                    warn!("Reply stream closed while there were still request outstanding");
+                    outstanding.fail(tonic::Status::failed_precondition(
+                        "Unmatched client request and server reply",
+                    ));
                     break;
                 }
                 Err(s) => outstanding.fail(s),

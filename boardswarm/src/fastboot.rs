@@ -451,12 +451,18 @@ impl Volume for FastbootVolume {
         &self,
         target: &str,
         _length: Option<u64>,
-    ) -> Result<Box<dyn VolumeTarget>, VolumeError> {
-        Ok(Box::new(FastbootVolumeTarget::new(
-            self.device.clone(),
-            target.to_string(),
-            self.max_download,
-        )))
+    ) -> Result<(VolumeTargetInfo, Box<dyn VolumeTarget>), VolumeError> {
+        let Some(info) = self.targets.iter().find(|t| t.name == target) else {
+            return Err(VolumeError::UnknownTargetRequested);
+        };
+        Ok((
+            info.clone(),
+            Box::new(FastbootVolumeTarget::new(
+                self.device.clone(),
+                target.to_string(),
+                self.max_download,
+            )),
+        ))
     }
 
     async fn commit(&self) -> Result<(), VolumeError> {

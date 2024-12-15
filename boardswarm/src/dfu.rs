@@ -106,13 +106,13 @@ impl Volume for Dfu {
         &self,
         target: &str,
         length: Option<u64>,
-    ) -> Result<Box<dyn VolumeTarget>, VolumeError> {
-        if self.targets.iter().any(|t| t.name == target) {
+    ) -> Result<(VolumeTargetInfo, Box<dyn VolumeTarget>), VolumeError> {
+        if let Some(volume_target) = self.targets.iter().find(|t| t.name == target) {
             let tx = self
                 .device
                 .start_download(target.to_owned(), length.unwrap_or_default() as u32)
                 .await;
-            Ok(Box::new(DfuTarget { tx }))
+            Ok((volume_target.clone(), Box::new(DfuTarget { tx })))
         } else {
             warn!("Unknown target requested");
             Err(VolumeError::UnknownTargetRequested)
