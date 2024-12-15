@@ -32,6 +32,7 @@ use tokio::{
 use boardswarm_client::client::ItemEvent;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use tracing::info;
+use utils::BatchWriter;
 
 mod ui;
 mod ui_term;
@@ -117,8 +118,7 @@ async fn write_bmap(io: VolumeIoRW, path: &Path) -> anyhow::Result<()> {
     bmap_file.read_to_string(&mut xml).await?;
     let bmap = Bmap::from_xml(&xml)?;
 
-    let blocksize = io.blocksize().unwrap_or(4096) as usize * 128;
-    let mut writer = utils::BatchWriter::new(io, blocksize).compat_write();
+    let mut writer = utils::BatchWriter::new(io).discard_flush().compat_write();
 
     let file = tokio::fs::File::open(path).await?;
     match path.extension().and_then(std::ffi::OsStr::to_str) {
@@ -131,6 +131,8 @@ async fn write_bmap(io: VolumeIoRW, path: &Path) -> anyhow::Result<()> {
             bmap_parser::copy_async(&mut file.compat(), &mut writer, &bmap).await?;
         }
     }
+    let mut batchwriter = writer.into_inner();
+    batchwriter.shutdown().await?;
 
     Ok(())
 }
@@ -783,9 +785,7 @@ async fn print_item(
 async fn main() -> anyhow::Result<()> {
     let opt = Opts::parse();
     if !matches!(opt.command, Command::Ui { .. }) {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::WARN)
-            .init();
+        tracing_subscriber::fmt::init();
     }
 
     let config_path = opt.config.clone().unwrap_or_else(|| {
@@ -989,9 +989,10 @@ async fn main() -> anyhow::Result<()> {
                 VolumeCommand::Write(write) => {
                     let mut f = tokio::fs::File::open(write.file).await?;
                     let m = f.metadata().await?;
-                    let mut rw = boardswarm
+                    let rw = boardswarm
                         .volume_io_readwrite(volume, write.target, Some(m.len()))
                         .await?;
+                    let mut rw = BatchWriter::new(rw).discard_flush();
                     if let Some(offset) = write.offset {
                         rw.seek(SeekFrom::Start(offset)).await?;
                     }
@@ -1079,7 +1080,8 @@ async fn main() -> anyhow::Result<()> {
                     }
 
                     let m = f.metadata().await?;
-                    let mut rw = volume.open(target, Some(m.len())).await?;
+                    let rw = volume.open(target, Some(m.len())).await?;
+                    let mut rw = BatchWriter::new(rw).discard_flush();
                     if let Some(offset) = offset {
                         rw.seek(SeekFrom::Start(offset)).await?;
                     }

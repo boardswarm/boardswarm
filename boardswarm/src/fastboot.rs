@@ -258,19 +258,19 @@ impl FastbootData {
     }
 
     // Try to append as much data as possible  at a given offset;
-    fn append(&mut self, offset: usize, data: &mut Bytes, max_size: usize) {
+    fn append(&mut self, offset: usize, data: &mut Bytes, max_size: usize) -> bool {
         let remaining = max_size - self.flash_size();
         if let Some(last) = self.chunks.last_mut() {
             let end = last.end_bytes();
             if end == offset {
                 let remaining = (remaining / FASTBOOT_BLOCKSIZE) * FASTBOOT_BLOCKSIZE;
                 last.data.push(data.split_to(data.len().min(remaining)));
-                return;
+                return true;
             }
 
             // Will only append at the end
-            if last.end_bytes() < offset {
-                return;
+            if last.end_bytes() > offset {
+                return false;
             }
         }
 
@@ -279,7 +279,7 @@ impl FastbootData {
         let remaining = remaining.saturating_sub(2 * CHUNK_HEADER_BYTES_LEN);
         // If we can't add a block..
         if remaining < FASTBOOT_BLOCKSIZE {
-            return;
+            return false;
         }
 
         let block_offset = offset / FASTBOOT_BLOCKSIZE;
@@ -296,6 +296,7 @@ impl FastbootData {
             offset: block_offset as u32,
             data,
         });
+        true
     }
 }
 
@@ -493,9 +494,10 @@ impl VolumeTarget for FastbootVolumeTarget {
         let mut flashes = vec![];
 
         while !data.is_empty() {
-            self.buffered
-                .append(offset as usize, &mut data, self.max_download as usize);
-            if self.buffered.flash_size() > threshold {
+            let appended =
+                self.buffered
+                    .append(offset as usize, &mut data, self.max_download as usize);
+            if !appended || self.buffered.flash_size() > threshold {
                 let buffer = std::mem::take(&mut self.buffered);
                 match self.device.flash(&self.target, buffer).await {
                     Ok(flash) => flashes.push(flash),
