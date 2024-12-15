@@ -31,7 +31,7 @@ use tokio::{
 
 use boardswarm_client::client::ItemEvent;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
-use tracing::info;
+use tracing::{debug, info};
 use utils::BatchWriter;
 
 mod ui;
@@ -107,6 +107,47 @@ fn find_bmap(img: &Path) -> Option<PathBuf> {
         // Drop existing orignal extension part
         bmap.set_extension("");
     }
+}
+
+async fn write_aimg<W: AsyncWriteExt + AsyncSeekExt + Unpin>(
+    mut io: W,
+    path: &Path,
+) -> anyhow::Result<()> {
+    let mut f = tokio::fs::File::open(path).await?;
+    let mut header_bytes = android_sparse_image::FileHeaderBytes::default();
+    f.read_exact(&mut header_bytes).await?;
+    let header = android_sparse_image::FileHeader::from_bytes(&header_bytes)
+        .context("Parsing android sparse image header")?;
+
+    println!("Writing android sparse image");
+    for _ in 0..header.chunks {
+        let mut chunk_bytes = android_sparse_image::ChunkHeaderBytes::default();
+        f.read_exact(&mut chunk_bytes).await?;
+        let chunk = android_sparse_image::ChunkHeader::from_bytes(&chunk_bytes)
+            .context("Parsing chunk header")?;
+        let out_size = chunk.out_size(&header);
+        match chunk.chunk_type {
+            android_sparse_image::ChunkType::Raw => {
+                let mut raw = (&mut f).take(out_size as u64);
+                tokio::io::copy(&mut raw, &mut io).await?;
+            }
+            android_sparse_image::ChunkType::Fill => {
+                let mut fill = [0u8; 4];
+                f.read_exact(&mut fill).await?;
+                for _ in 0..out_size / 4 {
+                    io.write_all(&fill).await?;
+                }
+            }
+            android_sparse_image::ChunkType::DontCare => {
+                io.seek(SeekFrom::Current(out_size as i64)).await?;
+            }
+            android_sparse_image::ChunkType::Crc32 => {
+                debug!("Ignoring sparse image crc32");
+            }
+        }
+    }
+    io.shutdown().await?;
+    Ok(())
 }
 
 async fn write_bmap(io: VolumeIoRW, path: &Path) -> anyhow::Result<()> {
@@ -352,6 +393,14 @@ struct WriteArgs {
 }
 
 #[derive(Debug, Args)]
+struct AimgWriteArgs {
+    /// Target to write the bmap file to
+    target: String,
+    /// Path to bmap file
+    file: PathBuf,
+}
+
+#[derive(Debug, Args)]
 struct BmapWriteArgs {
     /// Target to write the bmap file to
     target: String,
@@ -375,6 +424,8 @@ enum VolumeCommand {
     Write(WriteArgs),
     /// Write a bmap file to the volume
     WriteBmap(BmapWriteArgs),
+    /// Write a android sparse image to the volume
+    WriteAimg(AimgWriteArgs),
     /// Commit upload
     Commit,
     /// Display volume properties
@@ -428,7 +479,6 @@ struct DeviceReadArg {
     offset: Option<u64>,
     /// Amount of bytes to be read
     #[arg(short, long)]
-    #[arg(short, long)]
     length: Option<u64>,
     /// Wait for the volume and target to appear
     #[arg(short, long)]
@@ -461,6 +511,22 @@ struct DeviceWriteArg {
 }
 
 #[derive(Debug, Args)]
+struct DeviceAimgWriteArg {
+    /// Wait for the volume and target to appear
+    #[arg(short, long)]
+    wait: bool,
+    /// Commit the volume after finishing the write
+    #[arg(short, long)]
+    commit: bool,
+    /// The volume to write to
+    volume: String,
+    /// The volume target to write to
+    target: String,
+    /// Path to the bmap file to write
+    file: PathBuf,
+}
+
+#[derive(Debug, Args)]
 struct DeviceBmapWriteArg {
     /// Wait for the volume and target to appear
     #[arg(short, long)]
@@ -488,6 +554,8 @@ enum DeviceCommand {
     Read(DeviceReadArg),
     /// Write data to a device volume
     Write(DeviceWriteArg),
+    /// Write a android sparse image file to a device volume
+    WriteAimg(DeviceAimgWriteArg),
     /// Write a bmap file to a device volume
     WriteBmap(DeviceBmapWriteArg),
     /// Change device mode
@@ -1005,6 +1073,13 @@ async fn main() -> anyhow::Result<()> {
                     rw.shutdown().await?;
                     drop(rw);
                 }
+                VolumeCommand::WriteAimg(write) => {
+                    let rw = boardswarm
+                        .volume_io_readwrite(volume, write.target, None)
+                        .await?;
+                    let rw = BatchWriter::new(rw).discard_flush();
+                    write_aimg(rw, &write.file).await?;
+                }
                 VolumeCommand::WriteBmap(write) => {
                     let rw = boardswarm
                         .volume_io_readwrite(volume, write.target, None)
@@ -1093,6 +1168,33 @@ async fn main() -> anyhow::Result<()> {
                     tokio::io::copy(&mut f, &mut rw).await?;
                     rw.shutdown().await.context("Volume shutdown")?;
                     drop(rw);
+
+                    if commit {
+                        volume.commit().await?;
+                    }
+                }
+                DeviceCommand::WriteAimg(DeviceAimgWriteArg {
+                    wait,
+                    commit,
+                    volume,
+                    target,
+                    file,
+                }) => {
+                    let mut volume = device
+                        .volume_by_name(&volume)
+                        .ok_or_else(|| anyhow!("Volume not available for device"))?;
+                    if !volume.available() {
+                        if wait {
+                            println!("Waiting for volume..");
+                            volume.wait().await;
+                        } else {
+                            bail!("volume not available");
+                        }
+                    }
+
+                    let rw = volume.open(target, None).await?;
+                    let rw = BatchWriter::new(rw).discard_flush();
+                    write_aimg(rw, &file).await?;
 
                     if commit {
                         volume.commit().await?;
