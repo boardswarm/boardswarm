@@ -149,8 +149,8 @@ impl MediatekBromVolume {
 
 #[async_trait::async_trait]
 impl Volume for MediatekBromVolume {
-    fn targets(&self) -> &[VolumeTargetInfo] {
-        &self.targets
+    fn targets(&self) -> (&[VolumeTargetInfo], bool) {
+        (&self.targets, true)
     }
 
     async fn open(

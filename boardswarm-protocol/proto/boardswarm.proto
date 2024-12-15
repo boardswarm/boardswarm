@@ -149,13 +149,16 @@ message VolumeTarget {
   bool seekable = 4;
   /// target size in bytes if known
   optional uint64 size = 5;
-  /// blocksize of the underlying media; For optimal performance read/write request should be done 
+  /// blocksize of the underlying media; For optimal performance read/write request should be done
   /// at that size
   optional uint32 blocksize = 6;
 }
 
 message VolumeInfoMsg {
    repeated VolumeTarget target = 1;
+   /// Whether the list of target is exhaustive. If false there may be more
+   /// valid names then listend
+   bool exhaustive = 2;
 }
 
 message VolumeRequest {

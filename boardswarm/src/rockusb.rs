@@ -184,8 +184,8 @@ impl Rockusb {
 
 #[async_trait::async_trait]
 impl Volume for Rockusb {
-    fn targets(&self) -> &[VolumeTargetInfo] {
-        &self.targets
+    fn targets(&self) -> (&[VolumeTargetInfo], bool) {
+        (&self.targets, true)
     }
 
     async fn open(

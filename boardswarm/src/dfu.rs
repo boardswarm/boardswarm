@@ -98,8 +98,8 @@ impl Dfu {
 
 #[async_trait::async_trait]
 impl Volume for Dfu {
-    fn targets(&self) -> &[VolumeTargetInfo] {
-        self.targets.as_slice()
+    fn targets(&self) -> (&[VolumeTargetInfo], bool) {
+        (self.targets.as_slice(), true)
     }
 
     async fn open(

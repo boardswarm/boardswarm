@@ -204,7 +204,8 @@ impl VolumeIoReplies {
 type VolumeTargetInfo = boardswarm_protocol::VolumeTarget;
 #[async_trait::async_trait]
 pub trait Volume: std::fmt::Debug + Send + Sync {
-    fn targets(&self) -> &[VolumeTargetInfo];
+    /// List of known targets and whether it's exhaustive
+    fn targets(&self) -> (&[VolumeTargetInfo], bool);
     async fn open(
         &self,
         target: &str,
@@ -949,10 +950,13 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         let request = request.into_inner();
         let volume = self
             .get_volume(request.volume)
-            .ok_or_else(|| tonic::Status::not_found("Uploader not found"))?;
+            .ok_or_else(|| tonic::Status::not_found("Volume not found"))?;
+
+        let (target, exhaustive) = volume.targets();
 
         let info = VolumeInfoMsg {
-            target: volume.targets().to_vec(),
+            target: target.to_vec(),
+            exhaustive,
         };
         Ok(tonic::Response::new(info))
     }

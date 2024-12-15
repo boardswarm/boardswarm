@@ -8,24 +8,26 @@ pub struct BoardswarmVolume {
     id: u64,
     remote: Boardswarm,
     targets: Vec<VolumeTargetInfo>,
+    exhaustive: bool,
 }
 
 impl BoardswarmVolume {
     pub async fn new(id: u64, mut remote: Boardswarm) -> Result<Self, tonic::Status> {
-        let targets = remote.volume_info(id).await?.target;
+        let info = remote.volume_info(id).await?;
 
         Ok(Self {
             id,
             remote,
-            targets,
+            targets: info.target,
+            exhaustive: info.exhaustive,
         })
     }
 }
 
 #[async_trait::async_trait]
 impl Volume for BoardswarmVolume {
-    fn targets(&self) -> &[VolumeTargetInfo] {
-        &self.targets
+    fn targets(&self) -> (&[VolumeTargetInfo], bool) {
+        (&self.targets, self.exhaustive)
     }
 
     async fn open(

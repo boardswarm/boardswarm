@@ -504,8 +504,8 @@ impl FastbootVolume {
 
 #[async_trait::async_trait]
 impl Volume for FastbootVolume {
-    fn targets(&self) -> &[VolumeTargetInfo] {
-        &self.targets
+    fn targets(&self) -> (&[VolumeTargetInfo], bool) {
+        (&self.targets, false)
     }
 
     async fn open(
