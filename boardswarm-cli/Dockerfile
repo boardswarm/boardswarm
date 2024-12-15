@@ -27,8 +27,13 @@ LABEL org.opencontainers.image.title="boardswarm-cli"
 LABEL org.opencontainers.image.description="gRPC client for boardswarm used for interacting with development boards"
 LABEL org.opencontainers.image.source="https://github.com/boardswarm/boardswarm"
 
+RUN apt-get update && \
+    apt-get install --yes \
+      ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /usr/src/boardswarm/target/release/boardswarm-cli \
                     /usr/local/bin/boardswarm-cli
 
-# TODO: add config file
-ENTRYPOINT ["/usr/local/bin/boardswarm-cli"]
+VOLUME ["/boardswarm"]
+ENTRYPOINT ["/usr/local/bin/boardswarm-cli", "-c", "/boardswarm/config.yaml"]

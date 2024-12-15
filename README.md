@@ -11,7 +11,7 @@ Distributed service to interact with development boards.
 ## Usage (Docker container)
 
 A Docker container containing all of the boardswarm binaries is available from the
-[GitHub Container Registry](https://github.com/boardswarm/boardswarm/pkgs/container/boardswarm)
+[GitHub Container Registry](https://github.com/orgs/boardswarm/packages?repo_name=boardswarm)
 but can alternatively be built from the root of a git checkout using:
 
 ```
@@ -24,7 +24,8 @@ Run `boardswarm-cli` inside the container:
 
 ```
 docker run -it --rm \
-  ghcr.io/boardswarm/boardswarm-cli:main \
+  -v boardswarm:/boardswarm \
+  ghcr.io/boardswarm/boardswarm/boardswarm-cli:main \
   --help
 ```
 
@@ -35,5 +36,5 @@ Run `boardswarm` inside the container:
 docker run -it --rm \
   -p 6683:6683 \
   -v $(pwd)/boardswarm/share/server.conf:/etc/boardswarm/server.conf \
-  ghcr.io/boardswarm/boardswarm:main
+  ghcr.io/boardswarm/boardswarm/boardswarm:main
 ```
