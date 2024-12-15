@@ -228,6 +228,15 @@ impl FastbootData {
         self.chunks.is_empty()
     }
 
+    /// Whether the data can be written as a plain raw image
+    fn can_write_raw(&self) -> bool {
+        if self.chunks.len() == 1 {
+            self.chunks[0].offset == 0
+        } else {
+            false
+        }
+    }
+
     // Number of data chunks
     fn n_chunks(&self) -> usize {
         self.chunks.len()
@@ -335,7 +344,22 @@ async fn process(
                 data,
                 result,
             } => {
-                async fn do_download(
+                async fn do_download_raw(
+                    fastboot: &mut NusbFastBoot,
+                    target: &str,
+                    data: FastbootData,
+                ) -> Result<(), fastboot_protocol::nusb::DownloadError> {
+                    let chunk = &data.chunks[0];
+                    let mut download = fastboot.download(chunk.data_bytes() as u32).await?;
+                    for d in &chunk.data {
+                        download.extend_from_slice(d).await?;
+                    }
+                    download.finish().await?;
+                    fastboot.flash(target).await?;
+                    Ok(())
+                }
+
+                async fn do_download_aimg(
                     fastboot: &mut NusbFastBoot,
                     target: &str,
                     data: FastbootData,
@@ -377,8 +401,10 @@ async fn process(
                 }
                 let r = if data.is_empty() {
                     Ok(())
+                } else if data.can_write_raw() {
+                    do_download_raw(&mut fastboot, &target, data).await
                 } else {
-                    do_download(&mut fastboot, &target, data).await
+                    do_download_aimg(&mut fastboot, &target, data).await
                 };
                 let _ = result.send(r);
             }
