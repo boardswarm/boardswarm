@@ -22,6 +22,7 @@ pub const PROVIDER: &str = "fastboot";
 struct FastbootParameters {
     #[serde(rename = "match")]
     match_: HashMap<String, String>,
+    #[serde(default)]
     targets: Vec<String>,
 }
 
