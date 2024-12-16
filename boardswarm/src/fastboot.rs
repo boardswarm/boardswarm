@@ -328,6 +328,10 @@ enum FastbootCommand {
         target: String,
         result: oneshot::Sender<Result<VolumeTargetInfo, fastboot_protocol::nusb::DownloadError>>,
     },
+    Erase {
+        target: String,
+        result: oneshot::Sender<Result<(), fastboot_protocol::nusb::NusbFastBootError>>,
+    },
     Ping {
         sender: oneshot::Sender<()>,
     },
@@ -444,6 +448,14 @@ async fn process(
                 debug!("target {target} found");
                 let _ = result.send(Ok(fastboot_volume_target(target, size)));
             }
+            FastbootCommand::Erase { target, result } => {
+                let r = fastboot.erase(&target).await;
+                match r {
+                    Ok(()) => debug!("Erasing {target}"),
+                    Err(ref e) => debug!("Erasing {target} failed: {e}"),
+                }
+                let _ = result.send(r);
+            }
             FastbootCommand::Ping { sender } => {
                 let _ = sender.send(());
             }
@@ -498,6 +510,21 @@ impl FastbootDevice {
         rx.await
             .map_err(|e| tonic::Status::internal(e.to_string()))?
             .map_err(|e| tonic::Status::failed_precondition(e.to_string()))
+    }
+
+    async fn erase<S: Into<String>>(&self, target: S) -> Result<(), VolumeError> {
+        let (result, rx) = oneshot::channel();
+        let cmd = FastbootCommand::Erase {
+            target: target.into(),
+            result,
+        };
+        self.0
+            .send(cmd)
+            .await
+            .map_err(|e| VolumeError::Internal(e.to_string()))?;
+        rx.await
+            .map_err(|e| VolumeError::Internal(e.to_string()))?
+            .map_err(|e| VolumeError::Failure(e.to_string()))
     }
 
     async fn ping(&self) -> Result<(), tonic::Status> {
@@ -561,6 +588,10 @@ impl Volume for FastbootVolume {
     async fn commit(&self) -> Result<(), VolumeError> {
         // TODO maybe make it reboot?
         Ok(())
+    }
+
+    async fn erase(&self, target: &str) -> Result<(), VolumeError> {
+        self.device.erase(target).await
     }
 }
 

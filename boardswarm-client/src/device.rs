@@ -117,6 +117,14 @@ impl DeviceVolume {
             Err(tonic::Status::unavailable("Volume currently not available"))
         }
     }
+
+    pub async fn erase<S: Into<String>>(&mut self, target: S) -> Result<(), tonic::Status> {
+        if let Some(id) = self.get_id() {
+            self.device.client.volume_erase(id, target).await
+        } else {
+            Err(tonic::Status::unavailable("Volume currently not available"))
+        }
+    }
 }
 
 #[derive(Clone)]

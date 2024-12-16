@@ -24,6 +24,8 @@ service Boardswarm {
 
   // Commit all data in an uploader specific manner; e.g. may trigger a USB reset for DFU devices
   rpc VolumeCommit(VolumeRequest) returns (google.protobuf.Empty);
+  // Erase all data of target
+  rpc VolumeErase(VolumeEraseRequest) returns (google.protobuf.Empty);
 
 }
 
@@ -163,6 +165,11 @@ message VolumeInfoMsg {
 
 message VolumeRequest {
   uint64 volume = 1;
+}
+
+message VolumeEraseRequest {
+  uint64 volume = 1;
+  string target = 2;
 }
 
 message VolumeIoTarget {
