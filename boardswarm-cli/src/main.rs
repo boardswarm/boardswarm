@@ -608,6 +608,8 @@ enum DeviceCommand {
     WriteBmap(DeviceBmapWriteArg),
     /// Erase a target from a volume
     Erase(DeviceEraseArg),
+    /// Commit a volume
+    Commit(DeviceCommonVolumeArgs),
     /// Change device mode
     Mode(DeviceModeArgs),
     /// Turn the device off and on again
@@ -1229,6 +1231,10 @@ async fn main() -> anyhow::Result<()> {
                 DeviceCommand::Erase(DeviceEraseArg { volume, target }) => {
                     let mut volume = volume.open(&device).await?;
                     volume.erase(target).await?;
+                }
+                DeviceCommand::Commit(volume) => {
+                    let mut volume = volume.open(&device).await?;
+                    volume.commit().await?;
                 }
                 DeviceCommand::Info { follow } => {
                     let mut d = boardswarm.device_info(device.id()).await?;
