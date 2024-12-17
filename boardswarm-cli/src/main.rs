@@ -12,7 +12,7 @@ use bmap_parser::Bmap;
 use boardswarm_client::{
     client::{Boardswarm, BoardswarmBuilder, VolumeIoRW},
     config,
-    device::DeviceVolume,
+    device::{Device, DeviceVolume},
     oidc::{OidcClientBuilder, StdoutAuth},
 };
 use boardswarm_protocol::ItemType;
@@ -475,6 +475,64 @@ struct DeviceModeArgs {
 }
 
 #[derive(Debug, Args)]
+struct DeviceCommonVolumeArgs {
+    /// Wait for the volume to appear
+    #[arg(short, long)]
+    wait: bool,
+    /// The volume
+    volume: String,
+}
+
+impl DeviceCommonVolumeArgs {
+    async fn open(&self, device: &Device) -> anyhow::Result<DeviceVolume> {
+        let volume = device
+            .volume_by_name(&self.volume)
+            .ok_or_else(|| anyhow!("Volume not available for device"))?;
+        if !volume.available() {
+            if self.wait {
+                println!("Waiting for volume..");
+                volume.wait().await;
+            } else {
+                bail!("volume not available");
+            }
+        }
+        Ok(volume)
+    }
+}
+
+#[derive(Debug, Args)]
+struct DeviceCommonVolumeTargetArgs {
+    #[clap(flatten)]
+    volume: DeviceCommonVolumeArgs,
+    /// The volume target
+    target: String,
+}
+
+impl DeviceCommonVolumeTargetArgs {
+    async fn open(&self, device: &Device) -> anyhow::Result<(DeviceVolume, VolumeIoRW)> {
+        self.do_open(device, None).await
+    }
+
+    async fn open_with_len(
+        &self,
+        device: &Device,
+        len: u64,
+    ) -> anyhow::Result<(DeviceVolume, VolumeIoRW)> {
+        self.do_open(device, Some(len)).await
+    }
+
+    async fn do_open(
+        &self,
+        device: &Device,
+        len: Option<u64>,
+    ) -> anyhow::Result<(DeviceVolume, VolumeIoRW)> {
+        let mut volume = self.volume.open(device).await?;
+        let rw = volume.open(&self.target, len).await?;
+        Ok((volume, rw))
+    }
+}
+
+#[derive(Debug, Args)]
 struct DeviceReadArg {
     /// Offset in bytes for reading to start
     #[arg(short, long)]
@@ -482,24 +540,16 @@ struct DeviceReadArg {
     /// Amount of bytes to be read
     #[arg(short, long)]
     length: Option<u64>,
-    /// Wait for the volume and target to appear
-    #[arg(short, long)]
-    wait: bool,
-    /// The volume to read from
-    volume: String,
-    /// The volume target to read from
-    target: String,
+    #[clap(flatten)]
+    target: DeviceCommonVolumeTargetArgs,
     /// Path to the file to write the read data to
     file: PathBuf,
 }
 
 #[derive(Debug, Args)]
 struct DeviceEraseArg {
-    /// Wait for the volume and target to appear
-    #[arg(short, long)]
-    wait: bool,
-    /// The volume to erase from
-    volume: String,
+    #[clap(flatten)]
+    volume: DeviceCommonVolumeArgs,
     /// The volume target to erase
     target: String,
 }
@@ -509,48 +559,33 @@ struct DeviceWriteArg {
     /// Write at the given offset rather then from the start
     #[arg(short, long)]
     offset: Option<u64>,
-    /// Wait for the volume and target to appear
-    #[arg(short, long)]
-    wait: bool,
     /// Commit the volume after finishing the write
     #[arg(short, long)]
     commit: bool,
-    /// The volume to write to
-    volume: String,
-    /// The volume target to write to
-    target: String,
+    #[clap(flatten)]
+    target: DeviceCommonVolumeTargetArgs,
     /// Path to the file to write
     file: PathBuf,
 }
 
 #[derive(Debug, Args)]
 struct DeviceAimgWriteArg {
-    /// Wait for the volume and target to appear
-    #[arg(short, long)]
-    wait: bool,
     /// Commit the volume after finishing the write
     #[arg(short, long)]
     commit: bool,
-    /// The volume to write to
-    volume: String,
-    /// The volume target to write to
-    target: String,
+    #[clap(flatten)]
+    target: DeviceCommonVolumeTargetArgs,
     /// Path to the bmap file to write
     file: PathBuf,
 }
 
 #[derive(Debug, Args)]
 struct DeviceBmapWriteArg {
-    /// Wait for the volume and target to appear
-    #[arg(short, long)]
-    wait: bool,
     /// Commit the volume after finishing the write
     #[arg(short, long)]
     commit: bool,
-    /// The volume to write to
-    volume: String,
-    /// The volume target to write to
-    target: String,
+    #[clap(flatten)]
+    target: DeviceCommonVolumeTargetArgs,
     /// Path to the bmap file to write
     file: PathBuf,
 }
@@ -1123,24 +1158,11 @@ async fn main() -> anyhow::Result<()> {
                 DeviceCommand::Read(DeviceReadArg {
                     offset,
                     length,
-                    wait,
-                    volume,
                     target,
                     file,
                 }) => {
                     let mut f = tokio::fs::File::create(file).await?;
-                    let mut volume = device
-                        .volume_by_name(&volume)
-                        .ok_or_else(|| anyhow!("Volume not available for device"))?;
-                    if !volume.available() {
-                        if wait {
-                            println!("Waiting for volume..");
-                            volume.wait().await;
-                        } else {
-                            bail!("volume not available");
-                        }
-                    }
-                    let mut r = volume.open(target, None).await?;
+                    let (_volume, mut r) = target.open(&device).await?;
                     if let Some(offset) = offset {
                         r.seek(SeekFrom::Start(offset)).await?;
                     }
@@ -1158,31 +1180,19 @@ async fn main() -> anyhow::Result<()> {
                 }
                 DeviceCommand::Write(DeviceWriteArg {
                     offset,
-                    wait,
                     commit,
-                    volume,
                     target,
                     file,
                 }) => {
                     let mut f = tokio::fs::File::open(file).await?;
-                    let mut volume = device
-                        .volume_by_name(&volume)
-                        .ok_or_else(|| anyhow!("Volume not available for device"))?;
-                    if !volume.available() {
-                        if wait {
-                            println!("Waiting for volume..");
-                            volume.wait().await;
-                        } else {
-                            bail!("volume not available");
-                        }
-                    }
-
                     let m = f.metadata().await?;
-                    let rw = volume.open(target, Some(m.len())).await?;
+
+                    let (mut volume, rw) = target.open_with_len(&device, m.len()).await?;
                     let mut rw = BatchWriter::new(rw).discard_flush();
                     if let Some(offset) = offset {
                         rw.seek(SeekFrom::Start(offset)).await?;
                     }
+
                     tokio::io::copy(&mut f, &mut rw).await?;
                     rw.shutdown().await.context("Volume shutdown")?;
                     drop(rw);
@@ -1192,25 +1202,11 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
                 DeviceCommand::WriteAimg(DeviceAimgWriteArg {
-                    wait,
                     commit,
-                    volume,
                     target,
                     file,
                 }) => {
-                    let mut volume = device
-                        .volume_by_name(&volume)
-                        .ok_or_else(|| anyhow!("Volume not available for device"))?;
-                    if !volume.available() {
-                        if wait {
-                            println!("Waiting for volume..");
-                            volume.wait().await;
-                        } else {
-                            bail!("volume not available");
-                        }
-                    }
-
-                    let rw = volume.open(target, None).await?;
+                    let (mut volume, rw) = target.open(&device).await?;
                     let rw = BatchWriter::new(rw).discard_flush();
                     write_aimg(rw, &file).await?;
 
@@ -1219,48 +1215,19 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
                 DeviceCommand::WriteBmap(DeviceBmapWriteArg {
-                    wait,
                     commit,
-                    volume,
                     target,
                     file,
                 }) => {
-                    let mut volume = device
-                        .volume_by_name(&volume)
-                        .ok_or_else(|| anyhow!("Volume not available for device"))?;
-                    if !volume.available() {
-                        if wait {
-                            println!("Waiting for volume..");
-                            volume.wait().await;
-                        } else {
-                            bail!("volume not available");
-                        }
-                    }
-
-                    let rw = volume.open(target, None).await?;
+                    let (mut volume, rw) = target.open(&device).await?;
                     write_bmap(rw, &file).await?;
 
                     if commit {
                         volume.commit().await?;
                     }
                 }
-                DeviceCommand::Erase(DeviceEraseArg {
-                    volume,
-                    target,
-                    wait,
-                }) => {
-                    let mut volume = device
-                        .volume_by_name(&volume)
-                        .ok_or_else(|| anyhow!("Volume not available for device"))?;
-                    if !volume.available() {
-                        if wait {
-                            println!("Waiting for volume..");
-                            volume.wait().await;
-                        } else {
-                            bail!("volume not available");
-                        }
-                    }
-
+                DeviceCommand::Erase(DeviceEraseArg { volume, target }) => {
+                    let mut volume = volume.open(&device).await?;
                     volume.erase(target).await?;
                 }
                 DeviceCommand::Info { follow } => {
