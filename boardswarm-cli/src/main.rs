@@ -428,6 +428,8 @@ enum VolumeCommand {
     WriteAimg(AimgWriteArgs),
     /// Commit upload
     Commit,
+    /// Commit upload
+    Erase { target: String },
     /// Display volume properties
     Properties,
 }
@@ -489,6 +491,17 @@ struct DeviceReadArg {
     target: String,
     /// Path to the file to write the read data to
     file: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct DeviceEraseArg {
+    /// Wait for the volume and target to appear
+    #[arg(short, long)]
+    wait: bool,
+    /// The volume to erase from
+    volume: String,
+    /// The volume target to erase
+    target: String,
 }
 
 #[derive(Debug, Args)]
@@ -558,6 +571,8 @@ enum DeviceCommand {
     WriteAimg(DeviceAimgWriteArg),
     /// Write a bmap file to a device volume
     WriteBmap(DeviceBmapWriteArg),
+    /// Erase a target from a volume
+    Erase(DeviceEraseArg),
     /// Change device mode
     Mode(DeviceModeArgs),
     /// Turn the device off and on again
@@ -1089,6 +1104,9 @@ async fn main() -> anyhow::Result<()> {
                 VolumeCommand::Commit => {
                     boardswarm.volume_commit(volume).await?;
                 }
+                VolumeCommand::Erase { target } => {
+                    boardswarm.volume_erase(volume, target).await?;
+                }
                 VolumeCommand::Properties => {
                     let properties = boardswarm.properties(ItemType::Volume, volume).await?;
                     for key in properties.keys().sorted_unstable() {
@@ -1225,6 +1243,25 @@ async fn main() -> anyhow::Result<()> {
                     if commit {
                         volume.commit().await?;
                     }
+                }
+                DeviceCommand::Erase(DeviceEraseArg {
+                    volume,
+                    target,
+                    wait,
+                }) => {
+                    let mut volume = device
+                        .volume_by_name(&volume)
+                        .ok_or_else(|| anyhow!("Volume not available for device"))?;
+                    if !volume.available() {
+                        if wait {
+                            println!("Waiting for volume..");
+                            volume.wait().await;
+                        } else {
+                            bail!("volume not available");
+                        }
+                    }
+
+                    volume.erase(target).await?;
                 }
                 DeviceCommand::Info { follow } => {
                     let mut d = boardswarm.device_info(device.id()).await?;

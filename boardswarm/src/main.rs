@@ -3,8 +3,8 @@ use boardswarm_protocol::item_event::Event;
 use boardswarm_protocol::{
     console_input_request, volume_io_reply, volume_io_request, ConsoleConfigureRequest,
     ConsoleInputRequest, ConsoleOutputRequest, ItemEvent, ItemList, ItemPropertiesMsg,
-    ItemPropertiesRequest, ItemTypeRequest, LoginInfoList, Property, VolumeInfoMsg,
-    VolumeIoTargetReply, VolumeRequest,
+    ItemPropertiesRequest, ItemTypeRequest, LoginInfoList, Property, VolumeEraseRequest,
+    VolumeInfoMsg, VolumeIoTargetReply, VolumeRequest,
 };
 use bytes::Bytes;
 use clap::Parser;
@@ -212,6 +212,9 @@ pub trait Volume: std::fmt::Debug + Send + Sync {
         length: Option<u64>,
     ) -> Result<(VolumeTargetInfo, Box<dyn VolumeTarget>), VolumeError>;
     async fn commit(&self) -> Result<(), VolumeError>;
+    async fn erase(&self, _target: &str) -> Result<(), VolumeError> {
+        Err(VolumeError::UnknownTargetRequested)
+    }
 }
 
 pub struct ReadCompletion(oneshot::Sender<Result<Bytes, tonic::Status>>);
@@ -940,6 +943,18 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
             .commit()
             .await
             .map_err(|_e| tonic::Status::unknown("Commit failed"))?;
+        Ok(tonic::Response::new(()))
+    }
+
+    async fn volume_erase(
+        &self,
+        request: tonic::Request<VolumeEraseRequest>,
+    ) -> Result<tonic::Response<()>, tonic::Status> {
+        let request = request.into_inner();
+        let volume = self
+            .get_volume(request.volume)
+            .ok_or_else(|| tonic::Status::not_found("Volume not found"))?;
+        volume.erase(&request.target).await?;
         Ok(tonic::Response::new(()))
     }
 
