@@ -939,10 +939,7 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         let volume = self
             .get_volume(request.volume)
             .ok_or_else(|| tonic::Status::not_found("Volume not found"))?;
-        volume
-            .commit()
-            .await
-            .map_err(|_e| tonic::Status::unknown("Commit failed"))?;
+        volume.commit().await?;
         Ok(tonic::Response::new(()))
     }
 

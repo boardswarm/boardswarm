@@ -97,4 +97,15 @@ impl VolumeTarget for BoardswarmVolumeTarget {
             )))),
         }
     }
+
+    async fn shutdown(&mut self, completion: crate::ShutdownCompletion) {
+        match self.io.request_shutdown().await {
+            Ok(request) => {
+                tokio::spawn(async move { completion.complete(request.await) });
+            }
+            Err(e) => completion.complete(Err(tonic::Status::unavailable(format!(
+                "Target no longer available: {e}"
+            )))),
+        }
+    }
 }
