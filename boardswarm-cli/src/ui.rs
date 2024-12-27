@@ -1,5 +1,6 @@
 use std::task::Poll;
 
+use anyhow::anyhow;
 use bytes::Bytes;
 use futures::{pin_mut, ready, Stream, StreamExt};
 use ratatui::{
@@ -162,7 +163,11 @@ async fn run_ui_internal(
 
     let mut terminal = Terminal::new(80, 24, tui_terminal).await;
 
-    let output = console.clone().stream_output().await?;
+    let output = console
+        .clone()
+        .stream_output()
+        .await
+        .map_err(|e| anyhow!("Console stream opening failed: '{}'", e.message()))?;
 
     let (input_tx, input_rx) = tokio::sync::mpsc::channel(16);
     let _writer = tokio::spawn(async move {
