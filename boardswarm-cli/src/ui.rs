@@ -88,6 +88,7 @@ enum Input {
     Down,
     ScrollReset,
     Bytes(Bytes),
+    UIMessage(String),
 }
 
 struct InputStream<R> {
@@ -187,6 +188,7 @@ async fn run_ui_internal(
                         Input::Up => { terminal.scroll_up(); },
                         Input::Down => { terminal.scroll_down(); },
                         Input::ScrollReset => { terminal.scroll_reset(); },
+                        Input::UIMessage(msg) => {terminal.process(msg.as_bytes())}
                         _ => (),
                     }
                 }
@@ -204,23 +206,44 @@ async fn run_ui_internal(
                 async move {
                     match i {
                         Input::PowerOn => {
-                            device.change_mode("on").await.unwrap();
+                            // Perform power on action
+                            if let Err(err) = device.change_mode("on").await {
+                                let err_msg: String =
+                                    format!("Change mode 'on' action failed: {}\r\n", err.code());
+                                input_tx.send(Input::UIMessage(err_msg)).await.unwrap();
+                            }
                             None
                         }
                         Input::PowerOff => {
-                            device.change_mode("off").await.unwrap();
+                            // Perform power off action
+                            if let Err(err) = device.change_mode("off").await {
+                                let err_msg: String =
+                                    format!("Change mode 'off' action failed: {}\r\n", err.code());
+                                let _ = input_tx.send(Input::UIMessage(err_msg)).await;
+                            };
                             None
                         }
                         Input::PowerReset => {
-                            device.change_mode("off").await.unwrap();
-                            device.change_mode("on").await.unwrap();
+                            // Perform power off action
+                            if let Err(err) = device.change_mode("off").await {
+                                let err_msg: String =
+                                    format!("Change mode 'off' action failed: {}\r\n", err.code());
+                                let _ = input_tx.send(Input::UIMessage(err_msg)).await;
+                            };
+                            // Perform power on action
+                            if let Err(err) = device.change_mode("on").await {
+                                let err_msg: String =
+                                    format!("Change mode 'on' action failed: {}\r\n", err.code());
+                                let _ = input_tx.send(Input::UIMessage(err_msg)).await;
+                            }
                             None
                         }
                         Input::Up | Input::Down | Input::ScrollReset => {
-                            input_tx.send(i).await.unwrap();
+                            let _ = input_tx.send(i).await;
                             None
                         }
                         Input::Bytes(data) => Some(data),
+                        Input::UIMessage(_) => None,
                     }
                 }
             }))
