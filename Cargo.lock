@@ -411,7 +411,7 @@ dependencies = [
  "http",
  "http-serde",
  "indicatif",
- "itertools 0.13.0",
+ "itertools 0.14.0",
  "mprocs-vt100",
  "nix 0.29.0",
  "ratatui 0.29.0",
@@ -1633,6 +1633,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2413,7 +2422,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0f3e5beed80eb580c68e2c600937ac2c4eedabdfd5ef1e5b7ea4f3fba84497b"
 dependencies = [
  "heck",
- "itertools 0.13.0",
+ "itertools 0.12.1",
  "log",
  "multimap",
  "once_cell",
@@ -2433,7 +2442,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "157c5a9d7ea5c2ed2d9fb8f495b64759f7816c7eaea54ba3978f0d63000162e3"
 dependencies = [
  "anyhow",
- "itertools 0.13.0",
+ "itertools 0.12.1",
  "proc-macro2",
  "quote",
  "syn 2.0.90",
