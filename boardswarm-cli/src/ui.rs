@@ -1,15 +1,22 @@
-use std::task::Poll;
-
+use anyhow::anyhow;
 use bytes::Bytes;
-use futures::{pin_mut, ready, Stream, StreamExt};
+use futures::{pin_mut, FutureExt, StreamExt};
 use ratatui::{
     backend::CrosstermBackend,
+    crossterm::{
+        event::{
+            DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEvent,
+            KeyEventKind, KeyModifiers, MouseEventKind,
+        },
+        execute, ExecutableCommand,
+    },
     layout::Rect,
     widgets::{Block, Borders},
-    Terminal as TuiTerminal,
+    DefaultTerminal, Terminal as TuiTerminal,
 };
-use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio_util::sync::ReusableBoxFuture;
+use std::io::stdout;
+
+use boardswarm_client::device::{Device, DeviceConsole};
 
 use crate::ui_term;
 
@@ -67,116 +74,65 @@ impl Terminal {
     }
 }
 
-async fn process_input<R>(mut input: R) -> (Bytes, R)
-where
-    R: AsyncRead + Unpin,
-{
-    let mut buffer = [0; 4096];
-    let read = input.read(&mut buffer).await.unwrap();
-    (Bytes::copy_from_slice(&buffer[0..read]), input)
-}
-
 #[derive(Debug, Clone)]
 enum Input {
-    PowerOn,
-    PowerOff,
-    PowerReset,
     Up,
     Down,
     ScrollReset,
-    Bytes(Bytes),
+    UIMessage(String),
 }
 
-struct InputStream<R> {
-    saw_escape: bool,
-    future: tokio_util::sync::ReusableBoxFuture<'static, (Bytes, R)>,
-}
-
-impl<R> InputStream<R>
-where
-    R: AsyncRead + Unpin + Send + 'static,
-{
-    fn new(rx: R) -> Self {
-        let future = ReusableBoxFuture::new(process_input(rx));
-        Self {
-            saw_escape: false,
-            future,
+fn convert_keycode_to_term_code(code: KeyCode, modifiers: KeyModifiers) -> Option<Vec<u8>> {
+    let val = match code {
+        KeyCode::Esc => vec![0x1B_u8],
+        KeyCode::Enter => vec![b'\n'],
+        KeyCode::Tab => vec![b'\t'],
+        KeyCode::Backspace => vec![0x8_u8],
+        KeyCode::Insert => b"\x1B[2~".to_vec(),
+        KeyCode::Delete => b"\x1B[3~".to_vec(),
+        KeyCode::PageUp => b"\x1B[5~".to_vec(),
+        KeyCode::PageDown => b"\x1B[6~".to_vec(),
+        KeyCode::Home => b"\x1B[1~".to_vec(),
+        KeyCode::End => b"\x1B[4~".to_vec(),
+        KeyCode::Up => b"\x1B[A".to_vec(),    // CUU
+        KeyCode::Down => b"\x1B[B".to_vec(),  // CUD
+        KeyCode::Left => b"\x1B[D".to_vec(),  // CUB
+        KeyCode::Right => b"\x1B[C".to_vec(), // CUF
+        KeyCode::Char('c') if modifiers == KeyModifiers::CONTROL => vec![0x3_u8], // ^C ETX
+        KeyCode::Char('d') if modifiers == KeyModifiers::CONTROL => vec![0x4_u8], // ^D EOT
+        KeyCode::Char(c) => {
+            let mut b = [0; 4];
+            let result = c.encode_utf8(&mut b);
+            result.to_string().into_bytes()
         }
-    }
-
-    fn check_input(&mut self, input: Bytes) -> Option<Input> {
-        for i in &input {
-            match i {
-                0x1 => self.saw_escape = true, /* ^a */
-                b'q' if self.saw_escape => return None,
-                b'o' if self.saw_escape => return Some(Input::PowerOn),
-                b'f' if self.saw_escape => return Some(Input::PowerOff),
-                b'r' if self.saw_escape => return Some(Input::PowerReset),
-                b'k' if self.saw_escape => return Some(Input::Up),
-                b'j' if self.saw_escape => return Some(Input::Down),
-                // FIXME enter doesn't work
-                b'\n' if self.saw_escape => return Some(Input::ScrollReset),
-                b'0' if self.saw_escape => return Some(Input::ScrollReset),
-                _ => self.saw_escape = false,
-            }
-        }
-        Some(Input::Bytes(input))
-    }
+        _ => return None,
+    };
+    Some(val)
 }
 
-impl<R> Stream for InputStream<R>
-where
-    R: AsyncRead + Unpin + Send + 'static,
-{
-    type Item = Input;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        let (data, rx) = ready!(self.future.poll(cx));
-        self.future.set(process_input(rx));
-
-        Poll::Ready(self.check_input(data))
-    }
-}
-
-pub async fn run_ui(
-    device: boardswarm_client::device::Device,
-    console: Option<String>,
+async fn run_ui_internal(
+    mut tui_terminal: DefaultTerminal,
+    device: Device,
+    mut console: DeviceConsole,
 ) -> anyhow::Result<()> {
-    let mut terminal = ratatui::init();
-
-    terminal.draw(|f| {
+    tui_terminal.draw(|f| {
         let area = f.area();
         let block = Block::default().title("Block").borders(Borders::ALL);
         f.render_widget(block, area);
     })?;
 
-    let stdin = tokio::io::stdin();
-    let stdin_termios = nix::sys::termios::tcgetattr(&stdin).unwrap();
+    let mut terminal = Terminal::new(80, 24, tui_terminal).await;
 
-    let mut stdin_termios_mod = stdin_termios.clone();
-    nix::sys::termios::cfmakeraw(&mut stdin_termios_mod);
-    nix::sys::termios::tcsetattr(
-        &stdin,
-        nix::sys::termios::SetArg::TCSANOW,
-        &stdin_termios_mod,
-    )
-    .unwrap();
-
-    let mut terminal = Terminal::new(80, 24, terminal).await;
-    let mut console = match console {
-        Some(console) => device.console_by_name(&console),
-        None => device.console(),
-    }
-    .ok_or_else(|| anyhow::anyhow!("Console not available"))?;
-
-    let mut output_console = console.clone();
-    let output = output_console.stream_output().await?;
+    let output = console
+        .clone()
+        .stream_output()
+        .await
+        .map_err(|e| anyhow!("Console stream opening failed: '{}'", e.message()))?;
 
     let (input_tx, input_rx) = tokio::sync::mpsc::channel(16);
-    let _writer = tokio::spawn(async move {
+
+    // Handle device console stdout
+    let _output_writer = tokio::spawn(async move {
         pin_mut!(output);
         pin_mut!(input_rx);
         loop {
@@ -193,7 +149,7 @@ pub async fn run_ui(
                         Input::Up => { terminal.scroll_up(); },
                         Input::Down => { terminal.scroll_down(); },
                         Input::ScrollReset => { terminal.scroll_reset(); },
-                        _ => (),
+                        Input::UIMessage(msg) => {terminal.process(msg.as_bytes())}
                     }
                 }
             }
@@ -201,45 +157,127 @@ pub async fn run_ui(
         }
     });
 
-    let reader = tokio::spawn(async move {
-        let input = InputStream::new(stdin);
-        console
-            .stream_input(input.filter_map(move |i| {
-                let device = device.clone();
-                let input_tx = input_tx.clone();
-                async move {
-                    match i {
-                        Input::PowerOn => {
-                            device.change_mode("on").await.unwrap();
-                            None
-                        }
-                        Input::PowerOff => {
-                            device.change_mode("off").await.unwrap();
-                            None
-                        }
-                        Input::PowerReset => {
-                            device.change_mode("off").await.unwrap();
-                            device.change_mode("on").await.unwrap();
-                            None
-                        }
-                        Input::Up | Input::Down | Input::ScrollReset => {
-                            input_tx.send(i).await.unwrap();
-                            None
-                        }
-                        Input::Bytes(data) => Some(data),
+    // Handle keyboard and mouse events from local console interface
+    let event_listener = tokio::spawn(async move {
+        let mut event_stream = EventStream::new();
+        let mut saw_escape: bool = false;
+        loop {
+            let device = device.clone();
+            let input_tx = input_tx.clone();
+            let event = event_stream.next().fuse();
+
+            tokio::select! {
+                maybe_event = event => {
+                    match maybe_event {
+                        Some(Ok(event)) => match event {
+                            Event::Key(KeyEvent {
+                                code: key_code,
+                                modifiers,
+                                kind: KeyEventKind::Press,
+                                ..
+                            }) => {
+                                match key_code {
+                                    KeyCode::Char('a') if modifiers == KeyModifiers::CONTROL => {
+                                        saw_escape = true;
+                                    }
+
+                                    KeyCode::Char('q') if saw_escape => {
+                                        // Quit
+                                        break;
+                                    }
+                                    KeyCode::Char('k') if saw_escape => {
+                                        let _ = input_tx.send(Input::Up).await;
+                                    }
+                                    KeyCode::Char('j') if saw_escape => {
+                                        let _ = input_tx.send(Input::Down).await;
+                                    }
+                                    KeyCode::Char('o') if saw_escape => {
+                                        // Perform power on action
+                                        if let Err(err) = device.change_mode("on").await {
+                                            let err_msg: String =
+                                                format!("Change mode 'on' action failed: {}\r\n", err.code());
+                                                let _ = input_tx.send(Input::UIMessage(err_msg)).await;
+                                        }
+                                    }
+                                    KeyCode::Char('f') if saw_escape => {
+                                        // Perform power off action
+                                        if let Err(err) = device.change_mode("off").await {
+                                            let err_msg: String =
+                                                format!("Change mode 'off' action failed: {}\r\n", err.code());
+                                                let _ = input_tx.send(Input::UIMessage(err_msg)).await;
+                                        }
+                                    }
+                                    KeyCode::Char('r') if saw_escape => {
+                                        // Perform power off action
+                                        if let Err(err) = device.change_mode("off").await {
+                                            let err_msg: String =
+                                                format!("Change mode 'off' action failed: {}\r\n", err.code());
+                                                let _ = input_tx.send(Input::UIMessage(err_msg)).await;
+                                        }
+                                        // Perform power on action
+                                        if let Err(err) = device.change_mode("on").await {
+                                            let err_msg: String =
+                                                format!("Change mode 'on' action failed: {}\r\n", err.code());
+                                                let _ = input_tx.send(Input::UIMessage(err_msg)).await;
+                                        }
+                                    }
+
+                                    _ => {
+                                        // Reset escape code
+                                        saw_escape = false;
+
+                                        // Handle Enter key for output console
+                                        if key_code == KeyCode::Enter {
+                                            // Send scroll reset on output console
+                                            let _ = input_tx.send(Input::ScrollReset).await;
+                                        }
+
+                                        // Convert keycode to an equivalent value (ANSI or VT) for input console
+                                        if let Some(val) = convert_keycode_to_term_code(key_code, modifiers) {
+                                            let stream = futures::stream::once(async move { Bytes::from(val) } );
+                                            let _ = console.stream_input(stream).await;
+                                        }
+                                    },
+                                }
+                            }
+                            Event::Mouse(mouse_event) => match mouse_event.kind {
+                                MouseEventKind::ScrollDown => {
+                                    let _ = input_tx.send(Input::Down).await;
+                                }
+
+                                MouseEventKind::ScrollUp => {
+                                    let _ = input_tx.send(Input::Up).await;
+                                }
+                                _ =>{},
+                            },
+                            _ => {},
+                        },
+                        None => {},
+                       Some(Err(_)) => panic!(),
                     }
                 }
-            }))
-            .await
+            };
+        }
     });
 
-    let r = reader.await;
-
-    ratatui::restore();
-    match r {
+    match event_listener.await {
         Ok(_) => Ok(()),
-        //Ok(Ok(_)) => Ok(()),
-        //Ok(Err(e)) => Err(e.into()),
         Err(e) => Err(e.into()),
     }
+}
+
+pub async fn run_ui(device: Device, console_name: Option<String>) -> anyhow::Result<()> {
+    let console = match console_name {
+        Some(name) => device.console_by_name(&name),
+        None => device.console(),
+    }
+    .ok_or_else(|| anyhow::anyhow!("Console not available"))?;
+
+    execute!(std::io::stdout(), EnableMouseCapture)?;
+    let tui_terminal = ratatui::init();
+
+    let result = run_ui_internal(tui_terminal, device, console).await;
+    ratatui::restore();
+    stdout().execute(DisableMouseCapture)?;
+    result
 }
