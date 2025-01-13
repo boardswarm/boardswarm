@@ -30,7 +30,7 @@ http = "1.2"
 serde = "1.0.194"
 http-serde = "2.1"
 serde_yaml = "0.9.25"
-dirs = "5.0.1"
+dirs = "6.0.0"
 async-trait = "0.1.74"
 url = { version = "2.5.3", features = ["serde"] }
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
