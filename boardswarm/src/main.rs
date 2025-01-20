@@ -13,6 +13,7 @@ use futures::prelude::*;
 use futures::stream::BoxStream;
 use hifive_p550_mcu::HifiveP550MCUProvider;
 use mediatek_brom::MediatekBromProvider;
+use qcomlt_debug_board::QCOMLTDebugBoardProvider;
 use registry::{Properties, Registry, RegistryIndex};
 use std::fmt::Display;
 use std::net::{AddrParseError, SocketAddr};
@@ -38,6 +39,7 @@ mod gpio;
 mod hifive_p550_mcu;
 mod mediatek_brom;
 mod pdudaemon;
+mod qcomlt_debug_board;
 mod registry;
 mod rockusb;
 mod serial;
@@ -1163,6 +1165,14 @@ async fn main() -> anyhow::Result<()> {
                 )),
                 None => {
                     bail!("Mediatek brom provider requires the serial provider to be enabled")
+                }
+            },
+            qcomlt_debug_board::PROVIDER => match serial {
+                Some(ref s) => {
+                    s.add_provider(QCOMLTDebugBoardProvider::new(p.name, server.clone()))
+                }
+                None => {
+                    bail!("QCOMLT Debug Board provider requires the serial provider to be enabled")
                 }
             },
             rockusb::PROVIDER => {
