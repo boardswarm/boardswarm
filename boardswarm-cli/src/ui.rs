@@ -10,6 +10,7 @@ use ratatui::{
     DefaultTerminal, Terminal as TuiTerminal,
 };
 use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::sync::mpsc;
 use tokio_util::sync::ReusableBoxFuture;
 
 use boardswarm_client::device::{Device, DeviceConsole};
@@ -88,6 +89,7 @@ enum Input {
     Down,
     ScrollReset,
     Bytes(Bytes),
+    UIMessage(String),
 }
 
 struct InputStream<R> {
@@ -187,6 +189,7 @@ async fn run_ui_internal(
                         Input::Up => { terminal.scroll_up(); },
                         Input::Down => { terminal.scroll_down(); },
                         Input::ScrollReset => { terminal.scroll_reset(); },
+                        Input::UIMessage(msg) => {terminal.process(msg.as_bytes())}
                         _ => (),
                     }
                 }
@@ -197,30 +200,54 @@ async fn run_ui_internal(
 
     let reader = tokio::spawn(async move {
         let input = InputStream::new(stdin);
+
         console
             .stream_input(input.filter_map(move |i| {
                 let device = device.clone();
-                let input_tx = input_tx.clone();
+                let input_tx: mpsc::Sender<Input> = input_tx.clone();
                 async move {
+                    async fn do_change_mode(
+                        device: &Device,
+                        channel: &mpsc::Sender<Input>,
+                        mode: &str,
+                    ) {
+                        if let Err(err) = device.change_mode(mode).await {
+                            let err_msg: String =
+                                format!("Change mode '{}' action failed: {}\r\n", mode, err.code());
+
+                            if let Err(e) = channel.send(Input::UIMessage(err_msg.clone())).await {
+                                // Something went wrong in the channel communication between both threads
+
+                                ratatui::restore();
+                                panic!("Unable to send '{}'msg to UI (reason: '{}')", err_msg, e);
+                            }
+                        }
+                    }
+
                     match i {
                         Input::PowerOn => {
-                            device.change_mode("on").await.unwrap();
+                            do_change_mode(&device, &input_tx, "on").await;
                             None
                         }
                         Input::PowerOff => {
-                            device.change_mode("off").await.unwrap();
+                            do_change_mode(&device, &input_tx, "off").await;
                             None
                         }
                         Input::PowerReset => {
-                            device.change_mode("off").await.unwrap();
-                            device.change_mode("on").await.unwrap();
+                            // Perform power off action
+                            do_change_mode(&device, &input_tx, "off").await;
+
+                            // Perform power on action
+                            do_change_mode(&device, &input_tx, "on").await;
+
                             None
                         }
                         Input::Up | Input::Down | Input::ScrollReset => {
-                            input_tx.send(i).await.unwrap();
+                            let _ = input_tx.send(i).await;
                             None
                         }
                         Input::Bytes(data) => Some(data),
+                        Input::UIMessage(_) => None,
                     }
                 }
             }))
