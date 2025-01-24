@@ -712,6 +712,9 @@ enum Command {
         device: DeviceArg,
         #[command(flatten)]
         console: DeviceConsoleArgs,
+        #[clap(long, default_value_t = 5000)]
+        /// Number of lines to keep for scrollback
+        scrollback_lines: usize,
     },
 }
 
@@ -1335,12 +1338,16 @@ async fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Command::Ui { device, console } => {
+        Command::Ui {
+            device,
+            console,
+            scrollback_lines,
+        } => {
             let device = device
                 .device(boardswarm)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("Device not found"))?;
-            ui::run_ui(device, console.console).await
+            ui::run_ui(device, console.console, scrollback_lines).await
         }
     }
 }
