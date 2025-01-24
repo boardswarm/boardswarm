@@ -1,5 +1,6 @@
 use std::task::Poll;
 
+use boardswarm_client::device::Device;
 use bytes::Bytes;
 use futures::{pin_mut, ready, Stream, StreamExt};
 use ratatui::{
@@ -8,7 +9,7 @@ use ratatui::{
     widgets::{Block, Borders},
     Terminal as TuiTerminal,
 };
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::{io::{AsyncRead, AsyncReadExt}, sync::mpsc::Sender};
 use tokio_util::sync::ReusableBoxFuture;
 
 use crate::ui_status::{UiStatus, UiStatusMode};
@@ -100,6 +101,8 @@ enum Input {
     Down,
     ScrollReset,
     Bytes(Bytes),
+    Error(String),
+    ClearStatus,
 }
 
 struct InputStream<R> {
@@ -208,6 +211,8 @@ pub async fn run_ui(
                         Input::Up => { terminal.scroll_up(); },
                         Input::Down => { terminal.scroll_down(); },
                         Input::ScrollReset => { terminal.scroll_reset(); },
+                        Input::Error(msg) => { terminal.status_set(UiStatusMode::Error(msg)) },
+                        Input::ClearStatus => { terminal.status_set(UiStatusMode::Normal) },
                         _ => (),
                     }
                 }
@@ -224,25 +229,34 @@ pub async fn run_ui(
                 let device = device.clone();
                 let input_tx = input_tx.clone();
                 async move {
+                    async fn do_change_mode(device: &Device, channel: &Sender<Input>, mode: &str) {
+                        if let Err(err) = device.change_mode(mode).await {
+                            let msg = err.code().to_string();
+                            channel.send(Input::Error(msg)).await.unwrap();
+                        }
+                    }
                     match i {
                         Input::PowerOn => {
-                            device.change_mode("on").await.unwrap();
+                            do_change_mode(&device, &input_tx, "on").await;
                             None
                         }
                         Input::PowerOff => {
-                            device.change_mode("off").await.unwrap();
+                            do_change_mode(&device, &input_tx, "off").await;
                             None
                         }
                         Input::PowerReset => {
-                            device.change_mode("off").await.unwrap();
-                            device.change_mode("on").await.unwrap();
+                            do_change_mode(&device, &input_tx, "off").await;
+                            do_change_mode(&device, &input_tx, "on").await;
                             None
                         }
-                        Input::Up | Input::Down | Input::ScrollReset => {
+                        Input::Bytes(data) => {
+                            input_tx.send(Input::ClearStatus).await.unwrap();
+                            Some(data)
+                        }
+                        _ => {
                             input_tx.send(i).await.unwrap();
                             None
                         }
-                        Input::Bytes(data) => Some(data),
                     }
                 }
             }))
