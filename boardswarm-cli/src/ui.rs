@@ -4,18 +4,20 @@ use bytes::Bytes;
 use futures::{pin_mut, ready, Stream, StreamExt};
 use ratatui::{
     backend::CrosstermBackend,
-    layout::Rect,
+    layout::{Constraint::Length, Layout, Rect},
     widgets::{Block, Borders},
     Terminal as TuiTerminal,
 };
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio_util::sync::ReusableBoxFuture;
 
+use crate::ui_status::{UiStatus, UiStatusMode};
 use crate::ui_term;
 
 struct Terminal {
     parser: vt100::Parser,
     tui: TuiTerminal<CrosstermBackend<std::io::Stdout>>,
+    mode: UiStatusMode,
 }
 
 impl Terminal {
@@ -25,7 +27,8 @@ impl Terminal {
         tui: TuiTerminal<CrosstermBackend<std::io::Stdout>>,
     ) -> Self {
         let parser = vt100::Parser::new(height, width, height as usize * 128);
-        let mut this = Self { parser, tui };
+        let mode = UiStatusMode::Normal;
+        let mut this = Self { parser, tui, mode };
         this.update().await;
         this
     }
@@ -46,6 +49,10 @@ impl Terminal {
         self.parser.set_scrollback(0)
     }
 
+    fn status_set(&mut self, mode: UiStatusMode) {
+        self.mode = mode;
+    }
+
     fn process(&mut self, bytes: &[u8]) {
         self.parser.process(bytes);
     }
@@ -53,11 +60,19 @@ impl Terminal {
     async fn update(&mut self) {
         let screen = self.parser.screen();
         let term = ui_term::UiTerm::new(screen);
+        let status = UiStatus::new(self.mode.clone());
+
         self.tui
             .draw(|f| {
-                let area = f.area();
-                let term_area = Rect::new(0, 0, 80.min(area.width), 24.min(area.height));
+                // Terminal area is currently fixed at 80x24.
+                // Add an extra row at the bottom for the status bar.
+                let area = Rect::new(0, 0, 80, 25).clamp(f.area());
+                let [term_area, status_area] =
+                    Layout::vertical([Length(24), Length(1)]).areas::<2>(area);
+
                 f.render_widget(term, term_area);
+                f.render_widget(status, status_area);
+
                 if !screen.hide_cursor() && screen.scrollback() == 0 {
                     let cursor = screen.cursor_position();
                     f.set_cursor_position((cursor.1 + term_area.x, cursor.0 + term_area.y));
@@ -203,6 +218,7 @@ pub async fn run_ui(
 
     let reader = tokio::spawn(async move {
         let input = InputStream::new(stdin);
+
         console
             .stream_input(input.filter_map(move |i| {
                 let device = device.clone();
