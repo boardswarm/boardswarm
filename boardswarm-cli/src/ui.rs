@@ -22,9 +22,10 @@ impl Terminal {
     async fn new(
         width: u16,
         height: u16,
+        scrollback_lines: usize,
         tui: TuiTerminal<CrosstermBackend<std::io::Stdout>>,
     ) -> Self {
-        let parser = vt100::Parser::new(height, width, height as usize * 128);
+        let parser = vt100::Parser::new(height, width, scrollback_lines);
         let mut this = Self { parser, tui };
         this.update().await;
         this
@@ -144,6 +145,7 @@ where
 pub async fn run_ui(
     device: boardswarm_client::device::Device,
     console: Option<String>,
+    scrollback_lines: usize,
 ) -> anyhow::Result<()> {
     let mut terminal = ratatui::init();
 
@@ -165,7 +167,7 @@ pub async fn run_ui(
     )
     .unwrap();
 
-    let mut terminal = Terminal::new(80, 24, terminal).await;
+    let mut terminal = Terminal::new(80, 24, scrollback_lines, terminal).await;
     let mut console = match console {
         Some(console) => device.console_by_name(&console),
         None => device.console(),
