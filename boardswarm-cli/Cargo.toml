@@ -10,7 +10,7 @@ readme = "README.md"
 
 [dependencies]
 anyhow = "1.0.68"
-bytes = "1.9.0"
+bytes = "1.10.0"
 clap = { version = "4.5", features = ["derive"] }
 futures = "0.3.31"
 mprocs-vt100 = "0.7.0"
