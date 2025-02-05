@@ -88,7 +88,7 @@ For user tokens currently only the standard expiry field gets validated; To
 create a user token (expiry 01-01-2027) the following command can be used.
 
 ```
-$ rnbyc -s '{"exp": 1798761600}' -K private.jwks -o token.jwt
+$ rnbyc -s '{"exp": 1798761600}' -K private.jwks > token.jwt
 ```
 
 On the client side to set up such a server run the following command and follow
