@@ -65,9 +65,9 @@ key. An easy way to generate these is to use the
 [rnbyc](https://github.com/babelouest/rhonabwy#rnbyc-rhonabwy-command-line-tool)
 tool.
 
-To generate jwks set using an EdDSA key the following command can be used:
+To generate a JWKS set using an EdDSA key the following command can be used:
 ```
-$ rnbyc -j -g  Ed25519  -x   -o private.jwks -p auth.jwks
+$ rnbyc -j -g Ed25519 -x -o private.jwks -p auth.jwks
 ```
 
 The `private.jwks` should be kept private and used to sign client authentication
@@ -88,7 +88,7 @@ For user tokens currently only the standard expiry field gets validated; To
 create a user token (expiry 01-01-2025) the following command can be used.
 
 ```
-$ rnbyc  -s '{"exp": 1735686000 }' -K private.jwks -o token.jwt
+$ rnbyc -s '{"exp": 1735686000}' -K private.jwks -o token.jwt
 ```
 
 On the client side to set up such a server run the following command and follow
