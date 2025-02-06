@@ -728,7 +728,7 @@ async fn run_auth_init(
         config::Auth::Token(token.clone())
     } else if let Some(ref token_path) = init_args.token_file {
         info!(
-            "Using authentication token from the path provided: {:?}",
+            "Importing authentication token from the path provided: {:?}",
             token_path
         );
         let file = tokio::fs::File::open(token_path).await?;
