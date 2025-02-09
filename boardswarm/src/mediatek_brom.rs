@@ -76,8 +76,21 @@ async fn setup_volume(
             return;
         }
     };
-    let brom = port.execute(Brom::handshake(0x201000)).await.unwrap();
-    let hwcode = port.execute(brom.hwcode()).await.unwrap();
+    let brom = match port.execute(Brom::handshake(0x201000)).await {
+        Ok(brom) => brom,
+        Err(e) => {
+            warn!("Failed to perform brom handshake: {e}");
+            return;
+        }
+    };
+
+    let hwcode = match port.execute(brom.hwcode()).await {
+        Ok(hwcode) => hwcode,
+        Err(e) => {
+            warn!("Failed to retrieve brom hardware code: {e}");
+            return;
+        }
+    };
 
     info!("Hardware: {}", hwcode.code);
     properties.insert(
