@@ -39,7 +39,7 @@ impl SerialProvider for MediatekBromProvider {
         if device.property_u64("ID_VENDOR_ID", 16) != Some(0x0e8d) {
             return false;
         };
-        if device.property_u64("ID_MODEL", 16) != Some(0x0003) {
+        if device.property_u64("ID_MODEL_ID", 16) != Some(0x0003) {
             return false;
         };
 

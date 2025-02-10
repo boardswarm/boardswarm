@@ -49,6 +49,7 @@ pub async fn start_provider(name: String, server: Server) {
                     continue;
                 };
 
+                // Match on ID_MODEL here; the device may advertise the optional idModel property.
                 let name = if let Some(model) = device.property("ID_MODEL") {
                     format!("{}/{} {}", busnum, devnum, model)
                 } else {
