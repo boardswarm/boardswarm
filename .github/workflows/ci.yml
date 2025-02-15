@@ -52,7 +52,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master # avoid the tag here to prevent dependabot from updating it
         with:
-          toolchain: "nightly-2024-05-05"
+          toolchain: "nightly-2025-02-01"
           components: clippy
       - run: rm Cargo.lock
       - run: cargo check -Z direct-minimal-versions
