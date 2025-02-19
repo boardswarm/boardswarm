@@ -88,9 +88,15 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      DOCKER_TARGET_PLATFORMS: linux/amd64,linux/arm64
     steps:
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
       - name: Setup Docker buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          platforms: ${{ env.DOCKER_TARGET_PLATFORMS }}
       - uses: actions/checkout@v4
       - name: Extract Docker metadata
         id: meta
@@ -117,6 +123,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           file: ${{ matrix.binary }}/Dockerfile
+          platforms: ${{ env.DOCKER_TARGET_PLATFORMS }}
 
   allgreen:
     if: always()
