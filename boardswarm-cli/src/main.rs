@@ -1039,7 +1039,9 @@ async fn main() -> anyhow::Result<()> {
             let actuator = item_lookup(actuator, ItemType::Actuator, boardswarm.clone()).await?;
             match command {
                 ActuatorCommand::ChangeMode(c) => {
-                    let p = serde_json::from_str(&c.mode)?;
+                    let p = serde_json::from_str(&c.mode)
+                        .context("Failed to parse actuator mode as JSON")?;
+
                     boardswarm.actuator_change_mode(actuator, p).await?;
                 }
                 ActuatorCommand::Properties => {
@@ -1056,7 +1058,8 @@ async fn main() -> anyhow::Result<()> {
             let console = item_lookup(console, ItemType::Console, boardswarm.clone()).await?;
             match command {
                 ConsoleCommand::Configure(c) => {
-                    let p = serde_json::from_str(&c.configuration)?;
+                    let p = serde_json::from_str(&c.configuration)
+                        .context("Failed to parse console configuration as JSON")?;
                     boardswarm.console_configure(console, p).await?;
                 }
                 ConsoleCommand::Tail => {
