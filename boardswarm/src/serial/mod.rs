@@ -137,24 +137,34 @@ impl SerialPort {
         Ok(())
     }
 
-    async fn get_writer(&self) -> Arc<AsyncMutex<WriteHalf<SerialStream>>> {
+    #[instrument(skip_all, err)]
+    async fn get_writer(&self) -> Result<Arc<AsyncMutex<WriteHalf<SerialStream>>>, ConsoleError> {
         if let Some(open) = &*self.open.lock().await {
-            return open.write.clone();
+            return Ok(open.write.clone());
         }
-        self.open().await.unwrap();
+
+        self.open().await.map_err(|e| {
+            ConsoleError::Unavailable(format!("Failed to open '{}' serial: {}", self.path, e))
+        })?;
+
         if let Some(open) = &*self.open.lock().await {
-            return open.write.clone();
+            return Ok(open.write.clone());
         }
         unreachable!();
     }
 
-    async fn get_reader(&self) -> broadcast::Receiver<Bytes> {
+    #[instrument(skip_all, err)]
+    async fn get_reader(&self) -> Result<broadcast::Receiver<Bytes>, ConsoleError> {
         if let Some(open) = &*self.open.lock().await {
-            return open.broadcast.subscribe();
+            return Ok(open.broadcast.subscribe());
         }
-        self.open().await.unwrap();
+
+        self.open().await.map_err(|e| {
+            ConsoleError::Unavailable(format!("Failed to open '{}' serial: {}", self.path, e))
+        })?;
+
         if let Some(open) = &*self.open.lock().await {
-            return open.broadcast.subscribe();
+            return Ok(open.broadcast.subscribe());
         }
         unreachable!();
     }
@@ -182,7 +192,8 @@ impl crate::Console for SerialPort {
         Pin<Box<dyn futures::Sink<Bytes, Error = crate::ConsoleError> + Send>>,
         crate::ConsoleError,
     > {
-        let writer = self.get_writer().await;
+        let writer = self.get_writer().await?;
+
         Ok(Box::pin(sink::unfold(
             writer,
             |writer, input: Bytes| async move {
@@ -200,7 +211,7 @@ impl crate::Console for SerialPort {
         futures::stream::BoxStream<'static, Result<Bytes, crate::ConsoleError>>,
         crate::ConsoleError,
     > {
-        Ok(Box::pin(SerialPortOutput::new(self.get_reader().await)))
+        Ok(Box::pin(SerialPortOutput::new(self.get_reader().await?)))
     }
 }
 

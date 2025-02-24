@@ -52,8 +52,19 @@ trait Actuator: std::fmt::Debug + Send + Sync {
 
 #[derive(Error, Debug)]
 pub enum ConsoleError {
+    #[error("Unavailable: {0}")]
+    Unavailable(String),
     #[error("Console was closed")]
     Closed,
+}
+
+impl From<ConsoleError> for tonic::Status {
+    fn from(e: ConsoleError) -> Self {
+        match e {
+            ConsoleError::Closed => tonic::Status::aborted(e.to_string()),
+            ConsoleError::Unavailable(msg) => tonic::Status::unavailable(msg),
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -74,12 +85,12 @@ type ConsoleOutputStream =
 
 #[async_trait::async_trait]
 trait ConsoleExt: Console {
-    async fn output_stream(&self) -> ConsoleOutputStream {
-        Box::pin(self.output().await.unwrap().map(|data| {
+    async fn output_stream(&self) -> Result<ConsoleOutputStream, ConsoleError> {
+        Ok(Box::pin(self.output().await?.map(|data| {
             Ok(boardswarm_protocol::ConsoleOutput {
                 data: data.unwrap(),
             })
-        }))
+        })))
     }
 }
 
@@ -745,7 +756,8 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
     ) -> Result<tonic::Response<Self::ConsoleStreamOutputStream>, tonic::Status> {
         let inner = request.into_inner();
         if let Some(console) = self.get_console(inner.console) {
-            Ok(tonic::Response::new(console.output_stream().await))
+            let stream = console.output_stream().await?;
+            Ok(tonic::Response::new(stream))
         } else {
             Err(tonic::Status::invalid_argument("Can't find output console"))
         }
