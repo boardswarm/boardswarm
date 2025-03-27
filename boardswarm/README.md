@@ -176,6 +176,22 @@ provider:
         - mmc0boot1
 ```
 
+### MediaTek boot ROM provider (mediatek-brom)
+
+Support for MediaTek boot ROM protocol. mediatek-brom devices are automatically
+detected by scanning for USB serial devices with vendor id 0x0e8d and product id
+0x0003. No provider specific parameters are expected and only one of this
+provider can exist.
+
+Currently this provider only supports the bootrom protocol over serial.
+
+Example configuration:
+```
+provider:
+  - name: mediatek-brom
+    provider: mediatek-brom
+```
+
 ### Rock USB provider (rockusb)
 
 Support for rockchip USB protocol. rockusb devices are autodetected
