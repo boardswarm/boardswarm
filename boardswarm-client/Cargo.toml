@@ -17,7 +17,7 @@ tokio = { version = "1.41.1", features = ["full"] }
 tonic = { version = "0.13", features = ["tls-native-roots", "tls-ring"] }
 tracing = "0.1.40"
 thiserror = "2.0.6"
-tower = "0.5"
+tower = "0.5.2"
 http = "1.2.0"
 serde = "1.0.194"
 http-serde = "2.1"
