@@ -152,6 +152,31 @@ provider:
     provider: dfu
 ```
 
+### Fastboot provider (fastboot)
+
+Support for the fastboot communication protocol exposed over USB. As fastboot
+partitions aren't necessarily discoverable this can be configured to match
+certain devices and set a preconfigured set of targets, though autodetection
+will be attempted.
+
+Example configuration:
+```
+provider:
+  - name: fastboot
+    provider: fastboot
+    parameters:
+      match:
+        # Example with vendor and model IDs for MediaTek Genio devices
+        udev.ID_VENDOR_ID: 0e8d
+        udev.ID_MODEL_ID: 201c
+      # List of pre-defined targets; the provider will still try to detect
+      # other partitions by via the "all" variable
+      targets:
+        - mmc0
+        - mmc0boot0
+        - mmc0boot1
+```
+
 ### Rock USB provider (rockusb)
 
 Support for rockchip USB protocol. rockusb devices are autodetected
