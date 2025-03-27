@@ -20,6 +20,7 @@ use bytes::{Bytes, BytesMut};
 use clap::{arg, builder::PossibleValue, Args, Parser, Subcommand, ValueEnum};
 use futures::{pin_mut, FutureExt, Stream, StreamExt, TryStreamExt};
 use http::Uri;
+use indicatif::ProgressBar;
 use itertools::Itertools;
 use rockfile::boot::{
     RkBootEntry, RkBootEntryBytes, RkBootHeader, RkBootHeaderBytes, RkBootHeaderEntry,
@@ -120,7 +121,9 @@ async fn write_aimg<W: AsyncWriteExt + AsyncSeekExt + Unpin>(
         .context("Parsing android sparse image header")?;
 
     println!("Writing android sparse image");
-    for _ in 0..header.chunks {
+    let progress = ProgressBar::new(header.chunks.into());
+    for i in 0..header.chunks {
+        progress.set_position(i.into());
         let mut chunk_bytes = android_sparse_image::ChunkHeaderBytes::default();
         f.read_exact(&mut chunk_bytes).await?;
         let chunk = android_sparse_image::ChunkHeader::from_bytes(&chunk_bytes)
@@ -147,6 +150,7 @@ async fn write_aimg<W: AsyncWriteExt + AsyncSeekExt + Unpin>(
         }
     }
     io.shutdown().await?;
+    progress.finish();
     Ok(())
 }
 
