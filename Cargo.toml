@@ -6,3 +6,6 @@ members = [
   "boardswarm-cli",
   "boardswarm-client",
 ]
+
+[patch.crates-io]
+jwt-authorizer = { git = "https://github.com/blablacio/jwt-authorizer", branch = "axum-0.8" }
