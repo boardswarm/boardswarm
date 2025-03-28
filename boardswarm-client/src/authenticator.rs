@@ -2,7 +2,7 @@ use std::{sync::Arc, task::Poll};
 
 use futures::future::BoxFuture;
 use tokio::sync::Mutex;
-use tonic::body::BoxBody;
+use tonic::body::Body;
 use tower::{Layer, Service};
 
 use crate::oidc::OidcClient;
@@ -64,9 +64,9 @@ pub struct AuthenticatorService<S> {
     authenticator: Arc<Authenticator>,
 }
 
-impl<S> Service<http::Request<BoxBody>> for AuthenticatorService<S>
+impl<S> Service<http::Request<Body>> for AuthenticatorService<S>
 where
-    S: Clone + Service<http::Request<BoxBody>> + Clone + Send + 'static,
+    S: Clone + Service<http::Request<Body>> + Clone + Send + 'static,
     S::Future: Send,
 {
     type Response = S::Response;
@@ -77,7 +77,7 @@ where
         self.inner.poll_ready(cx)
     }
 
-    fn call(&mut self, mut req: http::Request<BoxBody>) -> Self::Future {
+    fn call(&mut self, mut req: http::Request<Body>) -> Self::Future {
         let auth = self.authenticator.clone();
         let inner = self.inner.clone();
         let mut inner = std::mem::replace(&mut self.inner, inner);
