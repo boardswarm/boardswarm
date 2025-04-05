@@ -163,7 +163,9 @@ async fn write_bmap(io: VolumeIoRW, path: &Path) -> anyhow::Result<()> {
     bmap_file.read_to_string(&mut xml).await?;
     let bmap = Bmap::from_xml(&xml)?;
 
-    let mut writer = utils::BatchWriter::new(io).discard_flush().compat_write();
+    let progress = ProgressBar::new(bmap.total_mapped_size());
+    let mut batchwriter = utils::BatchWriter::new(io).discard_flush();
+    let mut writer = progress.wrap_async_write(&mut batchwriter).compat_write();
 
     let file = tokio::fs::File::open(path).await?;
     match path.extension().and_then(std::ffi::OsStr::to_str) {
@@ -176,8 +178,8 @@ async fn write_bmap(io: VolumeIoRW, path: &Path) -> anyhow::Result<()> {
             bmap_parser::copy_async(&mut file.compat(), &mut writer, &bmap).await?;
         }
     }
-    let mut batchwriter = writer.into_inner();
-    batchwriter.shutdown().await?;
+    writer.into_inner().shutdown().await?;
+    progress.finish();
 
     Ok(())
 }
