@@ -152,6 +152,46 @@ provider:
     provider: dfu
 ```
 
+### Fastboot provider (fastboot)
+
+Support for the fastboot communication protocol exposed over USB. As fastboot
+partitions aren't necessarily discoverable this can be configured to match
+certain devices and set a preconfigured set of targets, though autodetection
+will be attempted.
+
+Example configuration:
+```
+provider:
+  - name: fastboot
+    provider: fastboot
+    parameters:
+      match:
+        udev.ID_VENDOR_ID: 0e8d
+        udev.ID_MODEL_ID: 201c
+      # List of pre-defined targets; the provider will still try to detect
+      # other partitions by via the "all" variable
+      targets:
+        - mmc0
+        - mmc0boot0
+        - mmc0boot1
+```
+
+### MediaTek boot ROM provider (mediatek-brom)
+
+Support for MediaTek boot ROM protocol. mediatek-brom devices are automatically
+Ddetected by scanning for USB serial devices with vendor ID `0x0e8d` and
+product ID `0x0003`. No provider specific parameters are expected and only one
+of this provider can exist.
+
+Currently this provider only supports the bootrom protocol over serial.
+
+Example configuration:
+```
+provider:
+  - name: mediatek-brom
+    provider: mediatek-brom
+```
+
 ### Rock USB provider (rockusb)
 
 Support for rockchip USB protocol. rockusb devices are autodetected
