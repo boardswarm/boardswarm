@@ -1,15 +1,19 @@
 use std::task::Poll;
 
+use anyhow::anyhow;
 use bytes::Bytes;
 use futures::{pin_mut, ready, Stream, StreamExt};
 use ratatui::{
     backend::CrosstermBackend,
     layout::Rect,
     widgets::{Block, Borders},
-    Terminal as TuiTerminal,
+    DefaultTerminal, Terminal as TuiTerminal,
 };
 use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::sync::mpsc;
 use tokio_util::sync::ReusableBoxFuture;
+
+use boardswarm_client::device::{Device, DeviceConsole};
 
 use crate::ui_term;
 
@@ -85,6 +89,7 @@ enum Input {
     Down,
     ScrollReset,
     Bytes(Bytes),
+    UIMessage(String),
 }
 
 struct InputStream<R> {
@@ -141,39 +146,30 @@ where
     }
 }
 
-pub async fn run_ui(
-    device: boardswarm_client::device::Device,
-    console: Option<String>,
+async fn run_ui_internal(
+    mut tui_terminal: DefaultTerminal,
+    device: Device,
+    mut console: DeviceConsole,
 ) -> anyhow::Result<()> {
-    let mut terminal = ratatui::init();
-
-    terminal.draw(|f| {
+    tui_terminal.draw(|f| {
         let area = f.area();
         let block = Block::default().title("Block").borders(Borders::ALL);
         f.render_widget(block, area);
     })?;
 
     let stdin = tokio::io::stdin();
-    let stdin_termios = nix::sys::termios::tcgetattr(&stdin).unwrap();
+    let mut stdin_termios = nix::sys::termios::tcgetattr(&stdin)?;
 
-    let mut stdin_termios_mod = stdin_termios.clone();
-    nix::sys::termios::cfmakeraw(&mut stdin_termios_mod);
-    nix::sys::termios::tcsetattr(
-        &stdin,
-        nix::sys::termios::SetArg::TCSANOW,
-        &stdin_termios_mod,
-    )
-    .unwrap();
+    nix::sys::termios::cfmakeraw(&mut stdin_termios);
+    nix::sys::termios::tcsetattr(&stdin, nix::sys::termios::SetArg::TCSANOW, &stdin_termios)?;
 
-    let mut terminal = Terminal::new(80, 24, terminal).await;
-    let mut console = match console {
-        Some(console) => device.console_by_name(&console),
-        None => device.console(),
-    }
-    .ok_or_else(|| anyhow::anyhow!("Console not available"))?;
+    let mut terminal = Terminal::new(80, 24, tui_terminal).await;
 
-    let mut output_console = console.clone();
-    let output = output_console.stream_output().await?;
+    let output = console
+        .clone()
+        .stream_output()
+        .await
+        .map_err(|e| anyhow!("Console stream opening failed: '{}'", e.message()))?;
 
     let (input_tx, input_rx) = tokio::sync::mpsc::channel(16);
     let _writer = tokio::spawn(async move {
@@ -193,6 +189,7 @@ pub async fn run_ui(
                         Input::Up => { terminal.scroll_up(); },
                         Input::Down => { terminal.scroll_down(); },
                         Input::ScrollReset => { terminal.scroll_reset(); },
+                        Input::UIMessage(msg) => {terminal.process(msg.as_bytes())}
                         _ => (),
                     }
                 }
@@ -203,43 +200,74 @@ pub async fn run_ui(
 
     let reader = tokio::spawn(async move {
         let input = InputStream::new(stdin);
+
         console
             .stream_input(input.filter_map(move |i| {
                 let device = device.clone();
-                let input_tx = input_tx.clone();
+                let input_tx: mpsc::Sender<Input> = input_tx.clone();
                 async move {
+                    async fn do_change_mode(
+                        device: &Device,
+                        channel: &mpsc::Sender<Input>,
+                        mode: &str,
+                    ) {
+                        if let Err(err) = device.change_mode(mode).await {
+                            let err_msg: String =
+                                format!("Change mode '{}' action failed: {}\r\n", mode, err.code());
+
+                            if let Err(e) = channel.send(Input::UIMessage(err_msg.clone())).await {
+                                // Something went wrong in the channel communication between both threads
+
+                                ratatui::restore();
+                                panic!("Unable to send '{}'msg to UI (reason: '{}')", err_msg, e);
+                            }
+                        }
+                    }
+
                     match i {
                         Input::PowerOn => {
-                            device.change_mode("on").await.unwrap();
+                            do_change_mode(&device, &input_tx, "on").await;
                             None
                         }
                         Input::PowerOff => {
-                            device.change_mode("off").await.unwrap();
+                            do_change_mode(&device, &input_tx, "off").await;
                             None
                         }
                         Input::PowerReset => {
-                            device.change_mode("off").await.unwrap();
-                            device.change_mode("on").await.unwrap();
+                            // Perform power off action
+                            do_change_mode(&device, &input_tx, "off").await;
+
+                            // Perform power on action
+                            do_change_mode(&device, &input_tx, "on").await;
+
                             None
                         }
                         Input::Up | Input::Down | Input::ScrollReset => {
-                            input_tx.send(i).await.unwrap();
+                            let _ = input_tx.send(i).await;
                             None
                         }
                         Input::Bytes(data) => Some(data),
+                        Input::UIMessage(_) => None,
                     }
                 }
             }))
             .await
     });
 
-    let r = reader.await;
-
-    ratatui::restore();
-    match r {
+    match reader.await {
         Ok(_) => Ok(()),
-        //Ok(Ok(_)) => Ok(()),
-        //Ok(Err(e)) => Err(e.into()),
         Err(e) => Err(e.into()),
     }
+}
+
+pub async fn run_ui(device: Device, console_name: Option<String>) -> anyhow::Result<()> {
+    let console = match console_name {
+        Some(name) => device.console_by_name(&name),
+        None => device.console(),
+    }
+    .ok_or_else(|| anyhow::anyhow!("Console not available"))?;
+
+    let result = run_ui_internal(ratatui::init(), device, console).await;
+    ratatui::restore();
+    result
 }
