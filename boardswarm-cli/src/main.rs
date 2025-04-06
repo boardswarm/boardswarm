@@ -33,6 +33,7 @@ use tokio::{
 use boardswarm_client::client::ItemEvent;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use tracing::{debug, info};
+use ui::TerminalSizeSetting;
 use utils::BatchWriter;
 
 mod ui;
@@ -712,6 +713,11 @@ enum Command {
         device: DeviceArg,
         #[command(flatten)]
         console: DeviceConsoleArgs,
+        /// Terminal size, with the possible formats:
+        ///- "<columns>x<lines>" (ex: "72x18") where the terminal size is fixed
+        ///- "auto", where it is autoresized to match the window size
+        #[clap(long, default_value = "80x24", verbatim_doc_comment)]
+        terminal_size: TerminalSizeSetting,
         #[clap(long, default_value_t = 5000)]
         /// Number of lines to keep for scrollback
         scrollback_lines: usize,
@@ -1341,13 +1347,15 @@ async fn main() -> anyhow::Result<()> {
         Command::Ui {
             device,
             console,
+            terminal_size,
             scrollback_lines,
         } => {
             let device = device
                 .device(boardswarm)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("Device not found"))?;
-            ui::run_ui(device, console.console, scrollback_lines).await
+
+            ui::run_ui(device, console.console, terminal_size, scrollback_lines).await
         }
     }
 }
