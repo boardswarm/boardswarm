@@ -36,6 +36,7 @@ use tracing::{debug, info};
 use utils::BatchWriter;
 
 mod ui;
+mod ui_status;
 mod ui_term;
 mod utils;
 
