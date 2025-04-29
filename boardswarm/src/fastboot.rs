@@ -142,12 +142,14 @@ async fn setup_volume(
         })
         .collect();
 
-    let max_download = fastboot_protocol::protocol::parse_u32_hex(
-        &fb.get_var("max-download-size")
-            .await
-            .context("Missing max download size")?,
-    )
-    .context("Failed to parse max-download-size")?;
+    let max_download_size = &fb
+        .get_var("max-download-size")
+        .await
+        .context("Missing max download size")?;
+
+    let max_download = fastboot_protocol::protocol::parse_u32_hex(max_download_size).context(
+        format!("Failed to parse max-download-size: {max_download_size}"),
+    )?;
 
     let version = fb.get_var("version").await.context("Missing version")?;
 
