@@ -11,7 +11,6 @@ use clap::Parser;
 use futures::prelude::*;
 use futures::stream::BoxStream;
 use futures::Sink;
-use jwt_authorizer::{Authorizer, IntoLayer, JwtAuthorizer, RegisteredClaims, Validation};
 use mediatek_brom::MediatekBromProvider;
 use registry::{Properties, Registry};
 use std::net::{AddrParseError, SocketAddr};
@@ -22,7 +21,10 @@ use thiserror::Error;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Streaming;
-use tracing::{info, instrument, warn};
+use tower_oauth2_resource_server::auth_resolver::KidAuthorizerResolver;
+use tower_oauth2_resource_server::server::OAuth2ResourceServer;
+use tower_oauth2_resource_server::tenant::TenantConfiguration;
+use tracing::{error, info, instrument, warn};
 
 mod boardswarm_provider;
 mod config;
@@ -995,27 +997,28 @@ fn parse_listen_address(addr: &str) -> Result<SocketAddr, AddrParseError> {
     }
 }
 
-async fn setup_auth_layer(config: &[config::Authentication]) -> anyhow::Result<Vec<Authorizer>> {
-    let mut authorizers = Vec::new();
+async fn setup_auth_layer(
+    config: &[config::Authentication],
+) -> anyhow::Result<OAuth2ResourceServer> {
+    let mut resource =
+        OAuth2ResourceServer::builder().auth_resolver(Arc::new(KidAuthorizerResolver {}));
     for auth in config {
-        let a = match auth {
+        let tenant = match auth {
             config::Authentication::Oidc { uri, audience, .. } => {
-                let v = Validation::new().aud(audience);
-                JwtAuthorizer::<RegisteredClaims>::from_oidc(uri)
-                    .validation(v)
+                TenantConfiguration::builder(uri)
+                    .audiences(audience.as_slice())
                     .build()
                     .await?
             }
             config::Authentication::Jwks { path } => {
-                JwtAuthorizer::<RegisteredClaims>::from_jwks(path.to_str().unwrap())
-                    .build()
-                    .await
-                    .context(format!("Failed to load jwks file {}", path.display()))?
+                warn!("No local jwks support yet");
+                let jwks = tokio::fs::read_to_string(path).await?;
+                TenantConfiguration::static_builder(jwks).build()?
             }
         };
-        authorizers.push(a);
+        resource = resource.add_tenant(tenant);
     }
-    Ok(authorizers)
+    Ok(resource.build().await?)
 }
 
 #[derive(Debug, clap::Parser)]
