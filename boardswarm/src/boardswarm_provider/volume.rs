@@ -45,10 +45,10 @@ impl Volume for BoardswarmVolume {
         Ok((info.clone(), Box::new(BoardswarmVolumeTarget { io })))
     }
 
-    async fn commit(&self) -> Result<(), VolumeError> {
+    async fn commit(&self, target: &str) -> Result<(), VolumeError> {
         self.remote
             .clone()
-            .volume_commit(self.id)
+            .volume_commit(self.id, target)
             .await
             .map_err(|e| match e.code() {
                 tonic::Code::NotFound => VolumeError::UnknownTargetRequested,

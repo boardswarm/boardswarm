@@ -213,7 +213,7 @@ impl Volume for Rockusb {
         Ok((info.clone(), target))
     }
 
-    async fn commit(&self) -> Result<(), VolumeError> {
+    async fn commit(&self, _: &str) -> Result<(), VolumeError> {
         Ok(())
     }
 }

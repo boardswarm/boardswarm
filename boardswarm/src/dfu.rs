@@ -120,7 +120,7 @@ impl Volume for Dfu {
         }
     }
 
-    async fn commit(&self) -> Result<(), VolumeError> {
+    async fn commit(&self, _: &str) -> Result<(), VolumeError> {
         self.device.reset().await;
         Ok(())
     }

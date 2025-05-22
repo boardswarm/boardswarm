@@ -434,7 +434,7 @@ enum VolumeCommand {
     /// Write a android sparse image to the volume
     WriteAimg(AimgWriteArgs),
     /// Commit upload
-    Commit,
+    Commit { target: String },
     /// Commit upload
     Erase { target: String },
     /// Display volume properties
@@ -562,6 +562,14 @@ struct DeviceEraseArg {
 }
 
 #[derive(Debug, Args)]
+struct DeviceCommitArg {
+    #[clap(flatten)]
+    volume: DeviceCommonVolumeArgs,
+    /// The volume target to commit
+    target: String,
+}
+
+#[derive(Debug, Args)]
 struct DeviceWriteArg {
     /// Write at the given offset rather then from the start
     #[arg(short, long)]
@@ -616,7 +624,7 @@ enum DeviceCommand {
     /// Erase a target from a volume
     Erase(DeviceEraseArg),
     /// Commit a volume
-    Commit(DeviceCommonVolumeArgs),
+    Commit(DeviceCommitArg),
     /// Change device mode
     Mode(DeviceModeArgs),
     /// Turn the device off and on again
@@ -1156,8 +1164,8 @@ async fn main() -> anyhow::Result<()> {
                         .await?;
                     write_bmap(rw, &write.file).await?;
                 }
-                VolumeCommand::Commit => {
-                    boardswarm.volume_commit(volume).await?;
+                VolumeCommand::Commit { target } => {
+                    boardswarm.volume_commit(volume, target).await?;
                 }
                 VolumeCommand::Erase { target } => {
                     boardswarm.volume_erase(volume, target).await?;
@@ -1218,7 +1226,7 @@ async fn main() -> anyhow::Result<()> {
                     drop(rw);
 
                     if commit {
-                        volume.commit().await?;
+                        volume.commit(target.target).await?;
                     }
                 }
                 DeviceCommand::WriteAimg(DeviceAimgWriteArg {
@@ -1231,7 +1239,7 @@ async fn main() -> anyhow::Result<()> {
                     write_aimg(rw, &file).await?;
 
                     if commit {
-                        volume.commit().await?;
+                        volume.commit(target.target).await?;
                     }
                 }
                 DeviceCommand::WriteBmap(DeviceBmapWriteArg {
@@ -1243,16 +1251,16 @@ async fn main() -> anyhow::Result<()> {
                     write_bmap(rw, &file).await?;
 
                     if commit {
-                        volume.commit().await?;
+                        volume.commit(target.target).await?;
                     }
                 }
                 DeviceCommand::Erase(DeviceEraseArg { volume, target }) => {
                     let mut volume = volume.open(&device).await?;
                     volume.erase(target).await?;
                 }
-                DeviceCommand::Commit(volume) => {
+                DeviceCommand::Commit(DeviceCommitArg { volume, target }) => {
                     let mut volume = volume.open(&device).await?;
-                    volume.commit().await?;
+                    volume.commit(target).await?;
                 }
                 DeviceCommand::Info { follow } => {
                     let mut d = boardswarm.device_info(device.id()).await?;

@@ -110,9 +110,9 @@ impl DeviceVolume {
             .await
     }
 
-    pub async fn commit(&mut self) -> Result<(), tonic::Status> {
+    pub async fn commit<S: Into<String>>(&mut self, target: S) -> Result<(), tonic::Status> {
         if let Some(id) = self.get_id() {
-            self.device.client.volume_commit(id).await
+            self.device.client.volume_commit(id, target).await
         } else {
             Err(tonic::Status::unavailable("Volume currently not available"))
         }

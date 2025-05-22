@@ -181,7 +181,7 @@ impl Volume for MediatekBromVolume {
         }
     }
 
-    async fn commit(&self) -> Result<(), VolumeError> {
+    async fn commit(&self, _: &str) -> Result<(), VolumeError> {
         let (tx, rx) = oneshot::channel();
         let execute = BromCommand::Execute(tx);
 

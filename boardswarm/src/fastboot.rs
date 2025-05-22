@@ -610,7 +610,7 @@ impl Volume for FastbootVolume {
         ))
     }
 
-    async fn commit(&self) -> Result<(), VolumeError> {
+    async fn commit(&self, target: &str) -> Result<(), VolumeError> {
         // TODO maybe make it reboot?
         Ok(())
     }

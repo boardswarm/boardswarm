@@ -10,8 +10,9 @@ use boardswarm_protocol::{
     boardswarm_client::BoardswarmClient, console_input_request, volume_io_reply, volume_io_request,
     ActuatorModeRequest, ConsoleConfigureRequest, ConsoleInputRequest, ConsoleOutputRequest,
     DeviceModeRequest, DeviceRequest, Item, ItemPropertiesRequest, ItemType, ItemTypeRequest,
-    VolumeEraseRequest, VolumeInfoMsg, VolumeIoFlush, VolumeIoRead, VolumeIoReply, VolumeIoRequest,
-    VolumeIoShutdown, VolumeIoTarget, VolumeIoWrite, VolumeRequest, VolumeTarget,
+    VolumeCommitRequest, VolumeEraseRequest, VolumeInfoMsg, VolumeIoFlush, VolumeIoRead,
+    VolumeIoReply, VolumeIoRequest, VolumeIoShutdown, VolumeIoTarget, VolumeIoWrite, VolumeRequest,
+    VolumeTarget,
 };
 use bytes::Bytes;
 use futures::{future::BoxFuture, stream, FutureExt, Stream, StreamExt};
@@ -343,8 +344,15 @@ impl Boardswarm {
         Ok((target, io))
     }
 
-    pub async fn volume_commit(&mut self, volume: u64) -> Result<(), tonic::Status> {
-        let request = tonic::Request::new(VolumeRequest { volume });
+    pub async fn volume_commit<S: Into<String>>(
+        &mut self,
+        volume: u64,
+        target: S,
+    ) -> Result<(), tonic::Status> {
+        let request = tonic::Request::new(VolumeCommitRequest {
+            volume,
+            target: target.into(),
+        });
         self.client.volume_commit(request).await?;
         Ok(())
     }
