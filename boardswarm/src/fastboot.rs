@@ -334,6 +334,9 @@ enum FastbootCommand {
         target: String,
         result: oneshot::Sender<Result<(), fastboot_protocol::nusb::NusbFastBootError>>,
     },
+    Continue {
+        result: oneshot::Sender<Result<(), fastboot_protocol::nusb::NusbFastBootError>>,
+    },
     Ping {
         sender: oneshot::Sender<()>,
     },
@@ -458,6 +461,14 @@ async fn process(
                 }
                 let _ = result.send(r);
             }
+            FastbootCommand::Continue { result } => {
+                let r = fastboot.continue_boot().await;
+                match r {
+                    Ok(()) => debug!("Continue boot"),
+                    Err(ref e) => debug!("Continue boot failed: {e}"),
+                }
+                let _ = result.send(r);
+            }
             FastbootCommand::Ping { sender } => {
                 let _ = sender.send(());
             }
@@ -520,6 +531,18 @@ impl FastbootDevice {
             target: target.into(),
             result,
         };
+        self.0
+            .send(cmd)
+            .await
+            .map_err(|e| VolumeError::Internal(e.to_string()))?;
+        rx.await
+            .map_err(|e| VolumeError::Internal(e.to_string()))?
+            .map_err(|e| VolumeError::Failure(e.to_string()))
+    }
+
+    async fn continue_boot(&self) -> Result<(), VolumeError> {
+        let (result, rx) = oneshot::channel();
+        let cmd = FastbootCommand::Continue { result };
         self.0
             .send(cmd)
             .await
