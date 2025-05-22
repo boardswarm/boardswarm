@@ -18,6 +18,12 @@ use crate::{
 
 pub const PROVIDER: &str = "fastboot";
 
+/// Fastboot volume target to implement Android's fastboot stage command
+///
+/// Writing to this volume target will perform a download, but skip the flashing
+/// step. A commit to this target will perform a continue command.
+pub const TARGET_STAGE: &str = "stage";
+
 #[derive(Deserialize, Debug, Default)]
 struct FastbootParameters {
     #[serde(rename = "match")]
@@ -334,6 +340,9 @@ enum FastbootCommand {
         target: String,
         result: oneshot::Sender<Result<(), fastboot_protocol::nusb::NusbFastBootError>>,
     },
+    Continue {
+        result: oneshot::Sender<Result<(), fastboot_protocol::nusb::NusbFastBootError>>,
+    },
     Ping {
         sender: oneshot::Sender<()>,
     },
@@ -361,7 +370,9 @@ async fn process(
                         download.extend_from_slice(d).await?;
                     }
                     download.finish().await?;
-                    fastboot.flash(target).await?;
+                    if target != TARGET_STAGE {
+                        fastboot.flash(target).await?;
+                    }
                     Ok(())
                 }
 
@@ -458,6 +469,14 @@ async fn process(
                 }
                 let _ = result.send(r);
             }
+            FastbootCommand::Continue { result } => {
+                let r = fastboot.continue_boot().await;
+                match r {
+                    Ok(()) => debug!("Continue boot"),
+                    Err(ref e) => debug!("Continue boot failed: {e}"),
+                }
+                let _ = result.send(r);
+            }
             FastbootCommand::Ping { sender } => {
                 let _ = sender.send(());
             }
@@ -529,6 +548,18 @@ impl FastbootDevice {
             .map_err(|e| VolumeError::Failure(e.to_string()))
     }
 
+    async fn continue_boot(&self) -> Result<(), VolumeError> {
+        let (result, rx) = oneshot::channel();
+        let cmd = FastbootCommand::Continue { result };
+        self.0
+            .send(cmd)
+            .await
+            .map_err(|e| VolumeError::Internal(e.to_string()))?;
+        rx.await
+            .map_err(|e| VolumeError::Internal(e.to_string()))?
+            .map_err(|e| VolumeError::Failure(e.to_string()))
+    }
+
     async fn ping(&self) -> Result<(), tonic::Status> {
         let (sender, rx) = oneshot::channel();
         let cmd = FastbootCommand::Ping { sender };
@@ -587,7 +618,10 @@ impl Volume for FastbootVolume {
         ))
     }
 
-    async fn commit(&self) -> Result<(), VolumeError> {
+    async fn commit(&self, target: &str) -> Result<(), VolumeError> {
+        if target == TARGET_STAGE {
+            self.device.continue_boot().await?;
+        }
         // TODO maybe make it reboot?
         Ok(())
     }
