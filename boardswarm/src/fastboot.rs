@@ -18,6 +18,12 @@ use crate::{
 
 pub const PROVIDER: &str = "fastboot";
 
+/// Fastboot volume target to implement Android's fastboot stage command
+///
+/// Writing to this volume target will perform a download, but skip the flashing
+/// step. A commit to this target will perform a continue command.
+pub const TARGET_STAGE: &str = "stage";
+
 #[derive(Deserialize, Debug, Default)]
 struct FastbootParameters {
     #[serde(rename = "match")]
@@ -364,7 +370,9 @@ async fn process(
                         download.extend_from_slice(d).await?;
                     }
                     download.finish().await?;
-                    fastboot.flash(target).await?;
+                    if target != TARGET_STAGE {
+                        fastboot.flash(target).await?;
+                    }
                     Ok(())
                 }
 
@@ -611,6 +619,9 @@ impl Volume for FastbootVolume {
     }
 
     async fn commit(&self, target: &str) -> Result<(), VolumeError> {
+        if target == TARGET_STAGE {
+            self.device.continue_boot().await?;
+        }
         // TODO maybe make it reboot?
         Ok(())
     }
