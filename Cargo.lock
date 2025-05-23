@@ -343,6 +343,7 @@ dependencies = [
  "mediatek-brom",
  "nusb",
  "pdudaemon-client",
+ "regex",
  "reqwest",
  "rockusb",
  "serde",
