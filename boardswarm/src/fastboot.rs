@@ -30,6 +30,7 @@ struct FastbootParameters {
     match_: HashMap<String, String>,
     #[serde(default)]
     targets: Vec<String>,
+    #[serde(default)]
     stage: bool,
 }
 
@@ -633,8 +634,7 @@ impl Volume for FastbootVolume {
     }
 
     async fn commit(&self) -> Result<(), VolumeError> {
-        // TODO maybe make it reboot?
-        Ok(())
+        self.device.continue_boot().await
     }
 
     async fn erase(&self, target: &str) -> Result<(), VolumeError> {
