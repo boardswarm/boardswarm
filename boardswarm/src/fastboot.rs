@@ -633,8 +633,7 @@ impl Volume for FastbootVolume {
     }
 
     async fn commit(&self) -> Result<(), VolumeError> {
-        // TODO maybe make it reboot?
-        Ok(())
+        self.device.continue_boot().await
     }
 
     async fn erase(&self, target: &str) -> Result<(), VolumeError> {
