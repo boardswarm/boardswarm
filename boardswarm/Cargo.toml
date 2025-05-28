@@ -37,7 +37,7 @@ axum-server = { version = "0.7.1", features = ["tls-rustls-no-provider"] }
 nusb = "0.1.11"
 dfu-nusb = "0.1.0"
 mediatek-brom = { version = "0.1.0", features = ["tokio"] }
-fastboot-protocol = "0.3"
+fastboot-protocol = "0.3.1"
 android-sparse-image = "0.1.2"
 jsonwebtoken = "9.3.1"
 tower-oauth2-resource-server = { version = "0.4.0", default-features = false }
