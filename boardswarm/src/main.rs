@@ -13,6 +13,7 @@ use futures::stream::BoxStream;
 use futures::Sink;
 use mediatek_brom::MediatekBromProvider;
 use registry::{Properties, Registry};
+use serial_command::SerialCommandProvider;
 use std::net::{AddrParseError, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -37,6 +38,7 @@ mod pdudaemon;
 mod registry;
 mod rockusb;
 mod serial;
+mod serial_command;
 mod udev;
 mod utils;
 
@@ -1106,6 +1108,17 @@ async fn main() -> anyhow::Result<()> {
             serial::PROVIDER => {
                 // Precreated already
             }
+            serial_command::PROVIDER => match serial {
+                Some(ref s) => s.add_provider(SerialCommandProvider::new(
+                    p.name,
+                    p.parameters
+                        .context("Missing serial-command provider parameters")?,
+                    server.clone(),
+                )),
+                None => {
+                    bail!("serial-command provider requires the serial provider to be enabled")
+                }
+            },
             fastboot::PROVIDER => {
                 local.spawn_local(fastboot::start_provider(
                     p.name,
