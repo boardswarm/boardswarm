@@ -18,12 +18,20 @@ use crate::{
 
 pub const PROVIDER: &str = "fastboot";
 
+/// Fastboot volume target to implement Android's fastboot stage command
+///
+/// If enabled in the provider configuration, writing to this volume target will
+/// perform a download, but skip the flashing step.
+pub const TARGET_STAGE: &str = "stage";
+
 #[derive(Deserialize, Debug, Default)]
 struct FastbootParameters {
     #[serde(rename = "match")]
     match_: HashMap<String, String>,
     #[serde(default)]
     targets: Vec<String>,
+    #[serde(default)]
+    stage: bool,
 }
 
 #[instrument(skip(server, parameters))]
@@ -86,8 +94,15 @@ pub async fn start_provider(name: String, parameters: Option<serde_yaml::Value>,
                 let prereg = registrations.pre_register(&device, seqnum);
                 let known_targets = parameters.targets.clone();
                 tokio::spawn(async move {
-                    if let Err(e) =
-                        setup_volume(prereg, busnum, devnum, known_targets, properties).await
+                    if let Err(e) = setup_volume(
+                        prereg,
+                        busnum,
+                        devnum,
+                        known_targets,
+                        parameters.stage,
+                        properties,
+                    )
+                    .await
                     {
                         warn!("Failed to setup fastboot volume: {e}");
                     }
@@ -117,6 +132,7 @@ async fn setup_volume(
     busnum: u8,
     devnum: u8,
     known_targets: Vec<String>,
+    has_stage: bool,
     mut properties: Properties,
 ) -> anyhow::Result<()> {
     let info = crate::utils::nusb_info_from_bus_dev(busnum, devnum)
@@ -157,7 +173,7 @@ async fn setup_volume(
     properties.insert(format!("{PROVIDER}.version"), version);
 
     let (tx, exec) = tokio::sync::mpsc::channel(1);
-    tokio::spawn(process(fb, exec));
+    tokio::spawn(process(fb, has_stage, exec));
 
     let device = FastbootDevice(tx);
     for k in known_targets {
@@ -334,6 +350,9 @@ enum FastbootCommand {
         target: String,
         result: oneshot::Sender<Result<(), fastboot_protocol::nusb::NusbFastBootError>>,
     },
+    Continue {
+        result: oneshot::Sender<Result<(), fastboot_protocol::nusb::NusbFastBootError>>,
+    },
     Ping {
         sender: oneshot::Sender<()>,
     },
@@ -341,6 +360,7 @@ enum FastbootCommand {
 
 async fn process(
     mut fastboot: NusbFastBoot,
+    has_stage: bool,
     mut exec: tokio::sync::mpsc::Receiver<FastbootCommand>,
 ) {
     while let Some(command) = exec.recv().await {
@@ -352,6 +372,7 @@ async fn process(
             } => {
                 async fn do_download_raw(
                     fastboot: &mut NusbFastBoot,
+                    has_stage: bool,
                     target: &str,
                     data: FastbootData,
                 ) -> Result<(), fastboot_protocol::nusb::DownloadError> {
@@ -361,12 +382,15 @@ async fn process(
                         download.extend_from_slice(d).await?;
                     }
                     download.finish().await?;
-                    fastboot.flash(target).await?;
+                    if !has_stage || target != TARGET_STAGE {
+                        fastboot.flash(target).await?;
+                    }
                     Ok(())
                 }
 
                 async fn do_download_aimg(
                     fastboot: &mut NusbFastBoot,
+                    has_stage: bool,
                     target: &str,
                     data: FastbootData,
                 ) -> Result<(), fastboot_protocol::nusb::DownloadError> {
@@ -402,15 +426,17 @@ async fn process(
                         offset = chunk.end_blocks();
                     }
                     download.finish().await?;
-                    fastboot.flash(target).await?;
+                    if !has_stage || target != TARGET_STAGE {
+                        fastboot.flash(target).await?;
+                    }
                     Ok(())
                 }
                 let r = if data.is_empty() {
                     Ok(())
                 } else if data.can_write_raw() {
-                    do_download_raw(&mut fastboot, &target, data).await
+                    do_download_raw(&mut fastboot, has_stage, &target, data).await
                 } else {
-                    do_download_aimg(&mut fastboot, &target, data).await
+                    do_download_aimg(&mut fastboot, has_stage, &target, data).await
                 };
                 let _ = result.send(r);
             }
@@ -455,6 +481,14 @@ async fn process(
                 match r {
                     Ok(()) => debug!("Erasing {target}"),
                     Err(ref e) => debug!("Erasing {target} failed: {e}"),
+                }
+                let _ = result.send(r);
+            }
+            FastbootCommand::Continue { result } => {
+                let r = fastboot.continue_boot().await;
+                match r {
+                    Ok(()) => debug!("Continue boot"),
+                    Err(ref e) => debug!("Continue boot failed: {e}"),
                 }
                 let _ = result.send(r);
             }
@@ -529,6 +563,18 @@ impl FastbootDevice {
             .map_err(|e| VolumeError::Failure(e.to_string()))
     }
 
+    async fn continue_boot(&self) -> Result<(), VolumeError> {
+        let (result, rx) = oneshot::channel();
+        let cmd = FastbootCommand::Continue { result };
+        self.0
+            .send(cmd)
+            .await
+            .map_err(|e| VolumeError::Internal(e.to_string()))?;
+        rx.await
+            .map_err(|e| VolumeError::Internal(e.to_string()))?
+            .map_err(|e| VolumeError::Failure(e.to_string()))
+    }
+
     async fn ping(&self) -> Result<(), tonic::Status> {
         let (sender, rx) = oneshot::channel();
         let cmd = FastbootCommand::Ping { sender };
@@ -588,8 +634,7 @@ impl Volume for FastbootVolume {
     }
 
     async fn commit(&self) -> Result<(), VolumeError> {
-        // TODO maybe make it reboot?
-        Ok(())
+        self.device.continue_boot().await
     }
 
     async fn erase(&self, target: &str) -> Result<(), VolumeError> {
