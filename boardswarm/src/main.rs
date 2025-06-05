@@ -11,6 +11,7 @@ use clap::Parser;
 use futures::prelude::*;
 use futures::stream::BoxStream;
 use futures::Sink;
+use hifive_p550_mcu::HifiveP550MCUProvider;
 use mediatek_brom::MediatekBromProvider;
 use registry::{Properties, Registry};
 use std::net::{AddrParseError, SocketAddr};
@@ -32,6 +33,7 @@ mod config_device;
 mod dfu;
 mod fastboot;
 mod gpio;
+mod hifive_p550_mcu;
 mod mediatek_brom;
 mod pdudaemon;
 mod registry;
@@ -1094,6 +1096,17 @@ async fn main() -> anyhow::Result<()> {
             dfu::PROVIDER => {
                 local.spawn_local(dfu::start_provider(p.name, server.clone()));
             }
+            hifive_p550_mcu::PROVIDER => match serial {
+                Some(ref s) => s.add_provider(HifiveP550MCUProvider::new(
+                    p.name,
+                    p.parameters
+                        .context("Missing hifive-p550-mcu provider parameters")?,
+                    server.clone(),
+                )),
+                None => {
+                    bail!("Hifive P550 MCU provider requires the serial provider to be enabled")
+                }
+            },
             mediatek_brom::PROVIDER => match serial {
                 Some(ref s) => s.add_provider(MediatekBromProvider::new(p.name, server.clone())),
                 None => {
