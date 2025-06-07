@@ -12,6 +12,7 @@ use futures::prelude::*;
 use futures::stream::BoxStream;
 use futures::Sink;
 use mediatek_brom::MediatekBromProvider;
+use qcomlt_debug_board::QCOMLTDebugBoardProvider;
 use registry::{Properties, Registry};
 use std::net::{AddrParseError, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -34,6 +35,7 @@ mod fastboot;
 mod gpio;
 mod mediatek_brom;
 mod pdudaemon;
+mod qcomlt_debug_board;
 mod registry;
 mod rockusb;
 mod serial;
@@ -1098,6 +1100,14 @@ async fn main() -> anyhow::Result<()> {
                 Some(ref s) => s.add_provider(MediatekBromProvider::new(p.name, server.clone())),
                 None => {
                     bail!("Mediatek brom provider requires the serial provider to be enabled")
+                }
+            },
+            qcomlt_debug_board::PROVIDER => match serial {
+                Some(ref s) => {
+                    s.add_provider(QCOMLTDebugBoardProvider::new(p.name, server.clone()))
+                }
+                None => {
+                    bail!("QCOMLT Debug Board provider requires the serial provider to be enabled")
                 }
             },
             rockusb::PROVIDER => {
