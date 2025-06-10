@@ -36,4 +36,4 @@ url = { version = "2.5.3", features = ["serde"] }
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
 ratatui = "0.29.0"
 android-sparse-image = "0.1.2"
-thiserror = "2.0.6"
+thiserror = "2.0.7"
