@@ -3,7 +3,7 @@ use std::{collections::HashMap, io::SeekFrom};
 use bytes::{Bytes, BytesMut};
 use futures::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, StreamExt};
 use nusb::DeviceInfo;
-use rockusb::nusb::Transport;
+use rockusb::nusb::Device;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tracing::instrument;
@@ -82,7 +82,7 @@ pub enum RockUsbError {
     #[error("Failed to getting reply from rockusb thread: {0}")]
     CommandsRecv(oneshot::error::RecvError),
     #[error("Rockusb usb error: {0}")]
-    RockUsb(#[from] rockusb::nusb::Error),
+    RockUsb(#[from] rockusb::device::Error<rockusb::nusb::TransferError>),
     #[error("Rockusb device not available: {0}")]
     RockDeviceUnavailable(#[from] rockusb::nusb::DeviceUnavalable),
 }
@@ -353,8 +353,8 @@ enum RockUsbIO {
     Flush(oneshot::Sender<Result<(), std::io::Error>>),
 }
 
-fn open_device(info: DeviceInfo) -> Result<Transport, RockUsbError> {
-    Ok(Transport::from_usb_device_info(info)?)
+fn open_device(info: DeviceInfo) -> Result<Device, RockUsbError> {
+    Ok(Device::from_usb_device_info(info)?)
 }
 
 async fn handle_io(
