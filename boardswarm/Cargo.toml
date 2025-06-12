@@ -45,3 +45,6 @@ reqwest = { version = "0.12.15", default-features = false, features = ["rustls-t
 strum = { version = "0.27.1", features = ["derive"] }
 strum_macros = "0.27.1"
 regex = "1.11.1"
+proc-mounts = "0.3.0"
+systemd-directories = "0.1.1"
+dirs = "6.0.0"
