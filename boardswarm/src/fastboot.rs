@@ -91,7 +91,7 @@ pub async fn start_provider(name: String, parameters: Option<serde_yaml::Value>,
                 info!("New fastboot volume on: {name}");
                 properties.extend(provider_properties);
 
-                let prereg = registrations.pre_register_volume(&device, seqnum);
+                let prereg = registrations.pre_register_volumes(&device, seqnum);
                 let known_targets = parameters.targets.clone();
                 tokio::spawn(async move {
                     if let Err(e) = setup_volume(
@@ -108,7 +108,7 @@ pub async fn start_provider(name: String, parameters: Option<serde_yaml::Value>,
                     }
                 });
             }
-            DeviceEvent::Remove(device) => registrations.remove_volume(&device),
+            DeviceEvent::Remove(device) => registrations.remove_volumes(&device),
         }
     }
 }
@@ -188,7 +188,7 @@ async fn setup_volume(
     }
 
     let volume = FastbootVolume::new(device, max_download, targets);
-    r.register_volume(properties, volume);
+    r.register_volumes(properties, vec![volume]);
     Ok(())
 }
 

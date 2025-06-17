@@ -17,8 +17,8 @@ use tracing::{info, warn};
 enum RegistrationState {
     /// Pending registration for a given udev sequence number
     Pending(u64),
-    /// Registered with volume id
-    Registered(u64),
+    /// Registered with volume ids
+    Registered(Vec<u64>),
 }
 
 pub struct DeviceRegistrations<IT> {
@@ -56,15 +56,17 @@ where
     /// Mark a device as being a prepared for final registration. This ensures on the iteration
     /// with the given sequence number can get registered, avoiding races where a device disappears
     /// and re-appears while the preperation process is ongoing
-    pub fn pre_register_volume(&self, device: &Device, seqnum: u64) -> PreRegistration<IT> {
+    pub fn pre_register_volumes(&self, device: &Device, seqnum: u64) -> PreRegistration<IT> {
         let mut registrations = self.registrations.lock().unwrap();
         let syspath = device.syspath().to_path_buf();
         if let Some(existing) =
             registrations.insert(syspath.clone(), RegistrationState::Pending(seqnum))
         {
             warn!("Pre-registering with known previous item: {:?}", existing);
-            if let RegistrationState::Registered(id) = existing {
-                self.server.unregister_volume(id);
+            if let RegistrationState::Registered(ids) = existing {
+                let _ = ids.into_iter().map(|id| {
+                    self.server.unregister_volume(id);
+                });
             }
         }
         PreRegistration {
@@ -74,10 +76,12 @@ where
         }
     }
 
-    pub fn remove_volume(&self, device: &Device) {
+    pub fn remove_volumes(&self, device: &Device) {
         let mut registrations = self.registrations.lock().unwrap();
-        if let Some(RegistrationState::Registered(id)) = registrations.remove(device.syspath()) {
-            self.server.unregister_volume(id);
+        if let Some(RegistrationState::Registered(ids)) = registrations.remove(device.syspath()) {
+            let _ = ids.into_iter().map(|id| {
+                self.server.unregister_volume(id);
+            });
         }
     }
 }
@@ -93,12 +97,19 @@ impl<IT> PreRegistration<IT>
 where
     IT: crate::Volume + 'static,
 {
-    pub fn register_volume(self, properties: Properties, item: IT) {
+    pub fn register_volumes(self, properties: Properties, items: Vec<IT>) {
         let mut registrations = self.pending.registrations.lock().unwrap();
         match registrations.get(&self.syspath) {
             Some(RegistrationState::Pending(s)) if *s == self.seqnum => {
-                let id = self.pending.server.register_volume(properties, item);
-                registrations.insert(self.syspath.clone(), RegistrationState::Registered(id));
+                let ids = items
+                    .into_iter()
+                    .map(|item| {
+                        self.pending
+                            .server
+                            .register_volume(properties.clone(), item)
+                    })
+                    .collect();
+                registrations.insert(self.syspath.clone(), RegistrationState::Registered(ids));
             }
             _ => {
                 info!("Ignoring outdated registration (seqnum: {})", self.seqnum)
