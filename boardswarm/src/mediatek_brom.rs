@@ -45,7 +45,7 @@ impl SerialProvider for MediatekBromProvider {
 
         if let Some(node) = device.devnode() {
             if let Some(name) = node.file_name() {
-                let prereg = self.registrations.pre_register(device, seqnum);
+                let prereg = self.registrations.pre_register_volume(device, seqnum);
 
                 let mut properties = device.properties(name.to_string_lossy());
                 properties.extend(provider_properties);
@@ -58,7 +58,7 @@ impl SerialProvider for MediatekBromProvider {
     }
 
     fn remove(&mut self, device: &Device) {
-        self.registrations.remove(device);
+        self.registrations.remove_volume(device);
     }
 }
 
@@ -104,7 +104,7 @@ async fn setup_volume(
 
     let volume = MediatekBromVolume::new(port, brom);
 
-    r.register(properties, volume);
+    r.register_volume(properties, volume);
 }
 
 enum BromCommand {
