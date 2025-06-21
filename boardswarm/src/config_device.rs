@@ -5,7 +5,8 @@ use tracing::warn;
 
 use crate::{
     registry::{self, Properties, RegistryChange},
-    ActuatorError, Console, DeviceConfigItem, DeviceMonitor, DeviceSetModeError, Server,
+    ActuatorError, ActuatorId, Console, ConsoleId, DeviceConfigItem, DeviceMonitor,
+    DeviceSetModeError, Server, VolumeId,
 };
 
 // TODO deal with closing
@@ -30,10 +31,11 @@ impl DeviceNotifier {
         }
     }
 }
+
 struct DeviceMode {
     name: String,
     depends: Option<String>,
-    sequence: Vec<DeviceItem<u64, crate::config::ModeStep>>,
+    sequence: Vec<DeviceItem<ActuatorId, crate::config::ModeStep>>,
 }
 
 impl From<crate::config::Mode> for DeviceMode {
@@ -101,8 +103,8 @@ struct DeviceInner {
     notifier: DeviceNotifier,
     name: String,
     current_mode: std::sync::Mutex<Option<String>>,
-    consoles: Vec<DeviceItem<u64, crate::config::Console>>,
-    volumes: Vec<DeviceItem<u64, crate::config::Volume>>,
+    consoles: Vec<DeviceItem<ConsoleId, crate::config::Console>>,
+    volumes: Vec<DeviceItem<VolumeId, crate::config::Volume>>,
     modes: Vec<DeviceMode>,
     server: Server,
 }
