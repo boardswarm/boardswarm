@@ -1011,7 +1011,6 @@ async fn setup_auth_layer(
                     .await?
             }
             config::Authentication::Jwks { path } => {
-                warn!("No local jwks support yet");
                 let jwks = tokio::fs::read_to_string(path).await?;
                 TenantConfiguration::static_builder(jwks).build()?
             }
