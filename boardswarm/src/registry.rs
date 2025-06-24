@@ -148,43 +148,60 @@ impl<T> Item<T> {
     }
 }
 
+/// Trait a type needs to implement to be used as an index of the registery.
+///
+/// Each index has to be unique for the duration of the process. A simple way to do so is to simply
+/// increment a suitable big number type. e.g a u64 will only overflow after about 584
+/// years when incrementing by one every nanosecond (aka at a 1ghz rate).
+pub trait RegistryIndex: Eq + PartialEq + Copy + Default + Ord + std::hash::Hash {
+    /// Given the current index, get the next unused index
+    fn next(&self) -> Self;
+}
+
+impl RegistryIndex for u64 {
+    fn next(&self) -> Self {
+        self + 1
+    }
+}
+
 #[derive(Clone)]
-pub enum RegistryChange<T> {
-    Added { id: u64, item: Item<T> },
-    Removed(u64),
+pub enum RegistryChange<I, T> {
+    Added { id: I, item: Item<T> },
+    Removed(I),
 }
 
 #[derive(Debug)]
-struct RegistryInner<T> {
-    next: u64,
-    contents: BTreeMap<u64, Item<T>>,
+struct RegistryInner<I, T> {
+    next: I,
+    contents: BTreeMap<I, Item<T>>,
 }
 
 #[derive(Debug)]
-pub struct Registry<T> {
-    monitor: broadcast::Sender<RegistryChange<T>>,
-    inner: RwLock<RegistryInner<T>>,
+pub struct Registry<I, T> {
+    monitor: broadcast::Sender<RegistryChange<I, T>>,
+    inner: RwLock<RegistryInner<I, T>>,
 }
 
-impl<T> Registry<T>
+impl<I, T> Registry<I, T>
 where
+    I: RegistryIndex,
     T: Clone,
 {
     pub fn new() -> Self {
         Self {
             monitor: broadcast::channel(16).0,
             inner: RwLock::new(RegistryInner {
-                next: 0,
+                next: I::default(),
                 contents: BTreeMap::new(),
             }),
         }
     }
 
-    pub fn add(&self, properties: Properties, item: T) -> (u64, Item<T>) {
+    pub fn add(&self, properties: Properties, item: T) -> (I, Item<T>) {
         let item = Item::new(properties, item);
         let mut inner = self.inner.write().unwrap();
-        inner.next += 1;
         let id = inner.next;
+        inner.next = inner.next.next();
         inner.contents.insert(id, item.clone());
         let _ = self.monitor.send(RegistryChange::Added {
             id,
@@ -193,25 +210,25 @@ where
         (id, item)
     }
 
-    pub fn remove(&self, id: u64) {
+    pub fn remove(&self, id: I) {
         let mut inner = self.inner.write().unwrap();
         if let Some(_item) = inner.contents.remove(&id) {
             let _ = self.monitor.send(RegistryChange::Removed(id));
         }
     }
 
-    pub fn lookup(&self, id: u64) -> Option<Item<T>> {
+    pub fn lookup(&self, id: I) -> Option<Item<T>> {
         let inner = self.inner.read().unwrap();
         inner.contents.get(&id).cloned()
     }
 
     #[allow(dead_code)]
-    pub fn ids(&self) -> Vec<u64> {
+    pub fn ids(&self) -> Vec<I> {
         let inner = self.inner.read().unwrap();
         inner.contents.keys().copied().collect()
     }
 
-    pub fn contents(&self) -> Vec<(u64, Item<T>)> {
+    pub fn contents(&self) -> Vec<(I, Item<T>)> {
         let inner = self.inner.read().unwrap();
         inner
             .contents
@@ -220,11 +237,11 @@ where
             .collect()
     }
 
-    pub fn find<'a, K, V, I>(&self, matches: &'a I) -> Option<(u64, Item<T>)>
+    pub fn find<'a, K, V, IT>(&self, matches: &'a IT) -> Option<(I, Item<T>)>
     where
         K: AsRef<str>,
         V: AsRef<str>,
-        &'a I: IntoIterator<Item = (K, V)>,
+        &'a IT: IntoIterator<Item = (K, V)>,
     {
         let inner = self.inner.read().unwrap();
         inner
@@ -234,13 +251,14 @@ where
             .map(|(&id, item)| (id, item.clone()))
     }
 
-    pub fn monitor(&self) -> Receiver<RegistryChange<T>> {
+    pub fn monitor(&self) -> Receiver<RegistryChange<I, T>> {
         self.monitor.subscribe()
     }
 }
 
-impl<T> Default for Registry<T>
+impl<I, T> Default for Registry<I, T>
 where
+    I: RegistryIndex,
     T: Clone,
 {
     fn default() -> Self {
