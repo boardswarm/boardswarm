@@ -32,6 +32,7 @@ mod boardswarm_provider;
 mod config;
 mod config_device;
 mod dfu;
+mod eswin_eic7700_storage;
 mod fastboot;
 mod gpio;
 mod hifive_p550_mcu;
@@ -1158,6 +1159,13 @@ async fn main() -> anyhow::Result<()> {
             }
             fastboot::PROVIDER => {
                 local.spawn_local(fastboot::start_provider(
+                    p.name,
+                    p.parameters,
+                    server.clone(),
+                ));
+            }
+            eswin_eic7700_storage::PROVIDER => {
+                local.spawn_local(eswin_eic7700_storage::start_provider(
                     p.name,
                     p.parameters,
                     server.clone(),
