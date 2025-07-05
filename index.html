@@ -1,0 +1,142 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="./">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Boardswarm &mdash; Boardswarm  documentation</title>
+      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=80d5e7a1" />
+      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=e59714d7" />
+
+  
+      <script src="_static/jquery.js?v=5d32c60e"></script>
+      <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="_static/doctools.js?v=9bcbadda"></script>
+      <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Setting up a Boardswarm server" href="guides/setup-server.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="#" class="icon icon-home">
+            Boardswarm
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="guides/setup-server.html">Setting up a Boardswarm server</a></li>
+<li class="toctree-l1"><a class="reference internal" href="guides/setup-client.html">Setting up a Boardswarm client</a></li>
+<li class="toctree-l1"><a class="reference internal" href="guides/basic-functionality.html">Basic Functionality</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="#">Boardswarm</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="#" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Boardswarm</li>
+      <li class="wy-breadcrumbs-aside">
+              <a href="https://github.com/boardswarm/boardswarm/blob/main/website/index.rst" class="fa fa-github"> Edit on GitHub</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="boardswarm">
+<h1>Boardswarm<a class="headerlink" href="#boardswarm" title="Link to this heading"></a></h1>
+<p>Boardswarm provides a distributed service to interact with development boards.
+It is able to interact with the boards via their serial consoles, manage power,
+auxillary control lines and using a growing number of protocols, such as:</p>
+<ul class="simple">
+<li><p>Device Firmware Upgrade (DFU)</p></li>
+<li><p>Fastboot</p></li>
+<li><p>MediaTek Boot ROM protocol</p></li>
+<li><p>Rockchip USB protocol</p></li>
+</ul>
+<p>The connection between the boardswarm server and client application can be
+secured using multiple authentication mechanisms.</p>
+<section id="where-can-i-get-boardswarm">
+<h2>Where can I get Boardswarm?<a class="headerlink" href="#where-can-i-get-boardswarm" title="Link to this heading"></a></h2>
+<p>Boardswarm is a relatively new project and under active development. The latest releases, built by the projects CI build process can be found here:</p>
+<blockquote>
+<div><p><a class="reference external" href="https://github.com/boardswarm/boardswarm/releases/tag/latest">https://github.com/boardswarm/boardswarm/releases/tag/latest</a></p>
+</div></blockquote>
+<p>Full source code can be found in our github repository:</p>
+<blockquote>
+<div><p><a class="reference external" href="https://github.com/boardswarm/boardswarm">https://github.com/boardswarm/boardswarm</a></p>
+</div></blockquote>
+<div class="toctree-wrapper compound">
+<p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="guides/setup-server.html">Setting up a Boardswarm server</a></li>
+<li class="toctree-l1"><a class="reference internal" href="guides/setup-client.html">Setting up a Boardswarm client</a></li>
+<li class="toctree-l1"><a class="reference internal" href="guides/basic-functionality.html">Basic Functionality</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="guides/basic-functionality.html#listing-available-devices">Listing available devices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="guides/basic-functionality.html#terminal-style-access-to-the-board">Terminal style access to the board</a></li>
+<li class="toctree-l2"><a class="reference internal" href="guides/basic-functionality.html#changing-power-state-outside-of-the-console-ui">Changing power state outside of the console UI</a></li>
+</ul>
+</li>
+</ul>
+</div>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Boardswarm authors.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
