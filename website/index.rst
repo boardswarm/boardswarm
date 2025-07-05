@@ -37,3 +37,10 @@ Full source code can be found in our github repository:
    guides/basic-functionality.rst
    guides/gpio-control.rst
    guides/python-scripting.rst
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Worked board examples
+
+   boards/mediatek.rst
+
