@@ -57,6 +57,20 @@ impl Volume for BoardswarmVolume {
                 _ => VolumeError::Internal(e.to_string()),
             })
     }
+
+    async fn erase(&self, target: &str) -> Result<(), VolumeError> {
+        self.remote
+            .clone()
+            .volume_erase(self.id, target)
+            .await
+            .map_err(|e| match e.code() {
+                tonic::Code::NotFound => VolumeError::UnknownTargetRequested,
+                tonic::Code::Aborted => VolumeError::Failure(e.to_string()),
+                tonic::Code::Internal => VolumeError::Internal(e.to_string()),
+                _ => VolumeError::Internal(e.to_string()),
+            })?;
+        Ok(())
+    }
 }
 
 struct BoardswarmVolumeTarget {

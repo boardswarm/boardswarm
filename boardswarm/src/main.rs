@@ -106,6 +106,8 @@ impl<C> ConsoleExt for C where C: Console + ?Sized {}
 pub enum VolumeError {
     #[error("Unknown target requested")]
     UnknownTargetRequested,
+    #[error("Operation not implemented for this volume")]
+    NotImplemented,
     #[error("Internal error: {0}")]
     Internal(String),
     #[error("Volume failure: {0}")]
@@ -116,6 +118,7 @@ impl From<VolumeError> for tonic::Status {
     fn from(e: VolumeError) -> Self {
         match e {
             VolumeError::UnknownTargetRequested => tonic::Status::not_found(e.to_string()),
+            VolumeError::NotImplemented => tonic::Status::unimplemented(e.to_string()),
             VolumeError::Internal(e) => tonic::Status::internal(e),
             VolumeError::Failure(e) => tonic::Status::aborted(e),
         }
@@ -230,7 +233,7 @@ pub trait Volume: std::fmt::Debug + Send + Sync {
     ) -> Result<(VolumeTargetInfo, Box<dyn VolumeTarget>), VolumeError>;
     async fn commit(&self) -> Result<(), VolumeError>;
     async fn erase(&self, _target: &str) -> Result<(), VolumeError> {
-        Err(VolumeError::UnknownTargetRequested)
+        Err(VolumeError::NotImplemented)
     }
 }
 
