@@ -1211,13 +1211,19 @@ async fn main() -> anyhow::Result<()> {
                     let rw = boardswarm
                         .volume_io_readwrite(volume, write.target, Some(m.len()))
                         .await?;
-                    let mut rw = BatchWriter::new(rw).discard_flush();
+                    let progress = ProgressBar::new(m.len());
+                    let mut batchwriter = BatchWriter::new(rw).discard_flush();
+                    let mut rw = progress
+                        .wrap_async_write(&mut batchwriter)
+                        .compat_write()
+                        .into_inner();
                     if let Some(offset) = write.offset {
                         rw.seek(SeekFrom::Start(offset)).await?;
                     }
                     tokio::io::copy(&mut f, &mut rw).await?;
                     rw.shutdown().await?;
                     drop(rw);
+                    progress.finish();
                 }
                 VolumeCommand::WriteAimg(write) => {
                     let rw = boardswarm
@@ -1284,7 +1290,12 @@ async fn main() -> anyhow::Result<()> {
                     let m = f.metadata().await?;
 
                     let (mut volume, rw) = target.open_with_len(&device, m.len()).await?;
-                    let mut rw = BatchWriter::new(rw).discard_flush();
+                    let progress = ProgressBar::new(m.len());
+                    let mut batchwriter = BatchWriter::new(rw).discard_flush();
+                    let mut rw = progress
+                        .wrap_async_write(&mut batchwriter)
+                        .compat_write()
+                        .into_inner();
                     if let Some(offset) = offset {
                         rw.seek(SeekFrom::Start(offset)).await?;
                     }
@@ -1296,6 +1307,7 @@ async fn main() -> anyhow::Result<()> {
                     if commit {
                         volume.commit().await?;
                     }
+                    progress.finish();
                 }
                 DeviceCommand::WriteAimg(DeviceAimgWriteArg {
                     commit,
