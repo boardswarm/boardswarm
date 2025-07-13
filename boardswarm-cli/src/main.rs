@@ -916,6 +916,82 @@ async fn print_item(
     Ok(())
 }
 
+async fn print_device(
+    boardswarm: &mut Boardswarm,
+    device: &boardswarm_protocol::Device,
+) -> anyhow::Result<()> {
+    println!(
+        "Current mode: {}",
+        device.current_mode.as_deref().unwrap_or("Unknown")
+    );
+    println!("Modes:");
+    for m in &device.modes {
+        print!("- {}", m.name);
+        if let Some(d) = m.depends.as_ref() {
+            print!(" (depends on {d})");
+        }
+        if m.available {
+            println!()
+        } else {
+            println!(" (Not available)")
+        }
+    }
+    println!("Consoles:");
+    for c in &device.consoles {
+        if let Some(id) = c.id {
+            println!("- {} - id: {}", c.name, id);
+        } else {
+            println!("- {} - not available", c.name);
+        }
+    }
+    println!("Volumes:");
+    for v in &device.volumes {
+        if let Some(id) = v.id {
+            let info = boardswarm.volume_info(id).await?;
+            println!(
+                "- {} - id: {}, targets{}:",
+                v.name,
+                id,
+                if info.exhaustive {
+                    ""
+                } else {
+                    " (non-exhaustive)"
+                }
+            );
+            for boardswarm_protocol::VolumeTarget {
+                name,
+                readable,
+                writable,
+                seekable,
+                size,
+                blocksize,
+            } in &info.target
+            {
+                let caps = [
+                    (*readable, "readable"),
+                    (*writable, "writable"),
+                    (*seekable, "seekable"),
+                ]
+                .iter()
+                .filter_map(|(t, v)| if *t { Some(v) } else { None })
+                .join(", ");
+
+                print!("  + {name} ({caps})");
+                if let Some(size) = size {
+                    print!(" size: {size}");
+                }
+                if let Some(blocksize) = blocksize {
+                    print!(" blocksize: {blocksize}");
+                }
+                println!();
+            }
+        } else {
+            println!(" * {} - not available", v.name);
+        }
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let opt = Opts::parse();
@@ -1257,10 +1333,11 @@ async fn main() -> anyhow::Result<()> {
                 DeviceCommand::Info { follow } => {
                     let mut d = boardswarm.device_info(device.id()).await?;
                     while let Some(device) = d.try_next().await? {
-                        println!("{:#?}", device);
+                        print_device(&mut boardswarm, &device).await?;
                         if !follow {
                             break;
                         }
+                        println!("---------");
                     }
                 }
                 DeviceCommand::Mode(d) => {
