@@ -986,7 +986,7 @@ async fn print_device(
                 println!();
             }
         } else {
-            println!(" * {} - not available", v.name);
+            println!("- {} - not available", v.name);
         }
     }
     Ok(())
