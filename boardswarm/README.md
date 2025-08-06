@@ -54,7 +54,7 @@ server:
 On the client side to set up such a server run the following command and follow
 the instructions to authenticate:
 ```
-$ boardswarm-cli  --instance <instance name> configure --new  -u <instance url>
+$ boardswarm-cli --instance <instance name> auth init -u <instance url>
 ```
 
 ### Static JWKS based authentication
@@ -94,7 +94,7 @@ $ rnbyc -s '{"exp": 1798761600}' -K private.jwks > token.jwt
 On the client side to set up such a server run the following command and follow
 the instructions to authenticate:
 ```
-$ boardswarm-cli  --instance <instance name> configure --new -u <instance url> --token-file <path to token file>
+$ boardswarm-cli --instance <instance name> auth init -u <instance url> --token-file <path to token file>
 ```
 
 ## Providers
