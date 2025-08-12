@@ -14,7 +14,7 @@ bytes = "1.10.1"
 futures = "0.3.31"
 boardswarm-protocol = { version = "0.0.1", path = "../boardswarm-protocol" }
 tokio = { version = "1.44.2", features = ["full"] }
-tonic = { version = "0.13", features = ["tls-native-roots", "tls-ring"] }
+tonic = { version = "0.14", features = ["tls-native-roots", "tls-ring"] }
 tracing = "0.1.40"
 thiserror = "2.0.7"
 tower = "0.5.2"
