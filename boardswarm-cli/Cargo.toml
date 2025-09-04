@@ -33,7 +33,7 @@ serde_yaml = "0.9.25"
 dirs = "6.0.0"
 async-trait = "0.1.88"
 url = { version = "2.5.3", features = ["serde"] }
-tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 ratatui = "0.29.0"
 android-sparse-image = "0.1.2"
 thiserror = "2.0.7"
