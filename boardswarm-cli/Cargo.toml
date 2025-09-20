@@ -20,7 +20,7 @@ boardswarm-client = { version = "0.0.1", path = "../boardswarm-client" }
 tokio = { version = "1.44.2", features = ["full"] }
 tokio-util = { version = "0.7.4", features = ["compat"] }
 serde_json = "1.0.140"
-tracing = "0.1.40"
+tracing = "0.1.41"
 indicatif = { version = "0.17.3", features = ["improved_unicode", "tokio"] }
 itertools = "0.14.0"
 bmap-parser = "0.2.0"
@@ -33,7 +33,7 @@ serde_yaml = "0.9.25"
 dirs = "6.0.0"
 async-trait = "0.1.88"
 url = { version = "2.5.3", features = ["serde"] }
-tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 ratatui = "0.29.0"
 android-sparse-image = "0.1.2"
 thiserror = "2.0.7"

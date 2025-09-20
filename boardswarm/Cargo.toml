@@ -25,8 +25,8 @@ tokio-serial = "5.4.4"
 tokio-udev = "0.9"
 tokio-util = { version = "0.7.4", features = ["compat"]}
 tonic = "0.14"
-tracing = "0.1.40"
-tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 url = "2.5.3"
 erased-serde = "0.4.4"
 tokio-stream = { version = "0.1.16", features = ["sync"] }
