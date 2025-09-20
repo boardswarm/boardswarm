@@ -712,7 +712,7 @@ impl VolumeIoRW {
             match r {
                 Poll::Ready(r) => {
                     self.pending_requests.pop_front();
-                    r.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                    r.map_err(std::io::Error::other)?;
                 }
                 Poll::Pending => break,
             }
@@ -945,8 +945,7 @@ impl AsyncRead for VolumeIoRW {
                             return Poll::Ready(Ok(()));
                         }
                         Err(e) => {
-                            return Poll::Ready(Err(std::io::Error::new(
-                                std::io::ErrorKind::Other,
+                            return Poll::Ready(Err(std::io::Error::other(
                                 e,
                             )))
                         }

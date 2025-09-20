@@ -163,8 +163,7 @@ impl AsyncSeek for BatchWriter {
             BatchState::Empty => Pin::new(&mut me.writer).start_seek(position),
             BatchState::Batched(_) => {
                 if me.pending_seek.is_some() {
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
+                    Err(std::io::Error::other(
                         "Seek in progress",
                     ))
                 } else {
