@@ -944,11 +944,7 @@ impl AsyncRead for VolumeIoRW {
                             me.copy_buffered_read(buf);
                             return Poll::Ready(Ok(()));
                         }
-                        Err(e) => {
-                            return Poll::Ready(Err(std::io::Error::other(
-                                e,
-                            )))
-                        }
+                        Err(e) => return Poll::Ready(Err(std::io::Error::other(e))),
                     }
                 }
                 IoWrapperState::Flush | IoWrapperState::Shutdown => {
