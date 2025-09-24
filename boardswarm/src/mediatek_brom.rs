@@ -88,7 +88,7 @@ async fn setup_volume(r: PreRegistration, node: PathBuf, mut properties: Propert
         }
     };
 
-    info!("Hardware: {}", hwcode.code);
+    info!("Hardware: {:#x}", hwcode.code);
     properties.insert(
         format!("{PROVIDER}.hw_code"),
         format!("{:04x}", hwcode.code),
