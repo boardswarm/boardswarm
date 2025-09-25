@@ -1149,7 +1149,11 @@ async fn main() -> anyhow::Result<()> {
                 }
             },
             mediatek_brom::PROVIDER => match serial {
-                Some(ref s) => s.add_provider(MediatekBromProvider::new(p.name, server.clone())),
+                Some(ref s) => s.add_provider(MediatekBromProvider::new(
+                    p.name,
+                    p.parameters.unwrap_or_default(),
+                    server.clone(),
+                )),
                 None => {
                     bail!("Mediatek brom provider requires the serial provider to be enabled")
                 }
