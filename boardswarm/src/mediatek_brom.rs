@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use bytes::{Bytes, BytesMut};
 use mediatek_brom::{io::BromExecuteAsync, Brom};
+use serde::Deserialize;
 use tokio::sync::oneshot;
 use tokio_serial::SerialPortBuilderExt;
 use tracing::{info, instrument, warn};
@@ -16,15 +17,23 @@ use crate::{
 pub const PROVIDER: &str = "mediatek-brom";
 pub const TARGET: &str = "brom";
 
+#[derive(Deserialize, Clone, Debug, Default)]
+struct MediatekBromParameters {
+    address: Option<u32>,
+}
+
 pub struct MediatekBromProvider {
     name: String,
+    parameters: MediatekBromParameters,
     registrations: DeviceRegistrations,
 }
 
 impl MediatekBromProvider {
-    pub fn new(name: String, server: Server) -> Self {
+    pub fn new(name: String, parameters: serde_yaml::Value, server: Server) -> Self {
+        let parameters: MediatekBromParameters = serde_yaml::from_value(parameters).unwrap();
         Self {
             name,
+            parameters,
             registrations: DeviceRegistrations::new(server),
         }
     }
@@ -49,7 +58,12 @@ impl SerialProvider for MediatekBromProvider {
 
                 let mut properties = device.properties(name.to_string_lossy());
                 properties.extend(provider_properties);
-                tokio::spawn(setup_volume(prereg, node.to_path_buf(), properties));
+                tokio::spawn(setup_volume(
+                    prereg,
+                    node.to_path_buf(),
+                    self.parameters.address,
+                    properties,
+                ));
 
                 return true;
             }
@@ -63,7 +77,12 @@ impl SerialProvider for MediatekBromProvider {
 }
 
 #[instrument(skip(r, properties))]
-async fn setup_volume(r: PreRegistration, node: PathBuf, mut properties: Properties) {
+async fn setup_volume(
+    r: PreRegistration,
+    node: PathBuf,
+    address: Option<u32>,
+    mut properties: Properties,
+) {
     info!("Setting up brom volume for {}", node.display());
     let mut port = match tokio_serial::new(node.to_string_lossy(), 115200).open_native_async() {
         Ok(port) => port,
@@ -72,7 +91,7 @@ async fn setup_volume(r: PreRegistration, node: PathBuf, mut properties: Propert
             return;
         }
     };
-    let brom = match port.execute(Brom::handshake(0x201000)).await {
+    let brom = match port.execute(Brom::handshake()).await {
         Ok(brom) => brom,
         Err(e) => {
             warn!("Failed to perform brom handshake: {e}");
@@ -88,7 +107,17 @@ async fn setup_volume(r: PreRegistration, node: PathBuf, mut properties: Propert
         }
     };
 
-    info!("Hardware: {}", hwcode.code);
+    info!("Hardware: {:#x}", hwcode.code);
+
+    // If unset, DA address is determined from hardware code information
+    let address = match address.or(hwcode.da_address()) {
+        None => {
+            warn!("Failed to determine DA address");
+            return;
+        }
+        Some(address) => address,
+    };
+
     properties.insert(
         format!("{PROVIDER}.hw_code"),
         format!("{:04x}", hwcode.code),
@@ -98,7 +127,7 @@ async fn setup_volume(r: PreRegistration, node: PathBuf, mut properties: Propert
         format!("{}", hwcode.version),
     );
 
-    r.register_volume(properties, MediatekBromVolume::new(port, brom));
+    r.register_volume(properties, MediatekBromVolume::new(port, brom, address));
 }
 
 enum BromCommand {
@@ -112,18 +141,19 @@ enum BromCommand {
 async fn process(
     mut port: tokio_serial::SerialStream,
     brom: Brom,
+    address: u32,
     mut exec: tokio::sync::mpsc::Receiver<BromCommand>,
 ) {
     while let Some(command) = exec.recv().await {
         match command {
             BromCommand::SendDa(bytes, sender) => {
                 info!("Sending DA");
-                let r = port.execute(brom.send_da(&bytes)).await;
+                let r = port.execute(brom.send_da(address, &bytes)).await;
                 let _ = sender.send(r);
             }
             BromCommand::Execute(sender) => {
                 info!("Executing DA");
-                let r = port.execute(brom.jump_da64()).await;
+                let r = port.execute(brom.jump_da64(address)).await;
                 let _ = sender.send(r);
             }
         }
@@ -137,9 +167,9 @@ struct MediatekBromVolume {
 }
 
 impl MediatekBromVolume {
-    fn new(port: tokio_serial::SerialStream, brom: Brom) -> Self {
+    fn new(port: tokio_serial::SerialStream, brom: Brom, address: u32) -> Self {
         let (device, exec) = tokio::sync::mpsc::channel(16);
-        tokio::spawn(process(port, brom, exec));
+        tokio::spawn(process(port, brom, address, exec));
         Self {
             device,
             targets: [VolumeTargetInfo {
