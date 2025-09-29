@@ -12,6 +12,7 @@ use tracing::info;
 #[derive(Debug, Deserialize)]
 pub struct Config {
     pub server: Server,
+    pub roles: Vec<Role>,
     pub providers: Vec<Provider>,
     pub devices: Vec<Device>,
 }
@@ -34,7 +35,10 @@ pub enum Authentication {
         audience: Vec<String>,
     },
     #[serde(rename = "jwks")]
-    Jwks { path: PathBuf },
+    Jwks {
+        path: PathBuf,
+        identifier: Option<String>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -44,10 +48,40 @@ pub struct Certificate {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct Role {
+    pub role: String,
+    pub matches: Vec<RoleMatches>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RoleMatches {
+    pub identifier: String,
+    #[serde(rename = "match")]
+    pub match_: HashMap<String, Scalar>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum Scalar {
+    Bool(bool),
+    Number(serde_yaml::Number),
+    String(String),
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct Provider {
     pub name: String,
     pub provider: String,
     pub parameters: Option<serde_yaml::Value>,
+    #[serde(default)]
+    pub acls: Vec<ProviderAcl>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ProviderAcl {
+    #[serde(rename = "match", default)]
+    pub match_: HashMap<String, String>,
+    pub roles: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -57,6 +91,8 @@ pub struct Device {
     pub modes: Vec<Mode>,
     #[serde(default)]
     pub volumes: Vec<Volume>,
+    #[serde(default)]
+    pub acl: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]

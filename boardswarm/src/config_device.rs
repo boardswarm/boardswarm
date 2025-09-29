@@ -146,10 +146,10 @@ impl Device {
     }
 
     async fn monitor_items(&self) {
-        fn add_item_with<'a, C, F, I, IT, T>(
+        fn add_item_with<'a, A, C, F, I, IT, T>(
             items: IT,
             id: I,
-            item: registry::Item<T>,
+            item: registry::Item<A, T>,
             f: F,
         ) -> bool
         where
@@ -168,7 +168,7 @@ impl Device {
             })
         }
 
-        fn add_item<'a, C, I, IT, T>(items: IT, id: I, item: registry::Item<T>) -> bool
+        fn add_item<'a, A, C, I, IT, T>(items: IT, id: I, item: registry::Item<A, T>) -> bool
         where
             C: DeviceConfigItem + 'a,
             I: Copy + Eq + 'static,
@@ -177,7 +177,11 @@ impl Device {
             add_item_with(items, id, item, |_, _| {})
         }
 
-        fn change_with<'a, C, F, I, IT, T>(items: IT, change: RegistryChange<I, T>, f: F) -> bool
+        fn change_with<'a, A, C, F, I, IT, T>(
+            items: IT,
+            change: RegistryChange<I, A, T>,
+            f: F,
+        ) -> bool
         where
             C: DeviceConfigItem + 'a,
             I: Copy + Eq + 'static,
@@ -192,7 +196,7 @@ impl Device {
             }
         }
 
-        fn change<'a, C, I, IT, T>(items: IT, change: RegistryChange<I, T>) -> bool
+        fn change<'a, A, C, I, IT, T>(items: IT, change: RegistryChange<I, A, T>) -> bool
         where
             C: DeviceConfigItem + 'a,
             I: Copy + Eq + 'static,
@@ -212,12 +216,12 @@ impl Device {
             }
         }
 
-        let mut actuator_monitor = self.inner.server.inner.actuators.monitor();
-        let mut console_monitor = self.inner.server.inner.consoles.monitor();
-        let mut volume_monitor = self.inner.server.inner.volumes.monitor();
+        let mut actuator_monitor = self.inner.server.inner.actuators.monitor_no_auth();
+        let mut console_monitor = self.inner.server.inner.consoles.monitor_no_auth();
+        let mut volume_monitor = self.inner.server.inner.volumes.monitor_no_auth();
         let mut changed = false;
 
-        for (id, item) in self.inner.server.inner.actuators.contents() {
+        for (id, item) in self.inner.server.inner.actuators.contents_no_auth() {
             changed |= add_item(
                 self.inner.modes.iter().flat_map(|m| m.sequence.iter()),
                 id,
@@ -225,11 +229,11 @@ impl Device {
             );
         }
 
-        for (id, item) in self.inner.server.inner.consoles.contents() {
+        for (id, item) in self.inner.server.inner.consoles.contents_no_auth() {
             changed |= add_item_with(self.inner.consoles.iter(), id, item, setup_console);
         }
 
-        for (id, item) in self.inner.server.inner.volumes.contents() {
+        for (id, item) in self.inner.server.inner.volumes.contents_no_auth() {
             changed |= add_item(self.inner.volumes.iter(), id, item);
         }
 
@@ -290,18 +294,21 @@ impl crate::Device for Device {
         }
 
         for step in &target.sequence {
-            let step = step.config();
-            if let Some(provider) = self.inner.server.find_actuator(&step.match_) {
-                provider
+            let config = step.config();
+            if let Some(actuator) = step
+                .get()
+                .and_then(|id| self.inner.server.get_actuator_no_auth(id))
+            {
+                actuator
                     .set_mode(Box::new(<dyn erased_serde::Deserializer>::erase(
-                        step.parameters.clone(),
+                        config.parameters.clone(),
                     )))
                     .await?;
             } else {
-                warn!("Provider {:?} not found", &step.match_);
+                warn!("Actuator {:?} not found", &config.match_);
                 return Err(ActuatorError {}.into());
             }
-            if let Some(duration) = step.stabilisation {
+            if let Some(duration) = config.stabilisation {
                 tokio::time::sleep(duration).await;
             }
         }

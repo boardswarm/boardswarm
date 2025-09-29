@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 use tokio::sync::broadcast;
+use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
 
 pub const NAME: &str = "boardswarm.name";
@@ -36,29 +37,24 @@ impl Properties {
         self.properties.get(prop).map(String::as_ref)
     }
 
+    pub fn contains_key(&self, prop: &str) -> bool {
+        self.properties.contains_key(prop)
+    }
+
     /// Tests if matches is a subset of the properties
-    ///
-    /// If properties is from a remote instance (`boardswarm.instance` is set) that has to be
-    /// explicitly matched otherwise it's a pure subset match (e.g. an empty set matches)
     pub fn matches<K, V, I>(&self, matches: I) -> bool
     where
         K: AsRef<str>,
         V: AsRef<str>,
         I: IntoIterator<Item = (K, V)>,
     {
-        let mut matched_instance = false;
-        let matched = matches.into_iter().all(|(k, v)| {
-            matched_instance |= k.as_ref() == INSTANCE;
+        matches.into_iter().all(|(k, v)| {
             if let Some(prop) = self.get(k.as_ref()) {
                 prop == v.as_ref()
             } else {
                 false
             }
-        });
-
-        // All the properties need to match and if the instance is declared in the properties that
-        // also needed to be matched against
-        matched && matched_instance == self.instance().is_some()
+        })
     }
 
     pub fn insert<K, V>(&mut self, key: K, value: V)
@@ -105,12 +101,13 @@ impl From<HashMap<String, String>> for Properties {
 }
 
 #[derive(Clone, Debug)]
-pub struct Item<T> {
+pub struct Item<A, T> {
+    acl: Arc<A>, // acl
     properties: Arc<Properties>,
     item: T,
 }
 
-impl<T> std::fmt::Display for Item<T> {
+impl<A, T> std::fmt::Display for Item<A, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(instance) = self.instance() {
             write!(f, "{} on {}", self.name(), instance)
@@ -120,9 +117,10 @@ impl<T> std::fmt::Display for Item<T> {
     }
 }
 
-impl<T> Item<T> {
-    pub fn new(properties: Properties, item: T) -> Self {
+impl<A, T> Item<A, T> {
+    pub fn new(acl: A, properties: Properties, item: T) -> Self {
         Item {
+            acl: Arc::new(acl),
             properties: Arc::new(properties),
             item,
         }
@@ -137,6 +135,10 @@ impl<T> Item<T> {
 
     pub fn properties(&self) -> Arc<Properties> {
         self.properties.clone()
+    }
+
+    pub fn acl(&self) -> &A {
+        &self.acl
     }
 
     pub fn inner(&self) -> &T {
@@ -164,32 +166,76 @@ impl RegistryIndex for u64 {
     }
 }
 
+pub trait Verifier: Clone {
+    type Credential: Clone + Send + Sync;
+    type Acl: Clone + Send + Sync + 'static;
+    fn verify(&self, tokens: &Self::Credential, acl: &Self::Acl) -> bool;
+}
+
 #[derive(Clone)]
-pub enum RegistryChange<I, T> {
-    Added { id: I, item: Item<T> },
+pub struct NoVerification {}
+impl Verifier for NoVerification {
+    type Credential = ();
+    type Acl = ();
+
+    fn verify(&self, _tokens: &Self::Credential, _acl: &Self::Acl) -> bool {
+        true
+    }
+}
+
+#[derive(Clone)]
+pub enum RegistryChange<I, A, T> {
+    Added { id: I, item: Item<A, T> },
     Removed(I),
 }
 
+impl<I, A, T> From<RegistryChangeInternal<I, A, T>> for RegistryChange<I, A, T> {
+    fn from(val: RegistryChangeInternal<I, A, T>) -> Self {
+        match val {
+            RegistryChangeInternal::Added { id, item } => Self::Added { id, item },
+            RegistryChangeInternal::Removed { id, .. } => Self::Removed(id),
+        }
+    }
+}
+
+#[derive(Clone)]
+enum RegistryChangeInternal<I, A, T> {
+    Added { id: I, item: Item<A, T> },
+    Removed { id: I, acl: Arc<A> },
+}
+
+impl<I, A, T> RegistryChangeInternal<I, A, T> {
+    fn acl(&self) -> &A {
+        match self {
+            RegistryChangeInternal::Added { item, .. } => item.acl(),
+            RegistryChangeInternal::Removed { acl, .. } => acl,
+        }
+    }
+}
+
 #[derive(Debug)]
-struct RegistryInner<I, T> {
+struct RegistryInner<I, A, T> {
     next: I,
-    contents: BTreeMap<I, Item<T>>,
+    contents: BTreeMap<I, Item<A, T>>,
 }
 
 #[derive(Debug)]
-pub struct Registry<I, T> {
-    monitor: broadcast::Sender<RegistryChange<I, T>>,
-    inner: RwLock<RegistryInner<I, T>>,
+pub struct Registry<V: Verifier, I, T> {
+    monitor: broadcast::Sender<RegistryChangeInternal<I, V::Acl, T>>,
+    verifier: V,
+    inner: RwLock<RegistryInner<I, V::Acl, T>>,
 }
 
-impl<I, T> Registry<I, T>
+impl<V, I, T> Registry<V, I, T>
 where
     I: RegistryIndex,
     T: Clone,
+    V: Verifier + Clone,
 {
-    pub fn new() -> Self {
+    pub fn new(verifier: V) -> Self {
         Self {
-            monitor: broadcast::channel(16).0,
+            verifier,
+            monitor: broadcast::channel(1024).0,
             inner: RwLock::new(RegistryInner {
                 next: I::default(),
                 contents: BTreeMap::new(),
@@ -197,13 +243,13 @@ where
         }
     }
 
-    pub fn add(&self, properties: Properties, item: T) -> (I, Item<T>) {
-        let item = Item::new(properties, item);
+    pub fn add(&self, acl: V::Acl, properties: Properties, item: T) -> (I, Item<V::Acl, T>) {
+        let item = Item::new(acl, properties, item);
         let mut inner = self.inner.write().unwrap();
         let id = inner.next;
         inner.next = inner.next.next();
         inner.contents.insert(id, item.clone());
-        let _ = self.monitor.send(RegistryChange::Added {
+        let _ = self.monitor.send(RegistryChangeInternal::Added {
             id,
             item: item.clone(),
         });
@@ -212,23 +258,60 @@ where
 
     pub fn remove(&self, id: I) {
         let mut inner = self.inner.write().unwrap();
-        if let Some(_item) = inner.contents.remove(&id) {
-            let _ = self.monitor.send(RegistryChange::Removed(id));
+        if let Some(item) = inner.contents.remove(&id) {
+            let _ = self
+                .monitor
+                .send(RegistryChangeInternal::Removed { id, acl: item.acl });
         }
     }
 
-    pub fn lookup(&self, id: I) -> Option<Item<T>> {
+    pub fn lookup_no_auth(&self, id: I) -> Option<Item<V::Acl, T>> {
         let inner = self.inner.read().unwrap();
         inner.contents.get(&id).cloned()
     }
 
-    #[allow(dead_code)]
-    pub fn ids(&self) -> Vec<I> {
+    pub fn lookup(&self, id: I, cred: &V::Credential) -> Option<Item<V::Acl, T>> {
         let inner = self.inner.read().unwrap();
-        inner.contents.keys().copied().collect()
+        let item = inner.contents.get(&id)?;
+        if self.verifier.verify(cred, &item.acl) {
+            Some(item.clone())
+        } else {
+            None
+        }
     }
 
-    pub fn contents(&self) -> Vec<(I, Item<T>)> {
+    #[allow(dead_code)]
+    pub fn ids(&self, cred: &V::Credential) -> Vec<I> {
+        let inner = self.inner.read().unwrap();
+        inner
+            .contents
+            .iter()
+            .filter_map(|(&id, item)| {
+                if self.verifier.verify(cred, &item.acl) {
+                    Some(id)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub fn contents(&self, token: &V::Credential) -> Vec<(I, Item<V::Acl, T>)> {
+        let inner = self.inner.read().unwrap();
+        inner
+            .contents
+            .iter()
+            .filter_map(|(&id, item)| {
+                if self.verifier.verify(token, &item.acl) {
+                    Some((id, item.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub fn contents_no_auth(&self) -> Vec<(I, Item<V::Acl, T>)> {
         let inner = self.inner.read().unwrap();
         inner
             .contents
@@ -237,32 +320,72 @@ where
             .collect()
     }
 
-    pub fn find<'a, K, V, IT>(&self, matches: &'a IT) -> Option<(I, Item<T>)>
+    #[allow(dead_code)]
+    pub fn find<'a, K, Val, IT>(
+        &self,
+        matches: &'a IT,
+        token: &V::Credential,
+    ) -> Option<(I, Item<V::Acl, T>)>
     where
         K: AsRef<str>,
-        V: AsRef<str>,
-        &'a IT: IntoIterator<Item = (K, V)>,
+        Val: AsRef<str>,
+        &'a IT: IntoIterator<Item = (K, Val)>,
     {
         let inner = self.inner.read().unwrap();
         inner
             .contents
             .iter()
-            .find(|(&_id, item)| item.properties.matches(matches))
+            .find(|(&_id, item)| {
+                self.verifier.verify(token, &item.acl) && item.properties.matches(matches)
+            })
             .map(|(&id, item)| (id, item.clone()))
     }
 
-    pub fn monitor(&self) -> Receiver<RegistryChange<I, T>> {
-        self.monitor.subscribe()
+    pub fn monitor(&self, cred: V::Credential) -> RegistryMonitor<V, I, T> {
+        RegistryMonitor {
+            verifier: self.verifier.clone(),
+            recv: self.monitor.subscribe(),
+            cred: cred.clone(),
+        }
+    }
+
+    pub fn monitor_no_auth(&self) -> RegistryMonitorNoAuth<V, I, T> {
+        RegistryMonitorNoAuth(self.monitor.subscribe())
     }
 }
 
-impl<I, T> Default for Registry<I, T>
+pub struct RegistryMonitor<V: Verifier, I, T> {
+    verifier: V,
+    recv: Receiver<RegistryChangeInternal<I, V::Acl, T>>,
+    cred: V::Credential,
+}
+
+impl<V, I, T> RegistryMonitor<V, I, T>
 where
-    I: RegistryIndex,
+    I: Clone,
+    T: Clone,
+    V: Verifier,
+{
+    pub async fn recv(&mut self) -> Result<RegistryChange<I, V::Acl, T>, RecvError> {
+        loop {
+            let i = self.recv.recv().await?;
+            if self.verifier.verify(&self.cred, i.acl()) {
+                return Ok(i.into());
+            }
+        }
+    }
+}
+
+pub struct RegistryMonitorNoAuth<V: Verifier, I, T>(Receiver<RegistryChangeInternal<I, V::Acl, T>>);
+
+impl<V, I, T> RegistryMonitorNoAuth<V, I, T>
+where
+    V: Verifier,
+    I: Clone,
     T: Clone,
 {
-    fn default() -> Self {
-        Self::new()
+    pub async fn recv(&mut self) -> Result<RegistryChange<I, V::Acl, T>, RecvError> {
+        self.0.recv().await.map(Into::into)
     }
 }
 

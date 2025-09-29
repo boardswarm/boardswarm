@@ -1,4 +1,5 @@
 use anyhow::{bail, Context};
+use authentication::{DeviceRoleCred, DeviceRoleVerifier, RoleLayer, RoleVerifier, Roles};
 use boardswarm_protocol::item_event::Event;
 use boardswarm_protocol::{
     console_input_request, volume_io_reply, volume_io_request, ConsoleConfigureRequest,
@@ -13,7 +14,8 @@ use futures::stream::BoxStream;
 use futures::Sink;
 use hifive_p550_mcu::HifiveP550MCUProvider;
 use mediatek_brom::MediatekBromProvider;
-use registry::{Properties, Registry, RegistryIndex};
+use provider::Provider;
+use registry::{Properties, Registry, RegistryIndex, Verifier, INSTANCE};
 use std::fmt::Display;
 use std::net::{AddrParseError, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -23,11 +25,9 @@ use thiserror::Error;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Streaming;
-use tower_oauth2_resource_server::auth_resolver::KidAuthorizerResolver;
-use tower_oauth2_resource_server::server::OAuth2ResourceServer;
-use tower_oauth2_resource_server::tenant::TenantConfiguration;
 use tracing::{error, info, instrument, warn};
 
+mod authentication;
 mod boardswarm_provider;
 mod config;
 mod config_device;
@@ -38,6 +38,7 @@ mod gpio;
 mod hifive_p550_mcu;
 mod mediatek_brom;
 mod pdudaemon;
+mod provider;
 mod registry;
 mod rockusb;
 mod serial;
@@ -314,7 +315,13 @@ impl DeviceConfigItem for config::Console {
         if self.match_.is_empty() {
             warn!("Console matches is empty - will match any console");
         }
-        properties.matches(&self.match_)
+
+        // Device config items only match remote instances if it's explicitly in the matches
+        if self.match_.contains_key(INSTANCE) == properties.contains_key(INSTANCE) {
+            properties.matches(&self.match_)
+        } else {
+            false
+        }
     }
 }
 
@@ -324,7 +331,12 @@ impl DeviceConfigItem for config::Volume {
         if self.match_.is_empty() {
             warn!("Volume matches is empty - will match any volume");
         }
-        properties.matches(&self.match_)
+        // Device config items only match remote instances if it's explicitly in the matches
+        if self.match_.contains_key(INSTANCE) == properties.contains_key(INSTANCE) {
+            properties.matches(&self.match_)
+        } else {
+            false
+        }
     }
 }
 
@@ -334,7 +346,12 @@ impl DeviceConfigItem for config::ModeStep {
         if self.match_.is_empty() {
             warn!("ModeStep matches is empty - will match any device");
         }
-        properties.matches(&self.match_)
+        // Device config items only match remote instances if it's explicitly in the matches
+        if self.match_.contains_key(INSTANCE) == properties.contains_key(INSTANCE) {
+            properties.matches(&self.match_)
+        } else {
+            false
+        }
     }
 }
 
@@ -463,24 +480,24 @@ impl_u64_index!(VolumeId, Volume);
 struct ServerInner {
     config_dir: PathBuf,
     auth_info: Vec<config::Authentication>,
-    devices: Registry<DeviceId, Arc<dyn Device>>,
-    consoles: Registry<ConsoleId, Arc<dyn Console>>,
-    actuators: Registry<ActuatorId, Arc<dyn Actuator>>,
-    volumes: Registry<VolumeId, Arc<dyn Volume>>,
+    devices: Registry<RoleVerifier, DeviceId, Arc<dyn Device>>,
+    actuators: Registry<RoleVerifier, ActuatorId, Arc<dyn Actuator>>,
+    consoles: Registry<DeviceRoleVerifier, ConsoleId, Arc<dyn Console>>,
+    volumes: Registry<DeviceRoleVerifier, VolumeId, Arc<dyn Volume>>,
 }
 
-fn to_item_list<I, T>(registry: &Registry<I, T>) -> ItemList
+fn to_item_list<V: Verifier, I, T>(registry: &Registry<V, I, T>, token: &V::Credential) -> ItemList
 where
     I: RegistryIndex + Into<u64>,
     T: Clone,
 {
     let item = registry
-        .contents()
+        .contents(token)
         .into_iter()
         .map(|(id, item)| boardswarm_protocol::Item {
             id: id.into(),
-            name: item.properties().name().to_string(),
-            instance: item.properties().instance().map(ToOwned::to_owned),
+            name: item.name().to_string(),
+            instance: item.instance().map(ToOwned::to_owned),
         })
         .collect();
     ItemList { item }
@@ -497,10 +514,10 @@ impl Server {
             inner: Arc::new(ServerInner {
                 auth_info,
                 config_dir,
-                consoles: Registry::new(),
-                devices: Registry::new(),
-                actuators: Registry::new(),
-                volumes: Registry::new(),
+                devices: Registry::new(RoleVerifier::new(false)),
+                actuators: Registry::new(RoleVerifier::new(false)),
+                consoles: Registry::new(DeviceRoleVerifier::new(false)),
+                volumes: Registry::new(DeviceRoleVerifier::new(false)),
             }),
         }
     }
@@ -509,116 +526,202 @@ impl Server {
         &self.inner.config_dir
     }
 
-    fn register_actuator<A>(&self, properties: Properties, actuator: A) -> ActuatorId
+    fn register_actuator<A>(
+        &self,
+        properties: Properties,
+        acl: Vec<String>,
+        actuator: A,
+    ) -> ActuatorId
     where
         A: Actuator + 'static,
     {
-        let (id, item) = self.inner.actuators.add(properties, Arc::new(actuator));
+        let (id, item) = self
+            .inner
+            .actuators
+            .add(acl, properties, Arc::new(actuator));
         info!("Registered actuator: {} - {}", id, item);
         id
     }
 
-    fn get_actuator(&self, id: ActuatorId) -> Option<Arc<dyn Actuator>> {
+    fn get_actuator(&self, id: ActuatorId, roles: &Roles) -> Option<Arc<dyn Actuator>> {
         self.inner
             .actuators
-            .lookup(id)
-            .map(|item| item.inner().clone())
+            .lookup(id, roles)
+            .map(|item| item.into_inner())
     }
 
-    fn find_actuator<'a, K, V, I>(&self, matches: &'a I) -> Option<Arc<dyn Actuator>>
-    where
-        K: AsRef<str>,
-        V: AsRef<str>,
-        &'a I: IntoIterator<Item = (K, V)>,
-    {
+    fn get_actuator_no_auth(&self, id: ActuatorId) -> Option<Arc<dyn Actuator>> {
         self.inner
             .actuators
-            .find(matches)
-            .map(|(_, item)| item.inner().clone())
+            .lookup_no_auth(id)
+            .map(|item| item.into_inner())
     }
 
     fn unregister_actuator(&self, id: ActuatorId) {
-        if let Some(item) = self.inner.actuators.lookup(id) {
+        self.inner.actuators.remove(id);
+        /*
+        if let Some(item) = self.inner.actuators.lookup(id, &()) {
             info!("Unregistering actuator: {} - {}", id, item);
             self.inner.actuators.remove(id);
         }
+            */
     }
 
-    fn register_console<C>(&self, properties: Properties, console: C) -> ConsoleId
+    fn register_console<C>(&self, properties: Properties, acl: Vec<String>, console: C) -> ConsoleId
     where
         C: Console + 'static,
     {
-        let (id, item) = self.inner.consoles.add(properties, Arc::new(console));
+        let (id, item) = self
+            .inner
+            .consoles
+            .add(acl.into(), properties, Arc::new(console));
         info!("Registered console: {} - {}", id, item);
         id
     }
 
     fn unregister_console(&self, id: ConsoleId) {
-        if let Some(item) = self.inner.consoles.lookup(id) {
+        self.inner.consoles.remove(id);
+        /*
+        if let Some(item) = self.inner.consoles.lookup(id, &()) {
             info!("Unregistering console: {} - {}", id, item);
             self.inner.consoles.remove(id);
         }
+            */
     }
 
-    fn get_console(&self, id: ConsoleId) -> Option<Arc<dyn Console>> {
+    fn get_console(&self, id: ConsoleId, cred: &DeviceRoleCred) -> Option<Arc<dyn Console>> {
         self.inner
             .consoles
-            .lookup(id)
-            .map(|item| item.inner().clone())
+            .lookup(id, cred)
+            .map(|item| item.into_inner())
     }
 
-    fn register_volume<V>(&self, properties: Properties, volume: V) -> VolumeId
+    fn register_volume<V>(&self, properties: Properties, acl: Vec<String>, volume: V) -> VolumeId
     where
         V: Volume + 'static,
     {
-        let (id, item) = self.inner.volumes.add(properties, Arc::new(volume));
+        let (id, item) = self
+            .inner
+            .volumes
+            .add(acl.into(), properties, Arc::new(volume));
         info!("Registered volume: {} - {}", id, item);
         id
     }
 
     fn unregister_volume(&self, id: VolumeId) {
-        if let Some(item) = self.inner.volumes.lookup(id) {
+        self.inner.volumes.remove(id);
+        /*
+        if let Some(item) = self.inner.volumes.lookup(id, &()) {
             info!("Unregistering volume: {} - {}", id, item.name());
             self.inner.volumes.remove(id);
         }
+        */
     }
 
-    pub fn get_volume(&self, id: VolumeId) -> Option<Arc<dyn Volume>> {
+    pub fn get_volume(&self, id: VolumeId, roles: &DeviceRoleCred) -> Option<Arc<dyn Volume>> {
         self.inner
             .volumes
-            .lookup(id)
+            .lookup(id, roles)
             .map(registry::Item::into_inner)
     }
 
-    fn register_device<D>(&self, properties: Properties, device: D) -> DeviceId
+    fn register_device<D>(&self, properties: Properties, acl: Vec<String>, device: D) -> DeviceId
     where
         D: Device + 'static,
     {
-        let (id, item) = self.inner.devices.add(properties, Arc::new(device));
+        async fn monitor_device(server: Server, device: DeviceId, mut monitor: DeviceMonitor) {
+            let mut consoles: Vec<ConsoleId> = Default::default();
+            let mut volumes: Vec<VolumeId> = Default::default();
+            loop {
+                if let Some(d) = server.inner.devices.lookup_no_auth(device) {
+                    // Update consoles
+                    let new: Vec<_> = d.inner().consoles().iter().filter_map(|c| c.id).collect();
+
+                    // Add a ref for any console in new but not in consoles
+                    for c in new
+                        .iter()
+                        .filter(|i| !consoles.contains(i))
+                        .filter_map(|i| server.inner.consoles.lookup_no_auth(*i))
+                    {
+                        c.acl().add_ref(device, d.acl().clone().into());
+                    }
+
+                    // Drop a ref for any console in consoles but not in new
+                    for c in consoles
+                        .iter()
+                        .filter(|i| !new.contains(i))
+                        .filter_map(|i| server.inner.consoles.lookup_no_auth(*i))
+                    {
+                        c.acl().drop_ref(device);
+                    }
+
+                    consoles = new;
+
+                    let new: Vec<_> = d.inner().volumes().iter().filter_map(|v| v.id).collect();
+
+                    // Add a ref for any volume in new but not in volumes
+                    for v in new
+                        .iter()
+                        .filter(|i| !volumes.contains(i))
+                        .filter_map(|i| server.inner.volumes.lookup_no_auth(*i))
+                    {
+                        v.acl().add_ref(device, d.acl().clone().into());
+                    }
+
+                    // Drop a ref for any volume in volumes but not in new
+                    for v in volumes
+                        .iter()
+                        .filter(|i| !new.contains(i))
+                        .filter_map(|i| server.inner.volumes.lookup_no_auth(*i))
+                    {
+                        v.acl().drop_ref(device);
+                    }
+
+                    volumes = new;
+                } else {
+                    // If the device can't be found drop
+                    break;
+                }
+                if monitor.wait().await.is_err() {
+                    break;
+                }
+            }
+        }
+
+        let (id, item) = self.inner.devices.add(acl, properties, Arc::new(device));
         info!("Registered device: {} - {}", id, item);
+        let monitor = item.inner().updates();
+        tokio::spawn(monitor_device(self.clone(), id, monitor));
         id
     }
 
     fn unregister_device(&self, id: DeviceId) {
-        if let Some(item) = self.inner.devices.lookup(id) {
+        self.inner.devices.remove(id);
+        /*
+        if let Some(item) = self.inner.devices.lookup(id, &()) {
             info!("Unregistering device: {} - {}", id, item.name());
             self.inner.devices.remove(id);
         }
+            */
     }
 
-    fn get_device(&self, id: u64) -> Option<Arc<dyn Device>> {
+    fn get_device(&self, id: u64, roles: &Roles) -> Option<Arc<dyn Device>> {
         self.inner
             .devices
-            .lookup(DeviceId(id))
+            .lookup(DeviceId(id), roles)
             .map(registry::Item::into_inner)
     }
 
-    fn item_list_for(&self, type_: boardswarm_protocol::ItemType) -> ItemList {
+    fn item_list_for(&self, type_: boardswarm_protocol::ItemType, roles: &Roles) -> ItemList {
         match type_ {
-            boardswarm_protocol::ItemType::Actuator => to_item_list(&self.inner.actuators),
-            boardswarm_protocol::ItemType::Device => to_item_list(&self.inner.devices),
-            boardswarm_protocol::ItemType::Console => to_item_list(&self.inner.consoles),
-            boardswarm_protocol::ItemType::Volume => to_item_list(&self.inner.volumes),
+            boardswarm_protocol::ItemType::Actuator => to_item_list(&self.inner.actuators, roles),
+            boardswarm_protocol::ItemType::Device => to_item_list(&self.inner.devices, roles),
+            boardswarm_protocol::ItemType::Console => {
+                to_item_list(&self.inner.consoles, &DeviceRoleCred::Direct(roles.clone()))
+            }
+            boardswarm_protocol::ItemType::Volume => {
+                to_item_list(&self.inner.volumes, &DeviceRoleCred::Direct(roles.clone()))
+            }
         }
     }
 }
@@ -660,13 +763,18 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         &self,
         request: tonic::Request<ItemTypeRequest>,
     ) -> Result<tonic::Response<ItemList>, tonic::Status> {
-        let request = request.into_inner();
+        let roles: &Roles = request
+            .extensions()
+            .get()
+            .ok_or_else(|| tonic::Status::internal("No roles"))?;
+        warn!("{roles:#?}");
+        let request = request.get_ref();
         let type_ = request
             .r#type
             .try_into()
             .map_err(|_e| tonic::Status::invalid_argument("Unknown item type "))?;
 
-        Ok(tonic::Response::new(self.item_list_for(type_)))
+        Ok(tonic::Response::new(self.item_list_for(type_, roles)))
     }
 
     type MonitorStream = ItemMonitorStream;
@@ -674,20 +782,28 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         &self,
         request: tonic::Request<ItemTypeRequest>,
     ) -> Result<tonic::Response<Self::MonitorStream>, tonic::Status> {
-        let request = request.into_inner();
+        let roles: &Roles = request
+            .extensions()
+            .get()
+            .ok_or_else(|| tonic::Status::internal("No roles"))?;
+        let request = request.get_ref();
         let type_ = request
             .r#type
             .try_into()
             .map_err(|_e| tonic::Status::invalid_argument("Unknown item type "))?;
 
-        fn to_item_stream<I, T>(registry: &Registry<I, T>) -> ItemMonitorStream
+        fn to_item_stream<V, I, T>(
+            registry: &Registry<V, I, T>,
+            token: &V::Credential,
+        ) -> ItemMonitorStream
         where
             I: RegistryIndex + Into<u64> + Send + 'static,
             T: Clone + Send + 'static,
+            V: Verifier + Send + 'static,
         {
-            let monitor = registry.monitor();
+            let monitor = registry.monitor(token.clone());
             let initial = Ok(ItemEvent {
-                event: Some(Event::Add(to_item_list(registry))),
+                event: Some(Event::Add(to_item_list(registry, token))),
             });
             stream::once(async move { initial })
                 .chain(stream::unfold(monitor, |mut monitor| async move {
@@ -699,10 +815,7 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
                                     item: vec![boardswarm_protocol::Item {
                                         id: id.into(),
                                         name: item.name().to_string(),
-                                        instance: item
-                                            .properties()
-                                            .instance()
-                                            .map(ToOwned::to_owned),
+                                        instance: item.instance().map(ToOwned::to_owned),
                                     }],
                                 })),
                             }),
@@ -719,10 +832,14 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
                 .boxed()
         }
         let response = match type_ {
-            boardswarm_protocol::ItemType::Actuator => to_item_stream(&self.inner.actuators),
-            boardswarm_protocol::ItemType::Device => to_item_stream(&self.inner.devices),
-            boardswarm_protocol::ItemType::Console => to_item_stream(&self.inner.consoles),
-            boardswarm_protocol::ItemType::Volume => to_item_stream(&self.inner.volumes),
+            boardswarm_protocol::ItemType::Actuator => to_item_stream(&self.inner.actuators, roles),
+            boardswarm_protocol::ItemType::Device => to_item_stream(&self.inner.devices, roles),
+            boardswarm_protocol::ItemType::Console => {
+                to_item_stream(&self.inner.consoles, &DeviceRoleCred::Direct(roles.clone()))
+            }
+            boardswarm_protocol::ItemType::Volume => {
+                to_item_stream(&self.inner.volumes, &DeviceRoleCred::Direct(roles.clone()))
+            }
         };
         Ok(tonic::Response::new(response))
     }
@@ -731,7 +848,11 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         &self,
         request: tonic::Request<ItemPropertiesRequest>,
     ) -> Result<tonic::Response<ItemPropertiesMsg>, tonic::Status> {
-        let request = request.into_inner();
+        let roles: &Roles = request
+            .extensions()
+            .get()
+            .ok_or_else(|| tonic::Status::internal("No roles"))?;
+        let request = request.get_ref();
         let type_ = request
             .r#type
             .try_into()
@@ -740,25 +861,31 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
             boardswarm_protocol::ItemType::Actuator => self
                 .inner
                 .actuators
-                .lookup(ActuatorId(request.item))
+                .lookup(ActuatorId(request.item), roles)
                 .ok_or_else(|| tonic::Status::not_found("Item not found"))?
                 .properties(),
             boardswarm_protocol::ItemType::Device => self
                 .inner
                 .devices
-                .lookup(DeviceId(request.item))
+                .lookup(DeviceId(request.item), roles)
                 .ok_or_else(|| tonic::Status::not_found("Item not found"))?
                 .properties(),
             boardswarm_protocol::ItemType::Console => self
                 .inner
                 .consoles
-                .lookup(ConsoleId(request.item))
+                .lookup(
+                    ConsoleId(request.item),
+                    &DeviceRoleCred::Direct(roles.clone()),
+                )
                 .ok_or_else(|| tonic::Status::not_found("Item not found"))?
                 .properties(),
             boardswarm_protocol::ItemType::Volume => self
                 .inner
                 .volumes
-                .lookup(VolumeId(request.item))
+                .lookup(
+                    VolumeId(request.item),
+                    &DeviceRoleCred::Direct(roles.clone()),
+                )
                 .ok_or_else(|| tonic::Status::not_found("Item not found"))?
                 .properties(),
         };
@@ -780,9 +907,15 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         &self,
         request: tonic::Request<ConsoleConfigureRequest>,
     ) -> Result<tonic::Response<()>, tonic::Status> {
+        let roles: Roles = request
+            .extensions()
+            .get::<Roles>()
+            .ok_or_else(|| tonic::Status::internal("No roles"))?
+            .clone();
         let inner = request.into_inner();
         let console = ConsoleId(inner.console);
-        if let Some(console) = self.get_console(console) {
+        let cred = DeviceRoleCred::Direct(roles);
+        if let Some(console) = self.get_console(console, &cred) {
             console
                 .configure(Box::new(<dyn erased_serde::Deserializer>::erase(
                     inner.parameters.unwrap(),
@@ -799,9 +932,15 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         &self,
         request: tonic::Request<ConsoleOutputRequest>,
     ) -> Result<tonic::Response<Self::ConsoleStreamOutputStream>, tonic::Status> {
+        let roles: Roles = request
+            .extensions()
+            .get::<Roles>()
+            .ok_or_else(|| tonic::Status::internal("No roles"))?
+            .clone();
         let inner = request.into_inner();
+        let cred = DeviceRoleCred::Device(roles);
         let console = ConsoleId(inner.console);
-        if let Some(console) = self.get_console(console) {
+        if let Some(console) = self.get_console(console, &cred) {
             let stream = console.output_stream().await?;
             Ok(tonic::Response::new(stream))
         } else {
@@ -813,7 +952,13 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         &self,
         request: tonic::Request<Streaming<ConsoleInputRequest>>,
     ) -> Result<tonic::Response<()>, tonic::Status> {
+        let roles: Roles = request
+            .extensions()
+            .get::<Roles>()
+            .ok_or_else(|| tonic::Status::internal("No roles"))?
+            .clone();
         let mut rx = request.into_inner();
+        let cred = DeviceRoleCred::Device(roles);
 
         /* First message must select the target */
         let msg = match rx.message().await? {
@@ -823,7 +968,7 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         let console = if let Some(console_input_request::TargetOrData::Console(console)) =
             msg.target_or_data
         {
-            self.get_console(ConsoleId(console))
+            self.get_console(ConsoleId(console), &cred)
                 .ok_or_else(|| tonic::Status::not_found("No console by that name"))?
         } else {
             return Err(tonic::Status::invalid_argument(
@@ -848,13 +993,18 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         &self,
         request: tonic::Request<boardswarm_protocol::DeviceRequest>,
     ) -> Result<tonic::Response<Self::DeviceInfoStream>, tonic::Status> {
-        let request = request.into_inner();
-        if let Some(device) = self.get_device(request.device) {
+        let roles: &Roles = request
+            .extensions()
+            .get()
+            .ok_or_else(|| tonic::Status::internal("No roles"))?;
+        let request = request.get_ref();
+        if let Some(device) = self.get_device(request.device, roles) {
             let info = (&*device).into();
             let monitor = device.updates();
             let stream = Box::pin(stream::once(async move { Ok(info) }).chain(stream::unfold(
                 (device, monitor),
                 |(device, mut monitor)| async move {
+                    // TODO upgrade weak
                     monitor.wait().await.ok()?;
                     let info = (&*device).into();
                     Some((Ok(info), (device, monitor)))
@@ -870,8 +1020,12 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         &self,
         request: tonic::Request<boardswarm_protocol::DeviceModeRequest>,
     ) -> Result<tonic::Response<()>, tonic::Status> {
-        let request = request.into_inner();
-        if let Some(device) = self.get_device(request.device) {
+        let roles: &Roles = request
+            .extensions()
+            .get()
+            .ok_or_else(|| tonic::Status::internal("No roles"))?;
+        let request = request.get_ref();
+        if let Some(device) = self.get_device(request.device, roles) {
             match device.set_mode(&request.mode).await {
                 Ok(()) => Ok(tonic::Response::new(())),
                 Err(DeviceSetModeError::ModeNotFound) => {
@@ -893,9 +1047,14 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         &self,
         request: tonic::Request<boardswarm_protocol::ActuatorModeRequest>,
     ) -> Result<tonic::Response<()>, tonic::Status> {
+        let roles: Roles = request
+            .extensions()
+            .get::<Roles>()
+            .ok_or_else(|| tonic::Status::internal("No roles"))?
+            .clone();
         let inner = request.into_inner();
         let actuator = ActuatorId(inner.actuator);
-        if let Some(actuator) = self.get_actuator(actuator) {
+        if let Some(actuator) = self.get_actuator(actuator, &roles) {
             actuator
                 .set_mode(Box::new(<dyn erased_serde::Deserializer>::erase(
                     inner.parameters.unwrap(),
@@ -913,6 +1072,11 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         &self,
         request: tonic::Request<tonic::Streaming<boardswarm_protocol::VolumeIoRequest>>,
     ) -> Result<tonic::Response<Self::VolumeIoStream>, tonic::Status> {
+        let roles: Roles = request
+            .extensions()
+            .get::<Roles>()
+            .ok_or_else(|| tonic::Status::internal("No roles"))?
+            .clone();
         let mut rx = request.into_inner();
         let msg = match rx.message().await? {
             Some(msg) => msg,
@@ -926,7 +1090,7 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         if let Some(volume_io_request::TargetOrRequest::Target(target)) = msg.target_or_request {
             let volume = VolumeId(target.volume);
             let volume = self
-                .get_volume(volume)
+                .get_volume(volume, &DeviceRoleCred::Device(roles))
                 .ok_or_else(|| tonic::Status::not_found("No volume by that name"))?;
 
             let (mut reply, reply_stream) = VolumeIoReplies::new();
@@ -991,10 +1155,14 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         &self,
         request: tonic::Request<VolumeRequest>,
     ) -> Result<tonic::Response<()>, tonic::Status> {
-        let request = request.into_inner();
+        let roles: &Roles = request
+            .extensions()
+            .get()
+            .ok_or_else(|| tonic::Status::internal("No roles"))?;
+        let request = request.get_ref();
         let volume = VolumeId(request.volume);
         let volume = self
-            .get_volume(volume)
+            .get_volume(volume, &DeviceRoleCred::Device(roles.clone()))
             .ok_or_else(|| tonic::Status::not_found("Volume not found"))?;
         volume.commit().await?;
         Ok(tonic::Response::new(()))
@@ -1004,10 +1172,14 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         &self,
         request: tonic::Request<VolumeEraseRequest>,
     ) -> Result<tonic::Response<()>, tonic::Status> {
-        let request = request.into_inner();
+        let roles: &Roles = request
+            .extensions()
+            .get()
+            .ok_or_else(|| tonic::Status::internal("No roles"))?;
+        let request = request.get_ref();
         let volume = VolumeId(request.volume);
         let volume = self
-            .get_volume(volume)
+            .get_volume(volume, &DeviceRoleCred::Device(roles.clone()))
             .ok_or_else(|| tonic::Status::not_found("Volume not found"))?;
         volume.erase(&request.target).await?;
         Ok(tonic::Response::new(()))
@@ -1017,10 +1189,14 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         &self,
         request: tonic::Request<VolumeRequest>,
     ) -> Result<tonic::Response<VolumeInfoMsg>, tonic::Status> {
-        let request = request.into_inner();
+        let roles: &Roles = request
+            .extensions()
+            .get()
+            .ok_or_else(|| tonic::Status::internal("No roles"))?;
+        let request = request.get_ref();
         let volume = VolumeId(request.volume);
         let volume = self
-            .get_volume(volume)
+            .get_volume(volume, &DeviceRoleCred::Device(roles.clone()))
             .ok_or_else(|| tonic::Status::not_found("Volume not found"))?;
 
         let (target, exhaustive) = volume.targets();
@@ -1041,30 +1217,6 @@ fn parse_listen_address(addr: &str) -> Result<SocketAddr, AddrParseError> {
         Ok(SocketAddr::new(ip, boardswarm_protocol::DEFAULT_PORT))
     }
 }
-
-async fn setup_auth_layer(
-    config: &[config::Authentication],
-) -> anyhow::Result<OAuth2ResourceServer> {
-    let mut resource =
-        OAuth2ResourceServer::builder().auth_resolver(Arc::new(KidAuthorizerResolver {}));
-    for auth in config {
-        let tenant = match auth {
-            config::Authentication::Oidc { uri, audience, .. } => {
-                TenantConfiguration::builder(uri)
-                    .audiences(audience.as_slice())
-                    .build()
-                    .await?
-            }
-            config::Authentication::Jwks { path } => {
-                let jwks = tokio::fs::read_to_string(path).await?;
-                TenantConfiguration::static_builder(jwks).build()?
-            }
-        };
-        resource = resource.add_tenant(tenant);
-    }
-    Ok(resource.build().await?)
-}
-
 #[derive(Debug, clap::Parser)]
 struct Opts {
     #[clap(short, long)]
@@ -1098,14 +1250,15 @@ async fn main() -> anyhow::Result<()> {
     let authentication: Vec<_> = config
         .server
         .authentication
-        .iter()
+        .into_iter()
         .map(|a| {
-            if let config::Authentication::Jwks { path } = a {
+            if let config::Authentication::Jwks { path, identifier } = a {
                 config::Authentication::Jwks {
                     path: opts.config.with_file_name(path),
+                    identifier,
                 }
             } else {
-                a.clone()
+                a
             }
         })
         .collect();
@@ -1121,78 +1274,55 @@ async fn main() -> anyhow::Result<()> {
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf(),
     );
+
     for d in config.devices {
+        let acl = d.acl.clone();
         let device = crate::config_device::Device::from_config(d, server.clone());
         let properties = Properties::new(device.name());
-        server.register_device(properties, device);
+        server.register_device(properties, acl, device);
     }
 
     let local = tokio::task::LocalSet::new();
     let serial = config
         .providers
         .iter()
-        .find(|p| p.name == serial::PROVIDER)
-        .map(|p| serial::SerialDevices::new(&p.name, server.clone()));
+        .find(|p| p.provider == serial::PROVIDER)
+        .map(|p| serial::SerialDevices::new(Provider::new(server.clone(), p.clone())));
     for p in config.providers {
-        match p.provider.as_str() {
+        let p = Provider::new(server.clone(), p);
+        match p.provider() {
             dfu::PROVIDER => {
-                local.spawn_local(dfu::start_provider(p.name, server.clone()));
+                local.spawn_local(dfu::start_provider(p));
             }
             hifive_p550_mcu::PROVIDER => match serial {
-                Some(ref s) => s.add_provider(HifiveP550MCUProvider::new(
-                    p.name,
-                    p.parameters.unwrap_or_default(),
-                    server.clone(),
-                )),
+                Some(ref s) => s.add_provider(HifiveP550MCUProvider::new(p)),
                 None => {
                     bail!("Hifive P550 MCU provider requires the serial provider to be enabled")
                 }
             },
             mediatek_brom::PROVIDER => match serial {
-                Some(ref s) => s.add_provider(MediatekBromProvider::new(p.name, server.clone())),
+                Some(ref s) => s.add_provider(MediatekBromProvider::new(p)),
                 None => {
                     bail!("Mediatek brom provider requires the serial provider to be enabled")
                 }
             },
             rockusb::PROVIDER => {
-                local.spawn_local(rockusb::start_provider(p.name, server.clone()));
+                local.spawn_local(rockusb::start_provider(p));
             }
             serial::PROVIDER => {
                 // Precreated already
             }
             fastboot::PROVIDER => {
-                local.spawn_local(fastboot::start_provider(
-                    p.name,
-                    p.parameters,
-                    server.clone(),
-                ));
+                local.spawn_local(fastboot::start_provider(p));
             }
             eswin_eic7700_storage::PROVIDER => {
-                local.spawn_local(eswin_eic7700_storage::start_provider(
-                    p.name,
-                    p.parameters,
-                    server.clone(),
-                ));
+                local.spawn_local(eswin_eic7700_storage::start_provider(p));
             }
             gpio::PROVIDER => {
-                local.spawn_local(gpio::start_provider(
-                    p.name,
-                    p.parameters.context("Missing gpio provider parameters")?,
-                    server.clone(),
-                ));
+                local.spawn_local(gpio::start_provider(p));
             }
-            pdudaemon::PROVIDER => pdudaemon::start_provider(
-                p.name,
-                p.parameters
-                    .context("Missing pdudaemon provider parameters")?,
-                server.clone(),
-            ),
-            boardswarm_provider::PROVIDER => boardswarm_provider::start_provider(
-                p.name,
-                p.parameters
-                    .context("Missing boardswarm provider parameters")?,
-                server.clone(),
-            ),
+            pdudaemon::PROVIDER => pdudaemon::start_provider(p),
+            boardswarm_provider::PROVIDER => boardswarm_provider::start_provider(p),
             t => warn!("Unknown provider: {t}"),
         }
     }
@@ -1204,10 +1334,15 @@ async fn main() -> anyhow::Result<()> {
         boardswarm_protocol::boardswarm_server::BoardswarmServer::new(server.clone()),
     );
 
-    let auth = setup_auth_layer(&server.inner.auth_info).await?;
+    let auth = authentication::setup_auth_layer(&server.inner.auth_info).await?;
     let router = boardswarm
         .into_axum_router()
+        // Middle Layers in reverse order!
+        // Extract and insert roles from the jwt claims
+        .layer(RoleLayer::new(config.roles))
+        // Authenticate
         .layer(auth.into_layer())
+        // Redirect LoginInfo before authentication
         .route_service(
             &format!("/{}/LoginInfo",
           <boardswarm_protocol::boardswarm_server::BoardswarmServer<Server>
