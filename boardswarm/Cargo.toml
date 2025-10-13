@@ -22,7 +22,7 @@ serde_yaml = "0.9.25"
 thiserror = "2.0.7"
 tokio = { version = "1.44.2", features = ["full"] }
 tokio-serial = "5.4.4"
-tokio-udev = "0.9"
+tokio-udev = "0.10"
 tokio-util = { version = "0.7.4", features = ["compat"]}
 tonic = "0.14"
 tracing = "0.1.41"
