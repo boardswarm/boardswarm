@@ -33,7 +33,7 @@ tokio-stream = { version = "0.1.16", features = ["sync"] }
 boardswarm-client = { version = "0.0.1", path = "../boardswarm-client" }
 tokio-gpiod = "0.3.0"
 rockusb = { version = "0.3.0", features = [ "nusb" ] }
-axum-server = { version = "0.7.1", features = ["tls-rustls-no-provider"] }
+axum-server = { version = "0.7.3", features = ["tls-rustls-no-provider"] }
 nusb = "0.1.14"
 dfu-nusb = "0.1.0"
 mediatek-brom = { version = "0.2.0", features = ["tokio"] }
