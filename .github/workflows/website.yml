@@ -20,7 +20,7 @@ jobs:
         run: |
           sphinx-build website _build
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         with:
           path: _build/
