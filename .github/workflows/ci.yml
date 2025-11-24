@@ -15,7 +15,7 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y protobuf-compiler libudev-dev
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master # avoid the tag here to prevent dependabot from updating it
         with:
           toolchain: "1.85"
@@ -25,7 +25,7 @@ jobs:
     name: cargo fmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master # avoid the tag here to prevent dependabot from updating it
         with:
           toolchain: "1.85"
@@ -40,7 +40,7 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y protobuf-compiler libudev-dev
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master # avoid the tag here to prevent dependabot from updating it
         with:
           toolchain: "1.85"
@@ -55,7 +55,7 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y protobuf-compiler libudev-dev
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master # avoid the tag here to prevent dependabot from updating it
         with:
           toolchain: "nightly-2025-02-01"
@@ -73,7 +73,7 @@ jobs:
     # Prevent sudden announcement of a new advisory from failing ci:
     continue-on-error: ${{ matrix.checks == 'advisories' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check ${{ matrix.checks }}
@@ -97,7 +97,7 @@ jobs:
     steps:
       - name: Setup Docker buildx
         uses: docker/setup-buildx-action@v3
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5

@@ -29,7 +29,7 @@ jobs:
     env:
       OUTDIR: boardswarm-${{matrix.architecture.debian}}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - run: cat ${GITHUB_ENV}
       - run: |
           dpkg --add-architecture ${{matrix.architecture.debian}}
@@ -62,7 +62,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Download all workflow run artifacts
         uses: actions/download-artifact@v6
       - run: find
