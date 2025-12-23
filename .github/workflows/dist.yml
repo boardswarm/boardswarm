@@ -64,7 +64,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Download all workflow run artifacts
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
       - run: find
       - run: |
           gh release delete latest --yes || true
