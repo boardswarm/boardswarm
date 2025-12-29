@@ -80,7 +80,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -91,7 +91,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -309,7 +309,7 @@ dependencies = [
  "humantime-serde",
  "jsonwebtoken",
  "mediatek-brom",
- "nusb",
+ "nusb 0.2.1",
  "pdudaemon-client",
  "proc-mounts",
  "regex",
@@ -807,7 +807,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0b2472de95ea9a994cc90d8b5ccc62ded095714ffb16b2b3059cd805437b4c3"
 dependencies = [
  "dfu-core",
- "nusb",
+ "nusb 0.1.14",
  "thiserror 2.0.17",
 ]
 
@@ -915,7 +915,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -945,7 +945,7 @@ checksum = "872b35ed689318d8bf6ee79645b9c56f501999d7373d5ca5618117e45405ca35"
 dependencies = [
  "bytes",
  "futures",
- "nusb",
+ "nusb 0.1.14",
  "thiserror 2.0.17",
  "tracing",
 ]
@@ -1714,6 +1714,12 @@ checksum = "d26c52dbd32dccf2d10cac7725f8eae5296885fb5703b261f7d0a0739ec807ab"
 
 [[package]]
 name = "linux-raw-sys"
+version = "0.9.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd945864f07fe9f5371a27ad7b52a172b4b499999f1d97574c9fa68373937e12"
+
+[[package]]
+name = "linux-raw-sys"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df1d3c3b53da64cf5760482273a98e575c651a67eec7f77df96b5b642de8f039"
@@ -2011,7 +2017,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2098,6 +2104,24 @@ dependencies = [
  "rustix 0.38.44",
  "slab",
  "windows-sys 0.48.0",
+]
+
+[[package]]
+name = "nusb"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0226f4db3ee78f820747cf713767722877f6449d7a0fcfbf2ec3b840969763f"
+dependencies = [
+ "core-foundation 0.10.1",
+ "core-foundation-sys",
+ "futures-core",
+ "io-kit-sys",
+ "linux-raw-sys 0.9.4",
+ "log",
+ "once_cell",
+ "rustix 1.1.3",
+ "slab",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2592,7 +2616,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2864,7 +2888,7 @@ dependencies = [
  "futures",
  "maybe-async-cfg",
  "num_enum",
- "nusb",
+ "nusb 0.1.14",
  "thiserror 2.0.17",
 ]
 
@@ -2897,7 +2921,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.11.0",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3416,7 +3440,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.3",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
