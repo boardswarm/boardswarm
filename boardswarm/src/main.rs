@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use thiserror::Error;
+use ti_xds::TiXdsProvider;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Streaming;
@@ -41,6 +42,7 @@ mod pdudaemon;
 mod registry;
 mod rockusb;
 mod serial;
+mod ti_xds;
 mod udev;
 mod utils;
 
@@ -1161,6 +1163,14 @@ async fn main() -> anyhow::Result<()> {
             rockusb::PROVIDER => {
                 local.spawn_local(rockusb::start_provider(p.name, server.clone()));
             }
+            ti_xds::PROVIDER => match serial {
+                Some(ref s) => {
+                    s.add_provider(TiXdsProvider::new(p.name, p.parameters, server.clone()))
+                }
+                None => {
+                    bail!("TI XDS provider requires the serial provider to be enabled")
+                }
+            },
             serial::PROVIDER => {
                 // Precreated already
             }
