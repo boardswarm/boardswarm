@@ -35,3 +35,4 @@ Full source code can be found in our github repository:
    guides/setup-server.rst
    guides/setup-client.rst
    guides/basic-functionality.rst
+   guides/gpio-control.rst
