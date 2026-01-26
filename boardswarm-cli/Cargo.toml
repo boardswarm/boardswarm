@@ -14,7 +14,7 @@ bytes = "1.10.1"
 clap = { version = "4.5", features = ["derive"] }
 futures = "0.3.31"
 mprocs-vt100 = "0.7.0"
-nix = { version = "0.30.1", features = ["term"] }
+nix = { version = "0.31.1", features = ["term"] }
 boardswarm-protocol = { version = "0.0.1", path = "../boardswarm-protocol" }
 boardswarm-client = { version = "0.0.1", path = "../boardswarm-client" }
 tokio = { version = "1.44.2", features = ["full"] }
