@@ -40,7 +40,7 @@ mediatek-brom = { version = "0.2.0", features = ["tokio"] }
 fastboot-protocol = "0.3.1"
 android-sparse-image = "0.1.2"
 jsonwebtoken = "9.3.1"
-tower-oauth2-resource-server = { version = "0.4.0", default-features = false }
+tower-oauth2-resource-server = { version = "0.11.0", default-features = false }
 reqwest = { version = "0.12.15", default-features = false, features = ["rustls-tls-native-roots"] }
 strum = { version = "0.27.1", features = ["derive"] }
 strum_macros = "0.27.1"
