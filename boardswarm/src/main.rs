@@ -26,7 +26,7 @@ use tonic::Streaming;
 use tower_oauth2_resource_server::auth_resolver::KidAuthorizerResolver;
 use tower_oauth2_resource_server::server::OAuth2ResourceServer;
 use tower_oauth2_resource_server::tenant::TenantConfiguration;
-use tracing::{error, info, instrument, warn};
+use tracing::{info, instrument, warn};
 
 mod boardswarm_provider;
 mod config;
