@@ -99,18 +99,18 @@ impl Terminal {
 
     fn scroll_up(&mut self) {
         let offset = self.parser.screen().scrollback();
-        self.parser.set_scrollback(offset + 1)
+        self.parser.screen_mut().set_scrollback(offset + 1)
     }
 
     fn scroll_down(&mut self) {
         let offset = self.parser.screen().scrollback();
         if offset > 0 {
-            self.parser.set_scrollback(offset - 1)
+            self.parser.screen_mut().set_scrollback(offset - 1)
         }
     }
 
     fn scroll_reset(&mut self) {
-        self.parser.set_scrollback(0)
+        self.parser.screen_mut().set_scrollback(0)
     }
 
     fn process(&mut self, bytes: &[u8]) {
@@ -139,7 +139,9 @@ impl Terminal {
                 }
             }
         };
-        self.parser.set_size(term_size.height, term_size.width);
+        self.parser
+            .screen_mut()
+            .set_size(term_size.height, term_size.width);
 
         let screen = self.parser.screen();
         let term = ui_term::UiTerm::new(screen);
