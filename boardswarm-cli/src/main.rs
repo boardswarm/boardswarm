@@ -994,6 +994,10 @@ async fn print_device(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Temporarily set the default rustls crypto provider to aws-lc-rs until
+    // reqwest allows this by default via a feature
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     let opt = Opts::parse();
     if !matches!(opt.command, Command::Ui { .. }) {
         tracing_subscriber::fmt::init();
