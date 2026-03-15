@@ -247,7 +247,7 @@ where
         inner
             .contents
             .iter()
-            .find(|(&_id, item)| item.properties.matches(matches))
+            .find(|&(&_id, item)| item.properties.matches(matches))
             .map(|(&id, item)| (id, item.clone()))
     }
 

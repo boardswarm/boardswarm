@@ -2,12 +2,12 @@ use std::task::Poll;
 use std::{num::ParseIntError, str::FromStr};
 
 use bytes::Bytes;
-use futures::{pin_mut, ready, Stream, StreamExt};
+use futures::{Stream, StreamExt, pin_mut, ready};
 use ratatui::{
+    Terminal as TuiTerminal,
     backend::CrosstermBackend,
     layout::{Rect, Size},
     widgets::{Block, Borders},
-    Terminal as TuiTerminal,
 };
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt};

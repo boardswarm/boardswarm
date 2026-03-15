@@ -1,16 +1,16 @@
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use boardswarm_protocol::item_event::Event;
 use boardswarm_protocol::{
-    console_input_request, volume_io_reply, volume_io_request, ConsoleConfigureRequest,
-    ConsoleInputRequest, ConsoleOutputRequest, ItemEvent, ItemList, ItemPropertiesMsg,
-    ItemPropertiesRequest, ItemTypeRequest, LoginInfoList, Property, VolumeEraseRequest,
-    VolumeInfoMsg, VolumeIoTargetReply, VolumeRequest,
+    ConsoleConfigureRequest, ConsoleInputRequest, ConsoleOutputRequest, ItemEvent, ItemList,
+    ItemPropertiesMsg, ItemPropertiesRequest, ItemTypeRequest, LoginInfoList, Property,
+    VolumeEraseRequest, VolumeInfoMsg, VolumeIoTargetReply, VolumeRequest, console_input_request,
+    volume_io_reply, volume_io_request,
 };
 use bytes::Bytes;
 use clap::Parser;
+use futures::Sink;
 use futures::prelude::*;
 use futures::stream::BoxStream;
-use futures::Sink;
 use hifive_p550_mcu::HifiveP550MCUProvider;
 use mediatek_brom::MediatekBromProvider;
 use registry::{Properties, Registry, RegistryIndex};
@@ -83,7 +83,7 @@ trait Console: std::fmt::Debug + Send + Sync {
         &self,
     ) -> Result<Pin<Box<dyn Sink<Bytes, Error = ConsoleError> + Send>>, ConsoleError>;
     async fn output(&self)
-        -> Result<BoxStream<'static, Result<Bytes, ConsoleError>>, ConsoleError>;
+    -> Result<BoxStream<'static, Result<Bytes, ConsoleError>>, ConsoleError>;
 }
 
 type ConsoleOutputStream =
@@ -782,15 +782,16 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
     ) -> Result<tonic::Response<()>, tonic::Status> {
         let inner = request.into_inner();
         let console = ConsoleId(inner.console);
-        if let Some(console) = self.get_console(console) {
-            console
-                .configure(Box::new(<dyn erased_serde::Deserializer>::erase(
-                    inner.parameters.unwrap(),
-                )))
-                .unwrap();
-            Ok(tonic::Response::new(()))
-        } else {
-            Err(tonic::Status::invalid_argument("Can't find console"))
+        match self.get_console(console) {
+            Some(console) => {
+                console
+                    .configure(Box::new(<dyn erased_serde::Deserializer>::erase(
+                        inner.parameters.unwrap(),
+                    )))
+                    .unwrap();
+                Ok(tonic::Response::new(()))
+            }
+            _ => Err(tonic::Status::invalid_argument("Can't find console")),
         }
     }
 
@@ -801,11 +802,12 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
     ) -> Result<tonic::Response<Self::ConsoleStreamOutputStream>, tonic::Status> {
         let inner = request.into_inner();
         let console = ConsoleId(inner.console);
-        if let Some(console) = self.get_console(console) {
-            let stream = console.output_stream().await?;
-            Ok(tonic::Response::new(stream))
-        } else {
-            Err(tonic::Status::invalid_argument("Can't find output console"))
+        match self.get_console(console) {
+            Some(console) => {
+                let stream = console.output_stream().await?;
+                Ok(tonic::Response::new(stream))
+            }
+            _ => Err(tonic::Status::invalid_argument("Can't find output console")),
         }
     }
 
@@ -849,20 +851,21 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         request: tonic::Request<boardswarm_protocol::DeviceRequest>,
     ) -> Result<tonic::Response<Self::DeviceInfoStream>, tonic::Status> {
         let request = request.into_inner();
-        if let Some(device) = self.get_device(request.device) {
-            let info = (&*device).into();
-            let monitor = device.updates();
-            let stream = Box::pin(stream::once(async move { Ok(info) }).chain(stream::unfold(
-                (device, monitor),
-                |(device, mut monitor)| async move {
-                    monitor.wait().await.ok()?;
-                    let info = (&*device).into();
-                    Some((Ok(info), (device, monitor)))
-                },
-            )));
-            Ok(tonic::Response::new(stream))
-        } else {
-            Err(tonic::Status::not_found("No such device"))
+        match self.get_device(request.device) {
+            Some(device) => {
+                let info = (&*device).into();
+                let monitor = device.updates();
+                let stream = Box::pin(stream::once(async move { Ok(info) }).chain(stream::unfold(
+                    (device, monitor),
+                    |(device, mut monitor)| async move {
+                        monitor.wait().await.ok()?;
+                        let info = (&*device).into();
+                        Some((Ok(info), (device, monitor)))
+                    },
+                )));
+                Ok(tonic::Response::new(stream))
+            }
+            _ => Err(tonic::Status::not_found("No such device")),
         }
     }
 
@@ -871,8 +874,8 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         request: tonic::Request<boardswarm_protocol::DeviceModeRequest>,
     ) -> Result<tonic::Response<()>, tonic::Status> {
         let request = request.into_inner();
-        if let Some(device) = self.get_device(request.device) {
-            match device.set_mode(&request.mode).await {
+        match self.get_device(request.device) {
+            Some(device) => match device.set_mode(&request.mode).await {
                 Ok(()) => Ok(tonic::Response::new(())),
                 Err(DeviceSetModeError::ModeNotFound) => {
                     Err(tonic::Status::not_found("No mode by that name"))
@@ -883,9 +886,8 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
                 Err(DeviceSetModeError::ActuatorFailed(_)) => {
                     Err(tonic::Status::aborted("Actuator failed"))
                 }
-            }
-        } else {
-            Err(tonic::Status::not_found("No device by that id"))
+            },
+            _ => Err(tonic::Status::not_found("No device by that id")),
         }
     }
 
@@ -895,16 +897,17 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
     ) -> Result<tonic::Response<()>, tonic::Status> {
         let inner = request.into_inner();
         let actuator = ActuatorId(inner.actuator);
-        if let Some(actuator) = self.get_actuator(actuator) {
-            actuator
-                .set_mode(Box::new(<dyn erased_serde::Deserializer>::erase(
-                    inner.parameters.unwrap(),
-                )))
-                .await
-                .unwrap();
-            Ok(tonic::Response::new(()))
-        } else {
-            Err(tonic::Status::invalid_argument("Can't find actuator"))
+        match self.get_actuator(actuator) {
+            Some(actuator) => {
+                actuator
+                    .set_mode(Box::new(<dyn erased_serde::Deserializer>::erase(
+                        inner.parameters.unwrap(),
+                    )))
+                    .await
+                    .unwrap();
+                Ok(tonic::Response::new(()))
+            }
+            _ => Err(tonic::Status::invalid_argument("Can't find actuator")),
         }
     }
 
@@ -919,7 +922,7 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
             None => {
                 return Err(tonic::Status::invalid_argument(
                     "No uploader/target selection",
-                ))
+                ));
             }
         };
 

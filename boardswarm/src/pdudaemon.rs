@@ -5,8 +5,8 @@ use serde::Deserialize;
 use tracing::instrument;
 
 use crate::{
-    registry::{self, Properties},
     ActuatorError, Server,
+    registry::{self, Properties},
 };
 
 pub const PROVIDER: &str = "pdudaemon";

@@ -15,7 +15,7 @@ use tracing::instrument;
 use tracing::{info, warn};
 
 use crate::{
-    registry, udev::DeviceEvent, Server, Volume, VolumeError, VolumeTarget, VolumeTargetInfo,
+    Server, Volume, VolumeError, VolumeTarget, VolumeTargetInfo, registry, udev::DeviceEvent,
 };
 pub const PROVIDER: &str = "dfu";
 
