@@ -1,17 +1,17 @@
 use std::path::PathBuf;
 
 use bytes::{Bytes, BytesMut};
-use mediatek_brom::{io::BromExecuteAsync, Brom};
+use mediatek_brom::{Brom, io::BromExecuteAsync};
 use serde::Deserialize;
 use tokio::sync::oneshot;
 use tokio_serial::SerialPortBuilderExt;
 use tracing::{info, instrument, warn};
 
 use crate::{
+    Server, Volume, VolumeError, VolumeTarget, VolumeTargetInfo,
     registry::{self, Properties},
     serial::SerialProvider,
     udev::{Device, DeviceRegistrations, PreRegistration},
-    Server, Volume, VolumeError, VolumeTarget, VolumeTargetInfo,
 };
 
 pub const PROVIDER: &str = "mediatek-brom";
@@ -52,21 +52,21 @@ impl SerialProvider for MediatekBromProvider {
             return false;
         };
 
-        if let Some(node) = device.devnode() {
-            if let Some(name) = node.file_name() {
-                let prereg = self.registrations.pre_register(device, seqnum);
+        if let Some(node) = device.devnode()
+            && let Some(name) = node.file_name()
+        {
+            let prereg = self.registrations.pre_register(device, seqnum);
 
-                let mut properties = device.properties(name.to_string_lossy());
-                properties.extend(provider_properties);
-                tokio::spawn(setup_volume(
-                    prereg,
-                    node.to_path_buf(),
-                    self.parameters.address,
-                    properties,
-                ));
+            let mut properties = device.properties(name.to_string_lossy());
+            properties.extend(provider_properties);
+            tokio::spawn(setup_volume(
+                prereg,
+                node.to_path_buf(),
+                self.parameters.address,
+                properties,
+            ));
 
-                return true;
-            }
+            return true;
         }
         false
     }

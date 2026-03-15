@@ -7,8 +7,8 @@ use std::{
     task::Poll,
 };
 
-use crate::{registry::Properties, ActuatorId, ConsoleId, Server, VolumeId};
-use futures::{ready, Stream};
+use crate::{ActuatorId, ConsoleId, Server, VolumeId, registry::Properties};
+use futures::{Stream, ready};
 use tokio_udev::{AsyncMonitorSocket, Enumerator};
 use tracing::{info, warn};
 
@@ -234,10 +234,9 @@ impl Stream for DeviceStream {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
         let me = self.get_mut();
-        if let Some((seqnum, device)) = me.existing.pop_front() {
-            Poll::Ready(Some(DeviceEvent::Add { device, seqnum }))
-        } else {
-            loop {
+        match me.existing.pop_front() {
+            Some((seqnum, device)) => Poll::Ready(Some(DeviceEvent::Add { device, seqnum })),
+            _ => loop {
                 let Some(event) = ready!(Pin::new(&mut me.monitor).poll_next(cx)) else {
                     return Poll::Ready(None);
                 };
@@ -253,14 +252,14 @@ impl Stream for DeviceStream {
                         return Poll::Ready(Some(DeviceEvent::Add {
                             device: Device(event.device()),
                             seqnum: event.sequence_number(),
-                        }))
+                        }));
                     }
                     tokio_udev::EventType::Remove => {
-                        return Poll::Ready(Some(DeviceEvent::Remove(Device(event.device()))))
+                        return Poll::Ready(Some(DeviceEvent::Remove(Device(event.device()))));
                     }
                     _ => continue,
                 }
-            }
+            },
         }
     }
 }
@@ -300,10 +299,11 @@ impl Device {
             );
             let mut v = if reasonable {
                 VecDeque::new()
-            } else if let Some(p) = device.parent() {
-                find_reasonable_parent(p)
             } else {
-                VecDeque::new()
+                match device.parent() {
+                    Some(p) => find_reasonable_parent(p),
+                    _ => VecDeque::new(),
+                }
             };
             v.push_back(device);
             v

@@ -1,12 +1,13 @@
 [package]
 name = "boardswarm-client"
 version = "0.0.1"
-edition = "2021"
+edition.workspace = true
 authors = ["Sjoerd Simons <sjoerd@collabora.com>"]
 license = "MIT OR Apache-2.0"
 description = "Boardswarm client library"
 repository = "https://github.com/boardswarm/boardswarm"
 readme = "README.md"
+rust-version.workspace = true
 
 [dependencies]
 anyhow = "1.0.68"

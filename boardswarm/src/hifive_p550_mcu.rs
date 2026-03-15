@@ -5,17 +5,17 @@ use strum::{EnumIter, IntoEnumIterator};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf};
 use tokio::sync::{mpsc, oneshot};
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 use tokio_serial::{SerialPortBuilderExt, SerialStream};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::udev::{DeviceRegistrations, PreRegistration};
-use crate::{get_bit, ActuatorError};
+use crate::{ActuatorError, get_bit};
 use crate::{
+    Server,
     registry::{self, Properties},
     serial::SerialProvider,
     udev::Device,
-    Server,
 };
 
 pub const PROVIDER: &str = "hifive-p550-mcu";
@@ -136,26 +136,26 @@ impl SerialProvider for HifiveP550MCUProvider {
         if device.property_u64("ID_MODEL_ID", 16) != Some(0x6011) {
             return false;
         };
-        if let Some(node) = device.devnode() {
-            if let Some(name) = node.file_name() {
-                let mut properties = device.properties(name.to_string_lossy());
-                if !properties.matches(&self.parameters.match_) {
-                    debug!(
-                        "Ignoring device {} - {:?}",
-                        device.syspath().display(),
-                        properties,
-                    );
-                    return false;
-                }
-                properties.extend(provider_properties);
-                let prereg = self.registrations.pre_register(device, seqnum);
-                tokio::spawn(setup_hifive_p550_mcu(
-                    prereg,
-                    node.to_path_buf(),
+        if let Some(node) = device.devnode()
+            && let Some(name) = node.file_name()
+        {
+            let mut properties = device.properties(name.to_string_lossy());
+            if !properties.matches(&self.parameters.match_) {
+                debug!(
+                    "Ignoring device {} - {:?}",
+                    device.syspath().display(),
                     properties,
-                ));
-                return true;
+                );
+                return false;
             }
+            properties.extend(provider_properties);
+            let prereg = self.registrations.pre_register(device, seqnum);
+            tokio::spawn(setup_hifive_p550_mcu(
+                prereg,
+                node.to_path_buf(),
+                properties,
+            ));
+            return true;
         }
         false
     }

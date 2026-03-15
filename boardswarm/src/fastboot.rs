@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use android_sparse_image::{ChunkHeader, CHUNK_HEADER_BYTES_LEN, FILE_HEADER_BYTES_LEN};
+use android_sparse_image::{CHUNK_HEADER_BYTES_LEN, ChunkHeader, FILE_HEADER_BYTES_LEN};
 use anyhow::Context;
 use bytes::{Bytes, BytesMut};
 use fastboot_protocol::nusb::{DownloadError, NusbFastBoot};
@@ -11,9 +11,9 @@ use tracing::{debug, warn};
 use tracing::{info, instrument};
 
 use crate::{
+    Server, Volume, VolumeError, VolumeTarget, VolumeTargetInfo,
     registry::{self, Properties},
     udev::{DeviceEvent, DeviceRegistrations, PreRegistration, UsbInterface},
-    Server, Volume, VolumeError, VolumeTarget, VolumeTargetInfo,
 };
 
 pub const PROVIDER: &str = "fastboot";
@@ -230,11 +230,7 @@ impl FastbootChunk {
     // Padding required at the end in bytes
     fn end_padding(&self) -> usize {
         let rem = self.data_bytes() % FASTBOOT_BLOCKSIZE;
-        if rem > 0 {
-            FASTBOOT_BLOCKSIZE - rem
-        } else {
-            0
-        }
+        if rem > 0 { FASTBOOT_BLOCKSIZE - rem } else { 0 }
     }
 }
 

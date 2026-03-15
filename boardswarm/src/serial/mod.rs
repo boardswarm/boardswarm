@@ -16,7 +16,7 @@ use futures::prelude::*;
 use futures::stream::Stream;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, WriteHalf},
-    sync::{broadcast, Mutex as AsyncMutex},
+    sync::{Mutex as AsyncMutex, broadcast},
 };
 use tokio_serial::{SerialPortBuilderExt, SerialStream};
 
@@ -66,16 +66,16 @@ impl SerialDevices {
                     if providers.iter_mut().any(|p| p.handle(&device, seqnum)) {
                         continue;
                     }
-                    if let Some(node) = device.devnode() {
-                        if let Some(name) = node.file_name() {
-                            let name = name.to_string_lossy().into_owned();
-                            let path = node.to_string_lossy().into_owned();
-                            let console = SerialPort::new(path);
-                            let mut properties = device.properties(name);
-                            properties.extend(provider_properties);
-                            let id = self.server.register_console(properties, console);
-                            registrations.insert(device.syspath().to_path_buf(), id);
-                        }
+                    if let Some(node) = device.devnode()
+                        && let Some(name) = node.file_name()
+                    {
+                        let name = name.to_string_lossy().into_owned();
+                        let path = node.to_string_lossy().into_owned();
+                        let console = SerialPort::new(path);
+                        let mut properties = device.properties(name);
+                        properties.extend(provider_properties);
+                        let id = self.server.register_console(properties, console);
+                        registrations.insert(device.syspath().to_path_buf(), id);
                     }
                 }
                 DeviceEvent::Remove(device) => {
@@ -102,7 +102,7 @@ pub(crate) struct SerialPort {
     rate: Mutex<u32>,
     open: AsyncMutex<Option<SerialOpen>>,
 }
-use crate::{registry, udev::DeviceEvent, ConsoleError, Server};
+use crate::{ConsoleError, Server, registry, udev::DeviceEvent};
 
 impl SerialPort {
     pub fn new(path: String) -> Self {

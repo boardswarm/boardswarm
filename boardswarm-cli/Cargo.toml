@@ -1,19 +1,20 @@
 [package]
 name = "boardswarm-cli"
 version = "0.0.1"
-edition = "2021"
+edition.workspace = true
 authors = ["Sjoerd Simons <sjoerd@collabora.com>"]
 license = "MIT OR Apache-2.0"
 description = "Boardswarm command line client"
 repository = "https://github.com/boardswarm/boardswarm"
 readme = "README.md"
+rust-version.workspace = true
 
 [dependencies]
 anyhow = "1.0.68"
 bytes = "1.10.1"
 clap = { version = "4.5", features = ["derive"] }
 futures = "0.3.31"
-mprocs-vt100 = "0.7.0"
+vt100 = "0.16"
 nix = { version = "0.30.1", features = ["term"] }
 boardswarm-protocol = { version = "0.0.1", path = "../boardswarm-protocol" }
 boardswarm-client = { version = "0.0.1", path = "../boardswarm-client" }
@@ -34,6 +35,6 @@ dirs = "6.0.0"
 async-trait = "0.1.88"
 url = { version = "2.5.3", features = ["serde"] }
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
-ratatui = "0.29.0"
+ratatui = "0.30.0"
 android-sparse-image = "0.1.2"
 thiserror = "2.0.7"

@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use boardswarm_protocol::{VolumeInfoMsg, VolumeTarget};
 use bytes::Bytes;
-use futures::{pin_mut, Stream, StreamExt};
+use futures::{Stream, StreamExt, pin_mut};
 use tokio::{select, sync::broadcast};
 use tracing::info;
 
@@ -168,7 +168,9 @@ impl DeviceConsole {
         }
     }
 
-    pub async fn stream_output(&mut self) -> Result<impl Stream<Item = Bytes>, tonic::Status> {
+    pub async fn stream_output(
+        &mut self,
+    ) -> Result<impl Stream<Item = Bytes> + use<>, tonic::Status> {
         if let Some(id) = self.get_id() {
             self.device.client.console_stream_output(id).await
         } else {

@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use async_compression::futures::bufread::GzipDecoder;
 use bmap_parser::Bmap;
 use boardswarm_client::{
@@ -17,8 +17,8 @@ use boardswarm_client::{
 };
 use boardswarm_protocol::ItemType;
 use bytes::{Bytes, BytesMut};
-use clap::{arg, builder::PossibleValue, Args, Parser, Subcommand, ValueEnum};
-use futures::{pin_mut, FutureExt, Stream, StreamExt, TryStreamExt};
+use clap::{Args, Parser, Subcommand, ValueEnum, builder::PossibleValue};
+use futures::{FutureExt, Stream, StreamExt, TryStreamExt, pin_mut};
 use http::Uri;
 use indicatif::ProgressBar;
 use itertools::Itertools;
@@ -1355,7 +1355,7 @@ async fn main() -> anyhow::Result<()> {
                 DeviceCommand::Mode(d) => {
                     device.change_mode(d.mode).await?;
                 }
-                DeviceCommand::Reset {} => {
+                DeviceCommand::Reset => {
                     println!("Turning off");
                     device.change_mode("off").await?;
                     println!("Turning on");

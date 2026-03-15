@@ -4,9 +4,9 @@ use tokio::sync::broadcast;
 use tracing::warn;
 
 use crate::{
-    registry::{self, Properties, RegistryChange},
     ActuatorError, ActuatorId, Console, ConsoleId, DeviceConfigItem, DeviceMonitor,
     DeviceSetModeError, Server, VolumeId,
+    registry::{self, Properties, RegistryChange},
 };
 
 // TODO deal with closing
@@ -281,25 +281,28 @@ impl crate::Device for Device {
             .ok_or(DeviceSetModeError::ModeNotFound)?;
         {
             let mut current = self.inner.current_mode.lock().unwrap();
-            if let Some(depend) = &target.depends {
-                if current.as_ref() != Some(depend) {
-                    return Err(DeviceSetModeError::WrongCurrentMode);
-                }
+            if let Some(depend) = &target.depends
+                && current.as_ref() != Some(depend)
+            {
+                return Err(DeviceSetModeError::WrongCurrentMode);
             }
             *current = None;
         }
 
         for step in &target.sequence {
             let step = step.config();
-            if let Some(provider) = self.inner.server.find_actuator(&step.match_) {
-                provider
-                    .set_mode(Box::new(<dyn erased_serde::Deserializer>::erase(
-                        step.parameters.clone(),
-                    )))
-                    .await?;
-            } else {
-                warn!("Provider {:?} not found", &step.match_);
-                return Err(ActuatorError {}.into());
+            match self.inner.server.find_actuator(&step.match_) {
+                Some(provider) => {
+                    provider
+                        .set_mode(Box::new(<dyn erased_serde::Deserializer>::erase(
+                            step.parameters.clone(),
+                        )))
+                        .await?;
+                }
+                _ => {
+                    warn!("Provider {:?} not found", &step.match_);
+                    return Err(ActuatorError {}.into());
+                }
             }
             if let Some(duration) = step.stabilisation {
                 tokio::time::sleep(duration).await;

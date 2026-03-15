@@ -3,18 +3,18 @@ use std::{
     future::Future,
     pin::Pin,
     sync::Arc,
-    task::{ready, Poll},
+    task::{Poll, ready},
 };
 
 use boardswarm_protocol::{
-    boardswarm_client::BoardswarmClient, console_input_request, volume_io_reply, volume_io_request,
     ActuatorModeRequest, ConsoleConfigureRequest, ConsoleInputRequest, ConsoleOutputRequest,
     DeviceModeRequest, DeviceRequest, Item, ItemPropertiesRequest, ItemType, ItemTypeRequest,
     VolumeEraseRequest, VolumeInfoMsg, VolumeIoFlush, VolumeIoRead, VolumeIoReply, VolumeIoRequest,
     VolumeIoShutdown, VolumeIoTarget, VolumeIoWrite, VolumeRequest, VolumeTarget,
+    boardswarm_client::BoardswarmClient, console_input_request, volume_io_reply, volume_io_request,
 };
 use bytes::Bytes;
-use futures::{future::BoxFuture, stream, FutureExt, Stream, StreamExt};
+use futures::{FutureExt, Stream, StreamExt, future::BoxFuture, stream};
 use tokio::{
     io::{AsyncRead, AsyncSeek, AsyncWrite},
     sync::{mpsc, oneshot},
@@ -170,7 +170,7 @@ impl Boardswarm {
     pub async fn monitor(
         &mut self,
         type_: ItemType,
-    ) -> Result<impl Stream<Item = Result<ItemEvent, tonic::Status>>, tonic::Status> {
+    ) -> Result<impl Stream<Item = Result<ItemEvent, tonic::Status>> + use<>, tonic::Status> {
         let items = self
             .client
             .monitor(ItemTypeRequest {
@@ -198,8 +198,10 @@ impl Boardswarm {
     pub async fn device_info(
         &mut self,
         device: u64,
-    ) -> Result<impl Stream<Item = Result<boardswarm_protocol::Device, tonic::Status>>, tonic::Status>
-    {
+    ) -> Result<
+        impl Stream<Item = Result<boardswarm_protocol::Device, tonic::Status>> + use<>,
+        tonic::Status,
+    > {
         let r = self.client.device_info(DeviceRequest { device }).await?;
         Ok(r.into_inner())
     }
@@ -241,7 +243,7 @@ impl Boardswarm {
     pub async fn console_stream_output(
         &mut self,
         console: u64,
-    ) -> Result<impl Stream<Item = Bytes>, tonic::Status> {
+    ) -> Result<impl Stream<Item = Bytes> + use<>, tonic::Status> {
         let request = tonic::Request::new(ConsoleOutputRequest { console });
         let response = self.client.console_stream_output(request).await?;
         let stream = response.into_inner();
@@ -712,7 +714,7 @@ impl VolumeIoRW {
             match r {
                 Poll::Ready(r) => {
                     self.pending_requests.pop_front();
-                    r.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                    r.map_err(std::io::Error::other)?;
                 }
                 Poll::Pending => break,
             }
@@ -780,7 +782,7 @@ impl AsyncWrite for VolumeIoRW {
                         return Poll::Ready(Err(std::io::Error::new(
                             std::io::ErrorKind::NotConnected,
                             e,
-                        )))
+                        )));
                     }
                 },
                 IoWrapperState::Flush | IoWrapperState::Shutdown | IoWrapperState::Read(_) => {
@@ -876,7 +878,7 @@ impl AsyncWrite for VolumeIoRW {
                         return Poll::Ready(Err(std::io::Error::new(
                             std::io::ErrorKind::NotConnected,
                             e,
-                        )))
+                        )));
                     }
                 },
                 IoWrapperState::Shutdown => {
@@ -932,7 +934,7 @@ impl AsyncRead for VolumeIoRW {
                         return Poll::Ready(Err(std::io::Error::new(
                             std::io::ErrorKind::NotConnected,
                             e,
-                        )))
+                        )));
                     }
                 },
                 IoWrapperState::Read(ref mut read) => {
@@ -944,12 +946,7 @@ impl AsyncRead for VolumeIoRW {
                             me.copy_buffered_read(buf);
                             return Poll::Ready(Ok(()));
                         }
-                        Err(e) => {
-                            return Poll::Ready(Err(std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                e,
-                            )))
-                        }
+                        Err(e) => return Poll::Ready(Err(std::io::Error::other(e))),
                     }
                 }
                 IoWrapperState::Flush | IoWrapperState::Shutdown => {

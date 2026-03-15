@@ -4,7 +4,7 @@ use std::{
 };
 
 use boardswarm_client::client::Boardswarm;
-use futures::{pin_mut, Stream, StreamExt};
+use futures::{Stream, StreamExt, pin_mut};
 use tokio::sync::broadcast;
 use tracing::{trace, warn};
 
@@ -71,19 +71,19 @@ impl BoardswarmDeviceInner {
         // Update mappings */
         self.console_mapping.clear();
         for c in &self.info.consoles {
-            if let Some(remote) = c.id {
-                if let Some(local) = self.provider.console_id(remote) {
-                    self.console_mapping.insert(remote, local);
-                }
+            if let Some(remote) = c.id
+                && let Some(local) = self.provider.console_id(remote)
+            {
+                self.console_mapping.insert(remote, local);
             }
         }
 
         self.volume_mapping.clear();
         for c in &self.info.volumes {
-            if let Some(remote) = c.id {
-                if let Some(local) = self.provider.volume_id(remote) {
-                    self.volume_mapping.insert(remote, local);
-                }
+            if let Some(remote) = c.id
+                && let Some(local) = self.provider.volume_id(remote)
+            {
+                self.volume_mapping.insert(remote, local);
             }
         }
     }
