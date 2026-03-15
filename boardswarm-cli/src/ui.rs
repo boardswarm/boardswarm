@@ -139,7 +139,9 @@ impl Terminal {
                 }
             }
         };
-        self.parser.screen_mut().set_size(term_size.height, term_size.width);
+        self.parser
+            .screen_mut()
+            .set_size(term_size.height, term_size.width);
 
         let screen = self.parser.screen();
         let term = ui_term::UiTerm::new(screen);
