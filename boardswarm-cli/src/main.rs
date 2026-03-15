@@ -17,7 +17,7 @@ use boardswarm_client::{
 };
 use boardswarm_protocol::ItemType;
 use bytes::{Bytes, BytesMut};
-use clap::{arg, builder::PossibleValue, Args, Parser, Subcommand, ValueEnum};
+use clap::{builder::PossibleValue, Args, Parser, Subcommand, ValueEnum};
 use futures::{pin_mut, FutureExt, Stream, StreamExt, TryStreamExt};
 use http::Uri;
 use indicatif::ProgressBar;
@@ -1355,7 +1355,7 @@ async fn main() -> anyhow::Result<()> {
                 DeviceCommand::Mode(d) => {
                     device.change_mode(d.mode).await?;
                 }
-                DeviceCommand::Reset {} => {
+                DeviceCommand::Reset => {
                     println!("Turning off");
                     device.change_mode("off").await?;
                     println!("Turning on");
