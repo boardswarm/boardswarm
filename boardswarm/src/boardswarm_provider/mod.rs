@@ -7,7 +7,7 @@ use std::time::Duration;
 use boardswarm_client::client::BoardswarmBuilder;
 use boardswarm_client::client::{Boardswarm, ItemEvent};
 use boardswarm_protocol::ItemType;
-use futures::{pin_mut, TryStreamExt};
+use futures::{TryStreamExt, pin_mut};
 use serde::Deserialize;
 use tokio::join;
 use tokio::sync::broadcast;
@@ -19,7 +19,7 @@ use crate::ActuatorId;
 use crate::ConsoleId;
 use crate::DeviceId;
 use crate::VolumeId;
-use crate::{registry::Properties, Server};
+use crate::{Server, registry::Properties};
 
 use self::actuator::BoardswarmActuator;
 use self::console::BoardswarmConsole;

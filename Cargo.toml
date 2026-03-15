@@ -9,3 +9,4 @@ members = [
 
 [workspace.package]
 rust-version = "1.90"
+edition = "2024"

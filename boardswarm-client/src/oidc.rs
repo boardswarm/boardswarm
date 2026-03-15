@@ -5,17 +5,17 @@ use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
-use anyhow::Result;
-use oauth2::basic::BasicClient;
-use oauth2::basic::BasicTokenResponse;
 use oauth2::DeviceCodeErrorResponseType;
 use oauth2::EndpointNotSet;
 use oauth2::EndpointSet;
 use oauth2::RequestTokenError;
 use oauth2::StandardDeviceAuthorizationResponse;
 use oauth2::StandardErrorResponse;
+use oauth2::basic::BasicClient;
+use oauth2::basic::BasicTokenResponse;
 
 use oauth2::RefreshToken;
 use oauth2::{AuthUrl, ClientId, DeviceAuthorizationUrl, Scope, TokenResponse, TokenUrl};
@@ -351,18 +351,18 @@ impl OidcClient {
     }
 
     pub async fn access_token(&mut self) -> Result<&str> {
-        if self.token.is_none() {
-            if let Some(cache) = &self.token_cache {
-                self.token = Token::from_file(cache).await.ok();
-            }
+        if self.token.is_none()
+            && let Some(cache) = &self.token_cache
+        {
+            self.token = Token::from_file(cache).await.ok();
         }
 
         if let Some(token) = &self.token {
-            if let Some(expires) = token.expires {
-                if expires < SystemTime::now() {
-                    debug!("Token expired");
-                    self.refresh().await?
-                }
+            if let Some(expires) = token.expires
+                && expires < SystemTime::now()
+            {
+                debug!("Token expired");
+                self.refresh().await?
             }
         } else {
             self.auth().await?;

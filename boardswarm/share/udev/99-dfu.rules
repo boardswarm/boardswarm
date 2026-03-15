@@ -1,0 +1,3 @@
+ACTION=="add", SUBSYSTEM=="usb", ATTRS{idVendor}=="0451", ATTRS{idProduct}=="6162", GROUP="boardswarm"
+ACTION=="add", SUBSYSTEM=="usb", ATTRS{idVendor}=="0451", ATTRS{idProduct}=="6165", GROUP="boardswarm"
+

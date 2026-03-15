@@ -27,8 +27,8 @@ impl Authenticator {
     pub async fn token(&self) -> Option<String> {
         match self {
             Self::NoAuth => None,
-            Self::Token(ref token) => Some(token.clone()),
-            Self::Oidc(ref oidc) => {
+            Self::Token(token) => Some(token.clone()),
+            Self::Oidc(oidc) => {
                 let mut oidc = oidc.lock().await;
                 oidc.access_token().await.ok().map(|s| s.to_string())
             }

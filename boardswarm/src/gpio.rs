@@ -8,9 +8,9 @@ use tracing::{debug, warn};
 
 use crate::ActuatorId;
 use crate::{
+    Server,
     registry::{self, Properties},
     udev::DeviceEvent,
-    Server,
 };
 
 pub const PROVIDER: &str = "gpio";
@@ -58,39 +58,38 @@ pub async fn start_provider(name: String, parameters: serde_yaml::Value, server:
                 if registration.is_some() {
                     continue;
                 }
-                if let Some(path) = device.devnode() {
-                    if let Some(name) = path.file_name() {
-                        let name = name.to_string_lossy().into_owned();
-                        let mut properties = device.properties(name);
+                if let Some(path) = device.devnode()
+                    && let Some(name) = path.file_name()
+                {
+                    let name = name.to_string_lossy().into_owned();
+                    let mut properties = device.properties(name);
 
-                        if !properties.matches(&parameters.match_) {
-                            debug!(
-                                "Ignoring gpio device {} - {:?}",
-                                device.syspath().display(),
-                                properties,
-                            );
+                    if !properties.matches(&parameters.match_) {
+                        debug!(
+                            "Ignoring gpio device {} - {:?}",
+                            device.syspath().display(),
+                            properties,
+                        );
 
-                            continue;
-                        }
+                        continue;
+                    }
 
-                        properties.extend(provider_properties);
-                        if let Some(ids) =
-                            setup_gpio_chip(path.to_path_buf(), &parameters, properties, &server)
-                                .await
-                        {
-                            registration = Some((device.syspath().to_owned(), ids));
-                        }
+                    properties.extend(provider_properties);
+                    if let Some(ids) =
+                        setup_gpio_chip(path.to_path_buf(), &parameters, properties, &server).await
+                    {
+                        registration = Some((device.syspath().to_owned(), ids));
                     }
                 }
             }
             DeviceEvent::Remove(device) => {
-                if let Some((p, ids)) = registration.as_ref() {
-                    if device.syspath() == p {
-                        for i in ids {
-                            server.unregister_actuator(*i);
-                        }
-                        registration = None
+                if let Some((p, ids)) = registration.as_ref()
+                    && device.syspath() == p
+                {
+                    for i in ids {
+                        server.unregister_actuator(*i);
                     }
+                    registration = None
                 }
             }
         }

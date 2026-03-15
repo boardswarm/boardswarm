@@ -3,7 +3,7 @@ use tracing::warn;
 #[macro_export]
 /// Get the value of a bit at a specific index
 macro_rules! get_bit {
-    ($value:expr, $index:expr) => {
+    ($value:expr_2021, $index:expr_2021) => {
         ($value >> $index & 0x1)
     };
 }

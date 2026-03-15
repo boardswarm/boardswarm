@@ -12,9 +12,9 @@ use tokio_stream::StreamExt;
 use tracing::{debug, instrument, trace, warn};
 
 use crate::{
+    Server, Volume, VolumeError, VolumeTarget, VolumeTargetInfo,
     registry::{self, Properties},
     udev::{DeviceEvent, DeviceRegistrations, PreRegistration},
-    Server, Volume, VolumeError, VolumeTarget, VolumeTargetInfo,
 };
 
 pub const PROVIDER: &str = "eswin-eic7700-storage";
