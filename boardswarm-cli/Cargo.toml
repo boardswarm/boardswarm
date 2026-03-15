@@ -27,7 +27,7 @@ itertools = "0.14.0"
 bmap-parser = "0.2.0"
 async-compression = { version = "0.4.5", features = ["futures-io", "gzip"] }
 rockfile = "0.1.0"
-http = "1.3.1"
+http = "1.4"
 serde = "1.0.219"
 http-serde = "2.1"
 serde_yaml = "0.9.25"

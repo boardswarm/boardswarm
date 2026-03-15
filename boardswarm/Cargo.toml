@@ -12,7 +12,7 @@ rust-version.workspace = true
 [dependencies]
 anyhow = "1.0.68"
 async-trait = "0.1.88"
-bytes = "1.10.1"
+bytes = "1.11"
 clap = { version = "4.5", features = ["derive"] }
 futures = "0.3.31"
 humantime-serde = "1.1.1"
@@ -21,7 +21,7 @@ boardswarm-protocol = { version = "0.0.1", path = "../boardswarm-protocol" }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_yaml = "0.9.25"
 thiserror = "2.0.7"
-tokio = { version = "1.44.2", features = ["full"] }
+tokio = { version = "1.49", features = ["full"] }
 tokio-serial = "5.4.4"
 tokio-udev = "0.10"
 tokio-util = { version = "0.7.4", features = ["compat"]}
