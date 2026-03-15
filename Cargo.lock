@@ -298,7 +298,7 @@ dependencies = [
  "fastboot-protocol",
  "futures",
  "humantime-serde",
- "jsonwebtoken",
+ "jsonwebtoken 10.3.0",
  "mediatek-brom",
  "nusb",
  "pdudaemon-client",
@@ -1618,6 +1618,22 @@ dependencies = [
  "ring",
  "serde",
  "serde_json",
+ "simple_asn1",
+]
+
+[[package]]
+name = "jsonwebtoken"
+version = "10.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0529410abe238729a60b108898784df8984c87f6054c9c4fcacc47e4803c1ce1"
+dependencies = [
+ "base64",
+ "getrandom 0.2.16",
+ "js-sys",
+ "pem",
+ "serde",
+ "serde_json",
+ "signature",
  "simple_asn1",
 ]
 
@@ -3208,6 +3224,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "signature"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
+dependencies = [
+ "rand_core 0.6.4",
+]
+
+[[package]]
 name = "simd-adler32"
 version = "0.3.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3776,7 +3801,7 @@ dependencies = [
  "base64",
  "futures-util",
  "http",
- "jsonwebtoken",
+ "jsonwebtoken 9.3.1",
  "log",
  "mockall_double",
  "pin-project",
