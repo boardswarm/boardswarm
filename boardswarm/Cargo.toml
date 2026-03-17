@@ -42,7 +42,7 @@ fastboot-protocol = "0.3.1"
 android-sparse-image = "0.1.2"
 tower-oauth2-resource-server = { version = "0.11.1" }
 reqwest = { version = "0.13" }
-strum = { version = "0.27.1", features = ["derive"] }
+strum = { version = "0.28.0", features = ["derive"] }
 strum_macros = "0.27.1"
 regex = "1.11.1"
 proc-mounts = "0.3.0"
