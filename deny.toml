@@ -8,7 +8,7 @@ feature-depth = 1
 
 [advisories]
 ignore = [
- "RUSTSEC-2024-0436"
+{ id = "RUSTSEC-2023-0071", reason = "No patch is available." }
 ]
 
 [licenses]
@@ -18,27 +18,17 @@ allow = [
     "BSD-3-Clause",
     "MPL-2.0",
     "ISC",
-    "WTFPL",
     "Unicode-3.0",
     "Zlib"
 ]
 confidence-threshold = 0.8
 exceptions = [
-    { allow = ["Unicode-DFS-2016"], crate = "unicode-ident" },
-    { allow = ["Unicode-DFS-2016"], crate = "finl_unicode" },
-    { allow = ["Unicode-DFS-2016"], crate = "wezterm-bidi" },
-    { allow = ["OpenSSL"], crate = "ring" },
-]
-
-[[licenses.clarify]]
-crate = "ring"
-expression = "MIT AND ISC AND OpenSSL"
-license-files = [
-{ path = "LICENSE", hash = 0xbd0eed23 }
+    { allow = ["Apache-2.0", "ISC", "OpenSSL"], crate = "aws-lc-sys" },
+    { allow = ["CDLA-Permissive-2.0"], crate = "webpki-root-certs" },
 ]
 
 [bans]
-multiple-versions = "warn"
+multiple-versions = "allow"
 wildcards = "allow"
 highlight = "all"
 workspace-default-features = "allow"
@@ -46,7 +36,7 @@ external-default-features = "allow"
 allow = [ ]
 deny = [
   { crate = "webpki-roots", reason = "Should only use native certs" },
-  { crate = "aws-lc-rs", reason = "rustls#1877 - multiple rustls backend can cause panics" },
+  { crate = "ring", reason = "rustls#1877 - multiple rustls backend can cause panics" },
   { crate = "openssl", reason = "Avoid multiple tls implementations" }
 ]
 
