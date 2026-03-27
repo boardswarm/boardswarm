@@ -10,7 +10,7 @@ jobs:
   build-binaries:
     runs-on: ubuntu-latest
     container:
-      image: rust:slim-bookworm
+      image: rust:slim-trixie
     strategy:
       fail-fast: false
       matrix:

@@ -1,5 +1,5 @@
 Latest git builds of boardswarm. Binaries are build on Debian
-bookworm for 64 bit intel and arm.
+trixie for 64 bit intel and arm.
 
 The following packages are expected to be installed on the system
 
