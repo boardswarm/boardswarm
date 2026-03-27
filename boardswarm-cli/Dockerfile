@@ -1,5 +1,5 @@
 ## stage 1: builder
-FROM rust:slim-bookworm AS builder
+FROM rust:slim-trixie AS builder
 ARG BINARY
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -18,7 +18,7 @@ RUN cargo build \
       --bin boardswarm-cli
 
 ## stage 2: runner
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 ARG BINARY
 ARG DEBIAN_FRONTEND=noninteractive
 ENV RUST_LOG=info
