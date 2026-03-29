@@ -119,6 +119,19 @@ As a starting point, the [example udev rules](share/99-boardswarm.rules) can be
 used to grant device permissions to boardswarm. It is recommended that these
 rules be used alongside the [example systemd service](share/boardswarm.service).
 
+If you are connecting to devices with boardswarm on this machine, you will need
+to create a dedicated user & group for boardswarm, for example:
+
+```
+$ sudo groupadd --system boardswarm
+
+$ sudo useradd --system --gid boardswarm \
+    --home-dir /nonexistent \
+    --shell /usr/sbin/nologin \
+    --comment "boardswarm service user" \
+    boardswarm
+```
+
 ### Serial provider
 
 The serial provider creates consoles from local serial ports. No provider specific
