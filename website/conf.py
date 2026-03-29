@@ -22,6 +22,7 @@ exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 # Add the extension
 extensions = [
     "sphinx.ext.autosectionlabel",
+    "sphinx_toolbox.collapse",
     "sphinx.ext.intersphinx",
 ]
 
