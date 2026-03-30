@@ -155,6 +155,14 @@ impl DeviceConsole {
         self.get_id().is_some()
     }
 
+    /// Wait for the console to become available
+    pub async fn wait(&self) {
+        let mut watch = self.device.watch();
+        while !self.available() {
+            watch.changed().await;
+        }
+    }
+
     pub async fn stream_input<I>(&mut self, input: I) -> Result<(), tonic::Status>
     where
         I: Stream<Item = Bytes> + Send + 'static,

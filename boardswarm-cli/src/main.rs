@@ -317,24 +317,54 @@ async fn item_lookup<I: Into<ItemTypes>>(
     arg: ItemArg,
     item_type: I,
     mut client: Boardswarm,
+    wait: bool,
 ) -> Result<u64, anyhow::Error> {
     let item_type: ItemTypes = item_type.into();
     match arg {
         ItemArg::Id(id) => Ok(id),
         ItemArg::Name(name) => {
-            let mut items = client.list(item_type.into()).await?;
-
             let (name, instance) = name
                 .rsplit_once('@')
                 .map_or((name.as_str(), None), |(n, i)| (n, Some(i)));
 
-            items.retain(|i| i.name == name && i.instance.as_deref() == instance);
+            // When waiting, subscribe to the monitor stream before listing so that no addition
+            // events are missed between the two calls.
+            let monitor = if wait {
+                Some(client.monitor(item_type.into()).await?)
+            } else {
+                None
+            };
 
+            // If the item is already registered, return immediately.
+            let mut items = client.list(item_type.into()).await?;
+            items.retain(|i| i.name == name && i.instance.as_deref() == instance);
             match items.len() {
-                0 => bail!("{item_type:#} not found"),
-                1 => Ok(items[0].id),
+                0 => {}
+                1 => return Ok(items[0].id),
                 /* The items are uniquely identified only with their ids so this could happen */
                 _ => bail!("Duplicate {item_type} name {name}"),
+            }
+
+            // Wait for the item to appear via the monitor stream.
+            if let Some(monitor) = monitor {
+                pin_mut!(monitor);
+                while let Some(event) = monitor.next().await {
+                    if let ItemEvent::Added(items) = event? {
+                        let matched: Vec<_> = items
+                            .iter()
+                            .filter(|i| i.name == name && i.instance.as_deref() == instance)
+                            .collect();
+                        match matched.len() {
+                            0 => {}
+                            1 => return Ok(matched[0].id),
+                            _ => bail!("Duplicate {item_type} name {name}"),
+                        }
+                    }
+                }
+
+                bail!("{item_type:#} monitor stream ended before item appeared")
+            } else {
+                bail!("{item_type:#} not found")
             }
         }
     }
@@ -473,6 +503,9 @@ struct DeviceConsoleArgs {
     /// Console to open instead of the default
     #[clap(short, long)]
     console: Option<String>,
+    /// Wait for the console to become available instead of failing immediately
+    #[arg(short, long)]
+    wait: bool,
 }
 
 #[derive(Debug, Args)]
@@ -663,6 +696,9 @@ enum Command {
         /// The console to use
         #[arg(value_parser = parse_console)]
         console: ItemArg,
+        /// Wait for the console to become available instead of failing immediately
+        #[arg(short, long)]
+        wait: bool,
         #[command(subcommand)]
         command: ConsoleCommand,
     },
@@ -1131,7 +1167,8 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Actuator { actuator, command } => {
-            let actuator = item_lookup(actuator, ItemType::Actuator, boardswarm.clone()).await?;
+            let actuator =
+                item_lookup(actuator, ItemType::Actuator, boardswarm.clone(), false).await?;
             match command {
                 ActuatorCommand::ChangeMode(c) => {
                     let p = serde_json::from_str(&c.mode)
@@ -1149,8 +1186,12 @@ async fn main() -> anyhow::Result<()> {
 
             Ok(())
         }
-        Command::Console { console, command } => {
-            let console = item_lookup(console, ItemType::Console, boardswarm.clone()).await?;
+        Command::Console {
+            console,
+            wait,
+            command,
+        } => {
+            let console = item_lookup(console, ItemType::Console, boardswarm.clone(), wait).await?;
             match command {
                 ConsoleCommand::Configure(c) => {
                     let p = serde_json::from_str(&c.configuration)
@@ -1181,7 +1222,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Volume { volume, command } => {
-            let volume = item_lookup(volume, ItemType::Volume, boardswarm.clone()).await?;
+            let volume = item_lookup(volume, ItemType::Volume, boardswarm.clone(), false).await?;
             match command {
                 VolumeCommand::Info => {
                     let info = boardswarm.volume_info(volume).await?;
@@ -1375,6 +1416,14 @@ async fn main() -> anyhow::Result<()> {
                             .console()
                             .ok_or_else(|| anyhow::anyhow!("Console not found"))?
                     };
+                    if !console.available() {
+                        if d.wait {
+                            println!("Waiting for console..");
+                            console.wait().await;
+                        } else {
+                            bail!("console not available");
+                        }
+                    }
                     let out = copy_output_to_stdout(console.stream_output().await?);
                     let in_ = console.stream_input(input_stream());
                     futures::select! {
@@ -1392,6 +1441,14 @@ async fn main() -> anyhow::Result<()> {
                             .console()
                             .ok_or_else(|| anyhow::anyhow!("Console not found"))?
                     };
+                    if !console.available() {
+                        if d.wait {
+                            println!("Waiting for console..");
+                            console.wait().await;
+                        } else {
+                            bail!("console not available");
+                        }
+                    }
                     let output = console.stream_output().await?;
                     copy_output_to_stdout(output).await?;
                 }
