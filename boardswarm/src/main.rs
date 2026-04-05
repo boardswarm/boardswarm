@@ -42,6 +42,7 @@ mod registry;
 mod rockusb;
 mod serial;
 mod udev;
+mod uhubctl;
 mod utils;
 
 #[derive(Error, Debug)]
@@ -1196,6 +1197,12 @@ async fn main() -> anyhow::Result<()> {
                 p.name,
                 p.parameters
                     .context("Missing pdudaemon provider parameters")?,
+                server.clone(),
+            ),
+            uhubctl::PROVIDER => uhubctl::start_provider(
+                p.name,
+                p.parameters
+                    .context("Missing uhubctl provider parameters")?,
                 server.clone(),
             ),
             boardswarm_provider::PROVIDER => boardswarm_provider::start_provider(
