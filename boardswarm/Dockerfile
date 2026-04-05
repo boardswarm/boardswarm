@@ -33,6 +33,7 @@ LABEL org.opencontainers.image.source="https://github.com/boardswarm/boardswarm"
 RUN apt update && \
     apt install --yes \
       ca-certificates \
+      uhubctl \
       libudev1 \
     && rm -rf /var/lib/apt/lists/*
 
