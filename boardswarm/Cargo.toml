@@ -40,7 +40,7 @@ dfu-nusb = "0.1.0"
 mediatek-brom = { version = "0.2.0", features = ["tokio"] }
 fastboot-protocol = "0.3.1"
 android-sparse-image = "0.1.2"
-tower-oauth2-resource-server = { version = "0.11.1" }
+tower-oauth2-resource-server = { version = "0.12.0" }
 reqwest = { version = "0.13" }
 strum = { version = "0.28.0", features = ["derive"] }
 strum_macros = "0.28.0"

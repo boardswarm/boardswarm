@@ -4320,9 +4320,9 @@ checksum = "121c2a6cda46980bb0fcd1647ffaf6cd3fc79a013de288782836f6df9c48780e"
 
 [[package]]
 name = "tower-oauth2-resource-server"
-version = "0.11.1"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d807fbdb7f9708d49dc460521062b763e33a830c52dd01c403499a3cb299699"
+checksum = "c52e2dd80494d0b2624f233cad6cf822af7a28c899bfa4d37984abf1beec45be"
 dependencies = [
  "async-trait",
  "base64",
