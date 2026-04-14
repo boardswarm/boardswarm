@@ -21,9 +21,14 @@ For more information see `boardswarm-cli auth --help`
 
 ## Boardswarm UI
 
-The ui subcommand launches a tui:
+The ui subcommand launches a tui for a specific device:
 ```
 $ boardswarm-cli ui <device name or id>
+```
+
+Alternatively, you may choose a device from a list of devices with:
+```
+$ boardswarm-cli ui
 ```
 
 The UI has the follow keyboard shortcuts:

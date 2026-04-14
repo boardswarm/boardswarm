@@ -1,13 +1,17 @@
 use std::task::Poll;
 use std::{num::ParseIntError, str::FromStr};
 
+use boardswarm_client::client::Boardswarm;
+use boardswarm_protocol::ItemType;
 use bytes::Bytes;
 use futures::{Stream, StreamExt, pin_mut, ready};
 use ratatui::{
     Terminal as TuiTerminal,
     backend::CrosstermBackend,
+    crossterm::event::{Event, KeyCode, KeyEventKind},
     layout::{Rect, Size},
-    widgets::{Block, Borders},
+    style::Style,
+    widgets::{Block, Borders, List, ListItem, ListState},
 };
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -235,6 +239,78 @@ where
         self.future.set(process_input(rx));
 
         Poll::Ready(self.check_input(data))
+    }
+}
+
+pub async fn select_device(
+    mut boardswarm: Boardswarm,
+) -> anyhow::Result<boardswarm_client::device::Device> {
+    let items = boardswarm.list(ItemType::Device).await?;
+
+    if items.is_empty() {
+        anyhow::bail!("No devices available on the server");
+    }
+
+    let mut terminal = ratatui::init();
+    let selected_id = run_device_picker(&mut terminal, &items);
+    ratatui::restore();
+
+    let selected_id = selected_id?;
+    let builder = boardswarm_client::device::DeviceBuilder::from_client(boardswarm);
+    Ok(builder.by_id(selected_id).await?)
+}
+
+fn run_device_picker(
+    terminal: &mut ratatui::DefaultTerminal,
+    items: &[boardswarm_protocol::Item],
+) -> anyhow::Result<u64> {
+    let mut state = ListState::default();
+    state.select(Some(0));
+
+    loop {
+        terminal.draw(|f| {
+            let area = f.area();
+            let list_items: Vec<ListItem> = items
+                .iter()
+                .map(|i| ListItem::new(i.name.clone()))
+                .collect();
+            let list = List::new(list_items)
+                .block(
+                    Block::default()
+                        .title(" Select a device (↑/↓ or j/k to navigate, Enter to select, q to quit) ")
+                        .borders(Borders::ALL),
+                )
+                .highlight_style(Style::new().reversed())
+                .highlight_symbol("> ");
+            f.render_stateful_widget(list, area, &mut state);
+        })?;
+
+        if ratatui::crossterm::event::poll(std::time::Duration::from_millis(100))?
+            && let Event::Key(key) = ratatui::crossterm::event::read()?
+        {
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
+            match key.code {
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let i = state.selected().unwrap_or(0);
+                    state.select(Some((i + 1).min(items.len() - 1)));
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    let i = state.selected().unwrap_or(0);
+                    state.select(Some(i.saturating_sub(1)));
+                }
+                KeyCode::Enter => {
+                    if let Some(i) = state.selected() {
+                        return Ok(items[i].id);
+                    }
+                }
+                KeyCode::Char('q') | KeyCode::Esc => {
+                    anyhow::bail!("No device selected");
+                }
+                _ => {}
+            }
+        }
     }
 }
 
