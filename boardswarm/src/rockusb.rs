@@ -50,7 +50,7 @@ pub async fn start_provider(name: String, server: Server) {
                 let name = if let Some(model) = device.property("ID_MODEL_ID") {
                     format!("{}/{} {}", busnum, devnum, model)
                 } else {
-                    format!("{}/{}", devnum, devnum)
+                    format!("{}/{}", busnum, devnum)
                 };
                 info!("New rockusb volume: {name}");
 
