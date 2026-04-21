@@ -1457,15 +1457,23 @@ async fn main() -> anyhow::Result<()> {
             scrollback_lines,
         } => {
             let device = match device {
-                Some(d) => d
-                    .device(boardswarm)
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("Device not found"))?,
-                None => ui::select_device(boardswarm).await?,
+                Some(d) => Some(
+                    d.device(boardswarm.clone())
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("Device not found"))?,
+                ),
+                None => None,
             };
 
             let console = console.open(&device).await?;
-            ui::run_ui(device, console, terminal_size, scrollback_lines).await
+            ui::run_ui(
+                device,
+                boardswarm,
+                console,
+                terminal_size,
+                scrollback_lines,
+            )
+            .await
         }
     }
 }
