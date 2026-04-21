@@ -33,6 +33,7 @@ $ boardswarm-cli ui
 
 The UI has the follow keyboard shortcuts:
 * ^a q: Quit the ui
+* ^a s: Open the device switcher UI to choose a different device
 * ^a o: Change the device to mode "on"
 * ^a f: Change the device to mode "off"
 * ^a r: Reset the device's power (same as changing mode to "off" then "on")

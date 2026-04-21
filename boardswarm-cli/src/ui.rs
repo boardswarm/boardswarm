@@ -131,6 +131,7 @@ struct RunningState {
 
 enum RunAction {
     Exit,
+    SwitchDevice,
 }
 
 impl RunningState {
@@ -214,6 +215,7 @@ impl RunningState {
             self.saw_escape = false;
             match key.code {
                 KeyCode::Char('q') => return Some(RunAction::Exit),
+                KeyCode::Char('s') => return Some(RunAction::SwitchDevice),
                 KeyCode::Char('o') => {
                     let _ = self.device.change_mode("on").await;
                 }
@@ -300,14 +302,14 @@ fn key_to_bytes(key: KeyEvent) -> Option<Bytes> {
 }
 
 enum AppState {
-    SelectingDevice(DeviceSelector),
+    SelectingDevice(DeviceSelector, Option<Box<RunningState>>),
     Running(Box<RunningState>),
 }
 
 impl AppState {
     fn render(&mut self, frame: &mut ratatui::Frame) {
         match self {
-            AppState::SelectingDevice(s) => s.render(frame),
+            AppState::SelectingDevice(s, _) => s.render(frame),
             AppState::Running(r) => r.render(frame),
         }
     }
@@ -363,7 +365,7 @@ async fn run_app(
         if items.is_empty() {
             anyhow::bail!("No devices available on the server");
         }
-        AppState::SelectingDevice(DeviceSelector::new(items))
+        AppState::SelectingDevice(DeviceSelector::new(items), None)
     };
 
     let mut event_stream = EventStream::new();
@@ -373,7 +375,7 @@ async fn run_app(
         let mut next_state: Option<AppState> = None;
 
         match &mut state {
-            AppState::SelectingDevice(selector) => {
+            AppState::SelectingDevice(selector, return_to) => {
                 let Some(Ok(event)) = event_stream.next().await else {
                     break;
                 };
@@ -400,7 +402,10 @@ async fn run_app(
                                 .await?,
                             )));
                         }
-                        Some(SelectAction::Quit) => break,
+                        Some(SelectAction::Quit) => match return_to.take() {
+                            Some(previous) => next_state = Some(AppState::Running(previous)),
+                            None => break,
+                        },
                         None => {}
                     }
                 }
@@ -411,8 +416,24 @@ async fn run_app(
                         let Some(Ok(event)) = event else { break; };
                         match event {
                             Event::Key(key) => {
-                                if let Some(RunAction::Exit) = runner.handle_key(key).await {
-                                    break;
+                                match runner.handle_key(key).await {
+                                    Some(RunAction::Exit) => break,
+                                    Some(RunAction::SwitchDevice) => {
+                                        let items = boardswarm.list(ItemType::Device).await?;
+                                        if !items.is_empty() {
+                                            // Take the runner out of state to store as return_to.
+                                            // We'll overwrite state below via next_state.
+                                            let selector = DeviceSelector::new(items);
+                                            if let AppState::Running(runner) =
+                                                std::mem::replace(&mut state, AppState::SelectingDevice(selector, None))
+                                                && let AppState::SelectingDevice(_, return_to) = &mut state {
+                                                    *return_to = Some(runner);
+                                                }
+                                            tui.draw(|f| state.render(f))?;
+                                            continue;
+                                        }
+                                    }
+                                    None => {}
                                 }
                             }
                             Event::Resize(w, h) => runner.handle_resize(w, h),
