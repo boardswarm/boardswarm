@@ -12,7 +12,7 @@ rust-version = "1.90"
 edition = "2024"
 
 [workspace.dependencies]
-serde = { version = "1.0.225", features = ["derive"] }
+serde = { version = "1.0.228", features = ["derive"] }
 http = "1.4"
-tokio = { version = "1.49", features = ["full"] }
+tokio = { version = "1.50", features = ["full"] }
 serde_json = "1.0.145"
