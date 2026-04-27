@@ -473,6 +473,35 @@ struct DeviceConsoleArgs {
     /// Console to open instead of the default
     #[clap(short, long)]
     console: Option<String>,
+    /// Wait for the console to become available
+    #[clap(short, long)]
+    wait: bool,
+}
+
+impl DeviceConsoleArgs {
+    async fn open(
+        &self,
+        device: &boardswarm_client::device::Device,
+    ) -> anyhow::Result<boardswarm_client::device::DeviceConsole> {
+        let console = if let Some(c) = &self.console {
+            device
+                .console_by_name(c)
+                .ok_or_else(|| anyhow::anyhow!("Console not found"))?
+        } else {
+            device
+                .console()
+                .ok_or_else(|| anyhow::anyhow!("Console not found"))?
+        };
+        if !console.available() {
+            if self.wait {
+                eprintln!("Waiting for console..");
+                console.wait_available().await;
+            } else {
+                bail!("console not available");
+            }
+        }
+        Ok(console)
+    }
 }
 
 #[derive(Debug, Args)]
@@ -1366,15 +1395,7 @@ async fn main() -> anyhow::Result<()> {
                     device.change_mode("on").await?;
                 }
                 DeviceCommand::Connect(d) => {
-                    let mut console = if let Some(c) = &d.console {
-                        device
-                            .console_by_name(c)
-                            .ok_or_else(|| anyhow::anyhow!("Console not found"))?
-                    } else {
-                        device
-                            .console()
-                            .ok_or_else(|| anyhow::anyhow!("Console not found"))?
-                    };
+                    let mut console = d.open(&device).await?;
                     let out = copy_output_to_stdout(console.stream_output().await?);
                     let in_ = console.stream_input(input_stream());
                     futures::select! {
@@ -1383,15 +1404,7 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
                 DeviceCommand::Tail(d) => {
-                    let mut console = if let Some(c) = &d.console {
-                        device
-                            .console_by_name(c)
-                            .ok_or_else(|| anyhow::anyhow!("Console not found"))?
-                    } else {
-                        device
-                            .console()
-                            .ok_or_else(|| anyhow::anyhow!("Console not found"))?
-                    };
+                    let mut console = d.open(&device).await?;
                     let output = console.stream_output().await?;
                     copy_output_to_stdout(output).await?;
                 }
@@ -1448,7 +1461,8 @@ async fn main() -> anyhow::Result<()> {
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("Device not found"))?;
 
-            ui::run_ui(device, console.console, terminal_size, scrollback_lines).await
+            let console = console.open(&device).await?;
+            ui::run_ui(device, console, terminal_size, scrollback_lines).await
         }
     }
 }
