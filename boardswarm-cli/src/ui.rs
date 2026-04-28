@@ -240,7 +240,7 @@ where
 
 pub async fn run_ui(
     device: boardswarm_client::device::Device,
-    console: Option<String>,
+    mut console: boardswarm_client::device::DeviceConsole,
     terminal_size_setting: TerminalSizeSetting,
     scrollback_lines: usize,
 ) -> anyhow::Result<()> {
@@ -265,11 +265,6 @@ pub async fn run_ui(
     .unwrap();
 
     let mut terminal = Terminal::new(terminal_size_setting, scrollback_lines, terminal).await;
-    let mut console = match console {
-        Some(console) => device.console_by_name(&console),
-        None => device.console(),
-    }
-    .ok_or_else(|| anyhow::anyhow!("Console not available"))?;
 
     let mut output_console = console.clone();
     let output = output_console.stream_output().await?;
