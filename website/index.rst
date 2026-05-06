@@ -35,3 +35,9 @@ Full source code can be found in our github repository:
    guides/setup-server.rst
    guides/setup-client.rst
    guides/basic-functionality.rst
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Worked board examples
+
+   boards/mediatek.rst
