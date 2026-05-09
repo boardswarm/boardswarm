@@ -25,6 +25,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Streaming;
 use tower_oauth2_resource_server::auth_resolver::KidAuthorizerResolver;
+use tower_oauth2_resource_server::error::StartupError;
 use tower_oauth2_resource_server::server::OAuth2ResourceServer;
 use tower_oauth2_resource_server::tenant::TenantConfiguration;
 use tracing::{info, instrument, warn};
@@ -1073,8 +1074,10 @@ const OIDC_DISCOVERY_RETRY_DELAY: Duration = Duration::from_secs(5);
 
 fn should_retry_auth_setup(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
-        let msg = cause.to_string();
-        msg.contains("OidcDiscoveryFailed") || msg.contains("Failed to fetch OIDC configuration")
+        matches!(
+            cause.downcast_ref::<StartupError>(),
+            Some(StartupError::OidcDiscoveryFailed(_))
+        )
     })
 }
 
@@ -1267,16 +1270,21 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod test {
     use super::should_retry_auth_setup;
+    use tower_oauth2_resource_server::error::StartupError;
 
     #[test]
     fn retry_auth_setup_for_oidc_discovery_errors() {
-        let error = anyhow::anyhow!("OidcDiscoveryFailed(\"Failed to fetch OIDC configuration\")");
+        let error = anyhow::Error::new(StartupError::OidcDiscoveryFailed(
+            "Failed to fetch OIDC configuration".into(),
+        ));
         assert!(should_retry_auth_setup(&error));
     }
 
     #[test]
     fn do_not_retry_auth_setup_for_non_oidc_errors() {
-        let error = anyhow::anyhow!("No authentication methods found in configuration");
+        let error = anyhow::Error::new(StartupError::InvalidParameter(
+            "Invalid issuer_url format".into(),
+        ));
         assert!(!should_retry_auth_setup(&error));
     }
 }
