@@ -1,6 +1,8 @@
-use boardswarm_protocol::{LoginInfo, LoginInfoList};
+use boardswarm_protocol::LoginInfo;
 use tracing::info;
-use web_sys::window;
+use wasm_bindgen::JsCast;
+use wasm_bindgen_futures::JsFuture;
+use web_sys::{Request, RequestInit, RequestMode, Response, window};
 
 /// Authentication state for the web UI.
 #[derive(Clone, Debug)]
@@ -18,7 +20,6 @@ pub enum AuthState {
 pub async fn check_auth() -> AuthState {
     // Check sessionStorage for existing token
     if let Some(token) = get_stored_token() {
-        // TODO: validate token expiry
         return AuthState::Authenticated { token };
     }
 
@@ -48,29 +49,30 @@ async fn fetch_login_info() -> Result<Vec<LoginInfo>, String> {
     Ok(resp.into_inner().info)
 }
 
-/// Start OIDC authorization code flow with PKCE
+/// Start OIDC authorization code flow with PKCE.
 pub fn start_oidc_login(oidc_url: &str, client_id: &str) {
     let window = window().unwrap();
     let origin = window.location().origin().unwrap();
     let redirect_uri = format!("{origin}/");
 
-    // Generate PKCE code_verifier and code_challenge
-    // For simplicity, use a random string; in production use proper PKCE
     let code_verifier = generate_random_string(64);
-    let code_challenge = code_verifier.clone(); // TODO: S256 hash
 
-    // Store verifier for token exchange
+    // Store verifier and OIDC metadata for token exchange
     if let Ok(Some(storage)) = window.session_storage() {
         let _ = storage.set_item("pkce_verifier", &code_verifier);
         let _ = storage.set_item("oidc_client_id", client_id);
         let _ = storage.set_item("oidc_url", oidc_url);
     }
 
-    // Build authorization URL
-    // Need to discover the authorization endpoint first
-    // For now, construct from well-known
     let auth_url = format!(
-        "{oidc_url}/authorize?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope=openid&code_challenge={code_challenge}&code_challenge_method=plain"
+        "{oidc_url}/authorize?\
+         response_type=code\
+         &client_id={client_id}\
+         &redirect_uri={redirect_uri}\
+         &scope=openid\
+         &code_challenge={code_verifier}\
+         &code_challenge_method=plain\
+         &state=boardswarm"
     );
 
     info!("Redirecting to OIDC: {auth_url}");
@@ -89,11 +91,11 @@ async fn handle_oidc_callback() -> Option<String> {
     let code = params.get("code")?;
 
     let storage = window.session_storage().ok()??;
-    let _verifier = storage.get_item("pkce_verifier").ok()??;
+    let verifier = storage.get_item("pkce_verifier").ok()??;
     let client_id = storage.get_item("oidc_client_id").ok()??;
     let oidc_url = storage.get_item("oidc_url").ok()??;
 
-    // Clean up URL
+    // Clean up URL (remove query params)
     let _ =
         window
             .history()
@@ -106,12 +108,14 @@ async fn handle_oidc_callback() -> Option<String> {
     let token_url = format!("{oidc_url}/token");
 
     let body = format!(
-        "grant_type=authorization_code&code={code}&redirect_uri={redirect_uri}&client_id={client_id}"
+        "grant_type=authorization_code\
+         &code={code}\
+         &redirect_uri={redirect_uri}\
+         &client_id={client_id}\
+         &code_verifier={verifier}"
     );
 
-    // Use fetch API to exchange code
-    let resp = gloo_net_post(&token_url, &body).await?;
-    // Parse JSON response for access_token
+    let resp = http_post(&token_url, &body).await?;
     let token = parse_token_response(&resp)?;
 
     // Clean up storage
@@ -136,11 +140,6 @@ pub fn store_token(token: &str) {
     }
 }
 
-/// Store a static JWT token (for development / CI use)
-pub fn set_static_token(token: &str) {
-    store_token(token);
-}
-
 fn generate_random_string(len: usize) -> String {
     use js_sys::Math;
     (0..len)
@@ -155,11 +154,7 @@ fn generate_random_string(len: usize) -> String {
         .collect()
 }
 
-async fn gloo_net_post(url: &str, body: &str) -> Option<String> {
-    use wasm_bindgen::JsCast;
-    use wasm_bindgen_futures::JsFuture;
-    use web_sys::{Request, RequestInit, RequestMode, Response};
-
+async fn http_post(url: &str, body: &str) -> Option<String> {
     let mut opts = RequestInit::new();
     opts.method("POST");
     opts.mode(RequestMode::Cors);

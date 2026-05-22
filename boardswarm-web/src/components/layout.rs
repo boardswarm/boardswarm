@@ -1,14 +1,13 @@
 use dioxus::prelude::*;
 
 use crate::components::console::ConsoleView;
+use crate::components::device_detail::DeviceDetail;
 use crate::components::device_list::DeviceList;
 
 #[derive(Clone, Debug, PartialEq)]
 enum Page {
     Devices,
-    Consoles,
-    Actuators,
-    Volumes,
+    DeviceDetail { id: u64, name: String },
     Console { id: u64, name: String },
 }
 
@@ -26,25 +25,9 @@ pub fn AppLayout(token: String) -> Element {
                     onclick: move |_| current_page.set(Page::Devices),
                     "Devices"
                 }
-                a {
-                    class: if matches!(current_page(), Page::Consoles) { "active" } else { "" },
-                    onclick: move |_| current_page.set(Page::Consoles),
-                    "Consoles"
-                }
-                a {
-                    class: if matches!(current_page(), Page::Actuators) { "active" } else { "" },
-                    onclick: move |_| current_page.set(Page::Actuators),
-                    "Actuators"
-                }
-                a {
-                    class: if matches!(current_page(), Page::Volumes) { "active" } else { "" },
-                    onclick: move |_| current_page.set(Page::Volumes),
-                    "Volumes"
-                }
                 hr { style: "border-color: #333; margin: 1rem 0;" }
                 a {
                     onclick: move |_| {
-                        // Clear token and reload
                         if let Some(window) = web_sys::window() {
                             if let Ok(Some(storage)) = window.session_storage() {
                                 let _ = storage.remove_item("boardswarm_token");
@@ -62,33 +45,34 @@ pub fn AppLayout(token: String) -> Element {
                     Page::Devices => rsx! {
                         DeviceList {
                             token: token.clone(),
-                            on_console_open: move |(id, name): (u64, String)| {
-                                current_page.set(Page::Console { id, name });
+                            on_device_select: move |(id, name): (u64, String)| {
+                                current_page.set(Page::DeviceDetail { id, name });
                             },
                         }
                     },
-                    Page::Consoles => rsx! {
-                        h1 { "Consoles" }
-                        DeviceList {
+                    Page::DeviceDetail { id, ref name } => rsx! {
+                        a {
+                            onclick: move |_| current_page.set(Page::Devices),
+                            style: "color: #e94560; cursor: pointer; margin-bottom: 1rem; display: inline-block;",
+                            "← Back to devices"
+                        }
+                        DeviceDetail {
+                            device_id: id,
+                            device_name: name.clone(),
                             token: token.clone(),
                             on_console_open: move |(id, name): (u64, String)| {
                                 current_page.set(Page::Console { id, name });
                             },
                         }
                     },
-                    Page::Actuators => rsx! {
-                        h1 { "Actuators" }
-                        p { "Coming soon" }
-                    },
-                    Page::Volumes => rsx! {
-                        h1 { "Volumes" }
-                        p { "Coming soon" }
-                    },
                     Page::Console { id, ref name } => rsx! {
-                        div {
-                            h2 { "Console: {name}" }
-                            ConsoleView { console_id: id, token: token.clone() }
+                        a {
+                            onclick: move |_| current_page.set(Page::Devices),
+                            style: "color: #e94560; cursor: pointer; margin-bottom: 1rem; display: inline-block;",
+                            "← Back to devices"
                         }
+                        h2 { "Console: {name}" }
+                        ConsoleView { console_id: id, token: token.clone() }
                     },
                 }
             }

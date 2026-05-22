@@ -1,32 +1,25 @@
+use std::rc::Rc;
+
 use dioxus::prelude::*;
 use wasm_bindgen::prelude::*;
 
 // JS interop for xterm.js
 #[wasm_bindgen(module = "/src/xterm_glue.js")]
 extern "C" {
-    /// Create a new xterm.js Terminal and attach it to the given element ID.
-    /// Returns a handle (index) to reference this terminal later.
     fn xterm_create(element_id: &str) -> u32;
-
-    /// Write data to the terminal
     fn xterm_write(handle: u32, data: &[u8]);
-
-    /// Register the on_data callback (called when user types)
     fn xterm_on_data(handle: u32, callback: &Closure<dyn FnMut(String)>);
-
-    /// Dispose the terminal
     fn xterm_dispose(handle: u32);
 }
 
 #[component]
 pub fn ConsoleView(console_id: u64, token: String) -> Element {
     let mut connected = use_signal(|| false);
-    let mut ws_handle = use_signal(|| None::<crate::ws::ConsoleWs>);
+    let mut status_msg = use_signal(|| "Connecting...".to_string());
 
     let container_id = format!("terminal-{console_id}");
     let container_id_clone = container_id.clone();
 
-    // Set up terminal and WebSocket after mount
     use_effect(move || {
         let token = token.clone();
         let container_id = container_id_clone.clone();
@@ -35,39 +28,43 @@ pub fn ConsoleView(console_id: u64, token: String) -> Element {
             // Small delay to ensure DOM element exists
             gloo_timers::future::TimeoutFuture::new(100).await;
 
-            // Create xterm.js terminal
             let term_handle = xterm_create(&container_id);
 
             // Connect WebSocket
-            let term_h = term_handle;
+            let write_handle = term_handle;
             let ws = crate::ws::ConsoleWs::connect(
                 console_id,
                 &token,
                 move |data| {
-                    xterm_write(term_h, &data);
+                    xterm_write(write_handle, &data);
                 },
                 move || {
                     connected.set(false);
+                    status_msg.set("Disconnected".to_string());
                 },
             );
 
             match ws {
                 Ok(ws) => {
-                    // Register input handler
-                    let ws_ref = &ws;
+                    let ws = Rc::new(ws);
+                    let ws_for_input = ws.clone();
+
+                    // Register xterm.js input handler -> send to WebSocket
                     let input_closure = Closure::wrap(Box::new(move |data: String| {
-                        // TODO: need to send via ws - for now this is a placeholder
-                        // The closure needs access to the ws handle
-                        let _ = data;
+                        let _ = ws_for_input.send_input(data.into_bytes());
                     })
                         as Box<dyn FnMut(String)>);
                     xterm_on_data(term_handle, &input_closure);
                     input_closure.forget();
 
-                    ws_handle.set(Some(ws));
+                    // Keep ws alive for the session lifetime
+                    std::mem::forget(ws);
+
                     connected.set(true);
+                    status_msg.set("Connected".to_string());
                 }
                 Err(e) => {
+                    status_msg.set(format!("Connection failed: {e}"));
                     tracing::error!("WebSocket connection failed: {e}");
                 }
             }
@@ -76,8 +73,9 @@ pub fn ConsoleView(console_id: u64, token: String) -> Element {
 
     rsx! {
         div {
-            if !connected() {
-                p { style: "color: #888;", "Connecting..." }
+            p {
+                style: if connected() { "color: #4caf50; font-size: 0.85rem;" } else { "color: #888; font-size: 0.85rem;" },
+                "{status_msg}"
             }
             div {
                 id: "{container_id}",

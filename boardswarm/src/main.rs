@@ -1665,6 +1665,9 @@ struct Opts {
     #[clap(short, long)]
     #[arg(value_parser = parse_listen_address)]
     listen: Option<SocketAddr>,
+    /// Path to the web UI static files directory
+    #[clap(long)]
+    web_ui: Option<PathBuf>,
     config: PathBuf,
 }
 
@@ -1843,12 +1846,18 @@ async fn main() -> anyhow::Result<()> {
             get(ws_console::handler)
                 .layer(ws_auth.into_layer())
                 .with_state(server.clone()),
-        )
-        .fallback(|| async {
-            // TODO: Serve static files here.
-            StatusCode::NOT_FOUND
-        })
-        .layer(cors);
+        );
+
+    // Serve static web UI files if configured
+    let router = if let Some(ref web_ui_path) = opts.web_ui {
+        use tower_http::services::{ServeDir, ServeFile};
+        let index = web_ui_path.join("index.html");
+        router.fallback_service(ServeDir::new(web_ui_path).fallback(ServeFile::new(index)))
+    } else {
+        router.fallback(|| async { StatusCode::NOT_FOUND })
+    };
+
+    let router = router.layer(cors);
 
     if let Some(cert) = config.server.certificate {
         info!("Server listening on {}", listen_addr);

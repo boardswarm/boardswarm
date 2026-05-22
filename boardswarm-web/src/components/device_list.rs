@@ -2,12 +2,11 @@ use boardswarm_protocol::ItemType;
 use dioxus::prelude::*;
 
 #[component]
-pub fn DeviceList(token: String, on_console_open: EventHandler<(u64, String)>) -> Element {
+pub fn DeviceList(token: String, on_device_select: EventHandler<(u64, String)>) -> Element {
     let mut devices = use_signal(|| Vec::new());
     let mut loading = use_signal(|| true);
     let mut error = use_signal(|| None::<String>);
 
-    // Fetch devices on mount
     let token_clone = token.clone();
     use_effect(move || {
         let token = token_clone.clone();
@@ -36,7 +35,7 @@ pub fn DeviceList(token: String, on_console_open: EventHandler<(u64, String)>) -
             p { "Loading..." }
         }
 
-        if let Some(err) = error() {
+        if let Some(ref err) = error() {
             p { style: "color: #e94560;", "{err}" }
         }
 
@@ -63,10 +62,10 @@ pub fn DeviceList(token: String, on_console_open: EventHandler<(u64, String)>) -
                                         let name = device.name.clone();
                                         let id = device.id;
                                         move |_| {
-                                            on_console_open.call((id, name.clone()));
+                                            on_device_select.call((id, name.clone()));
                                         }
                                     },
-                                    "Console"
+                                    "Details"
                                 }
                             }
                         }
