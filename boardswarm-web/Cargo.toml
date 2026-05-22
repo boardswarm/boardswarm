@@ -1,0 +1,45 @@
+[package]
+name = "boardswarm-web"
+version = "0.0.1"
+edition.workspace = true
+authors = ["Sjoerd Simons <sjoerd@collabora.com>"]
+license = "MIT OR Apache-2.0"
+description = "Boardswarm web UI"
+repository = "https://github.com/boardswarm/boardswarm"
+rust-version.workspace = true
+
+[dependencies]
+boardswarm-protocol = { version = "0.0.1", path = "../boardswarm-protocol", default-features = false }
+dioxus = { version = "0.7", features = ["web"] }
+tonic-web-wasm-client = "0.9"
+tonic = { version = "0.14", default-features = false, features = ["codegen"] }
+prost = "0.14"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+    "WebSocket",
+    "BinaryType",
+    "MessageEvent",
+    "Blob",
+    "Url",
+    "Window",
+    "Location",
+    "UrlSearchParams",
+    "Storage",
+    "HtmlElement",
+    "Request",
+    "RequestInit",
+    "RequestMode",
+    "Response",
+    "Headers",
+    "History",
+] }
+js-sys = "0.3"
+gloo-timers = { version = "0.3", features = ["futures"] }
+futures = "0.3"
+tracing = "0.1"
+tracing-wasm = "0.2"
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
