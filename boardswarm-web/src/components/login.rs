@@ -3,7 +3,7 @@ use dioxus::prelude::*;
 
 #[component]
 pub fn Login(login_info: Vec<LoginInfo>) -> Element {
-    let mut token_input = use_signal(|| String::new());
+    let mut token_input = use_signal(String::new);
 
     rsx! {
         div { class: "login-container",

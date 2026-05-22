@@ -3,7 +3,7 @@ use dioxus::prelude::*;
 
 #[component]
 pub fn DeviceList(token: String, on_device_select: EventHandler<(u64, String)>) -> Element {
-    let mut devices = use_signal(|| Vec::new());
+    let mut devices = use_signal(Vec::new);
     let mut loading = use_signal(|| true);
     let mut error = use_signal(|| None::<String>);
 

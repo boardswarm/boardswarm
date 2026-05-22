@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use dioxus::prelude::*;
 
 mod api;
@@ -11,7 +13,7 @@ fn main() {
 }
 
 fn app() -> Element {
-    let auth_state = use_signal(|| auth::AuthState::Unknown);
+    let mut auth_state = use_signal(|| auth::AuthState::Unknown);
 
     // Check auth state on mount
     use_effect(move || {

@@ -1,4 +1,4 @@
-use boardswarm_protocol::{DeviceRequest, ItemType};
+use boardswarm_protocol::DeviceRequest;
 use dioxus::prelude::*;
 
 #[component]

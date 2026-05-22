@@ -1,3 +1,6 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use boardswarm_protocol::{ConsoleInputRequest, ConsoleOutput, console_input_request};
 use prost::Message;
 use wasm_bindgen::JsCast;
@@ -19,8 +22,8 @@ impl ConsoleWs {
     pub fn connect(
         console_id: u64,
         token: &str,
-        on_output: impl Fn(Vec<u8>) + 'static,
-        on_close: impl Fn() + 'static,
+        on_output: impl FnMut(Vec<u8>) + 'static,
+        on_close: impl FnMut() + 'static,
     ) -> Result<Self, String> {
         let origin = web_sys::window()
             .unwrap()
@@ -50,20 +53,24 @@ impl ConsoleWs {
         on_open.forget();
 
         // Handle incoming messages
+        let on_output = Rc::new(RefCell::new(on_output));
+        let on_output_clone = on_output.clone();
         let on_message = Closure::wrap(Box::new(move |event: MessageEvent| {
             if let Ok(buf) = event.data().dyn_into::<js_sys::ArrayBuffer>() {
                 let array = js_sys::Uint8Array::new(&buf);
                 let data = array.to_vec();
                 if let Ok(output) = ConsoleOutput::decode(data.as_slice()) {
-                    on_output(output.data);
+                    (on_output_clone.borrow_mut())(output.data.to_vec());
                 }
             }
         }) as Box<dyn FnMut(MessageEvent)>);
         ws.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
 
         // Handle close
+        let on_close = Rc::new(RefCell::new(on_close));
+        let on_close_clone = on_close.clone();
         let on_close_cb = Closure::wrap(Box::new(move || {
-            on_close();
+            (on_close_clone.borrow_mut())();
         }) as Box<dyn FnMut()>);
         ws.set_onclose(Some(on_close_cb.as_ref().unchecked_ref()));
 

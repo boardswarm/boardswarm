@@ -11,7 +11,7 @@ rust-version.workspace = true
 
 [features]
 default = ["transport"]
-transport = ["dep:tokio"]
+transport = ["dep:tokio", "tonic/transport"]
 
 [dependencies]
 bytes = "1.10.1"
@@ -22,7 +22,7 @@ prost-derive = "0.14"
 prost-types = "0.14"
 serde = { workspace = true }
 tokio = { workspace = true, optional = true }
-tonic = "0.14"
+tonic = { version = "0.14", default-features = false, features = ["codegen"] }
 
 [build-dependencies]
 tonic-prost-build = "0.14"

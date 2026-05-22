@@ -133,10 +133,8 @@ fn get_stored_token() -> Option<String> {
 }
 
 pub fn store_token(token: &str) {
-    if let Some(window) = window() {
-        if let Ok(Some(storage)) = window.session_storage() {
-            let _ = storage.set_item("boardswarm_token", token);
-        }
+    if let Some(Ok(Some(storage))) = window().map(|w| w.session_storage()) {
+        let _ = storage.set_item("boardswarm_token", token);
     }
 }
 
@@ -155,10 +153,10 @@ fn generate_random_string(len: usize) -> String {
 }
 
 async fn http_post(url: &str, body: &str) -> Option<String> {
-    let mut opts = RequestInit::new();
-    opts.method("POST");
-    opts.mode(RequestMode::Cors);
-    opts.body(Some(&wasm_bindgen::JsValue::from_str(body)));
+    let opts = RequestInit::new();
+    opts.set_method("POST");
+    opts.set_mode(RequestMode::Cors);
+    opts.set_body(&wasm_bindgen::JsValue::from_str(body));
 
     let request = Request::new_with_str_and_init(url, &opts).ok()?;
     request
