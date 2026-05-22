@@ -1,4 +1,8 @@
 use anyhow::{Context, bail};
+use axum::{
+    http::{Request, StatusCode},
+    routing::get,
+};
 use boardswarm_protocol::item_event::Event;
 use boardswarm_protocol::signal_message::SdpMessage;
 use boardswarm_protocol::{
@@ -26,7 +30,11 @@ use thiserror::Error;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Streaming;
+use tower_http::cors::{Any, CorsLayer};
 use tower_oauth2_resource_server::auth_resolver::KidAuthorizerResolver;
+use tower_oauth2_resource_server::error::AuthError;
+use tower_oauth2_resource_server::jwt_resolver::BearerTokenResolver;
+use tower_oauth2_resource_server::jwt_unverified::UnverifiedJwt;
 use tower_oauth2_resource_server::server::OAuth2ResourceServer;
 use tower_oauth2_resource_server::tenant::TenantConfiguration;
 use tracing::{info, instrument, warn};
@@ -48,6 +56,7 @@ mod serial;
 mod udev;
 mod utils;
 mod v4l2_provider;
+mod ws_console;
 
 #[derive(Error, Debug)]
 #[error("Actuator failed")]
@@ -1600,11 +1609,39 @@ fn parse_listen_address(addr: &str) -> Result<SocketAddr, AddrParseError> {
     }
 }
 
+struct QueryTokenResolver;
+
+impl BearerTokenResolver for QueryTokenResolver {
+    fn resolve(&self, request: &Request<()>) -> Result<UnverifiedJwt, AuthError> {
+        let token = request
+            .uri()
+            .query()
+            .and_then(|query| {
+                url::form_urlencoded::parse(query.as_bytes())
+                    .find(|(key, _)| key == "token")
+                    .map(|(_, value)| value.into_owned())
+            })
+            .ok_or(AuthError::MissingAuthorizationHeader)?;
+
+        Ok(UnverifiedJwt::new(token))
+    }
+}
+
 async fn setup_auth_layer(
     config: &[config::Authentication],
 ) -> anyhow::Result<OAuth2ResourceServer> {
+    setup_auth_layer_with_resolver(config, None).await
+}
+
+async fn setup_auth_layer_with_resolver(
+    config: &[config::Authentication],
+    bearer_token_resolver: Option<Arc<dyn BearerTokenResolver + Send + Sync>>,
+) -> anyhow::Result<OAuth2ResourceServer> {
     let mut resource =
         OAuth2ResourceServer::builder().auth_resolver(Arc::new(KidAuthorizerResolver {}));
+    if let Some(bearer_token_resolver) = bearer_token_resolver {
+        resource = resource.bearer_token_resolver(bearer_token_resolver);
+    }
     for auth in config {
         let tenant = match auth {
             config::Authentication::Oidc { uri, audience, .. } => {
@@ -1781,16 +1818,37 @@ async fn main() -> anyhow::Result<()> {
         boardswarm_protocol::boardswarm_server::BoardswarmServer::new(server.clone()),
     );
 
-    let auth = setup_auth_layer(&server.inner.auth_info).await?;
+    let grpc_auth = setup_auth_layer(&server.inner.auth_info).await?;
+    let ws_auth =
+        setup_auth_layer_with_resolver(&server.inner.auth_info, Some(Arc::new(QueryTokenResolver)))
+            .await?;
+    let login_info_path = format!(
+        "/{}/LoginInfo",
+        <boardswarm_protocol::boardswarm_server::BoardswarmServer<Server> as tonic::server::NamedService>::NAME,
+    );
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
     let router = boardswarm
         .into_axum_router()
-        .layer(auth.into_layer())
+        .layer(grpc_auth.into_layer())
         .route_service(
-            &format!("/{}/LoginInfo",
-          <boardswarm_protocol::boardswarm_server::BoardswarmServer<Server>
-          as tonic::server::NamedService>::NAME),
+            &login_info_path,
             boardswarm_protocol::boardswarm_server::BoardswarmServer::new(server.clone()),
-        );
+        )
+        .layer(tonic_web::GrpcWebLayer::new())
+        .route(
+            "/api/ws/console",
+            get(ws_console::handler)
+                .layer(ws_auth.into_layer())
+                .with_state(server.clone()),
+        )
+        .fallback(|| async {
+            // TODO: Serve static files here.
+            StatusCode::NOT_FOUND
+        })
+        .layer(cors);
 
     if let Some(cert) = config.server.certificate {
         info!("Server listening on {}", listen_addr);
