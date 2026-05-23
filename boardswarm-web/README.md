@@ -27,11 +27,14 @@ Browser-based interface for boardswarm, built with [Dioxus](https://dioxuslabs.c
 
 ## Building
 
+> **Note:** Due to a dioxus-cli bug with workspace `default-members` path
+> resolution, `dx` must be run from the **workspace root**, not from inside
+> `boardswarm-web/`.
+
 ### Development (with hot-reload)
 
 ```
-cd boardswarm-web
-dx serve
+dx serve --package boardswarm-web
 ```
 
 This starts a local dev server (default `http://localhost:8080`) that proxies
@@ -41,12 +44,11 @@ the server is not on `localhost:6683`.
 ### Production build
 
 ```
-cd boardswarm-web
-dx build --release
+dx build --release --package boardswarm-web
 ```
 
 The compiled assets (HTML, JS, WASM) are placed in
-`../target/dx/boardswarm-web/release/web/public/`. These are static
+`target/dx/boardswarm-web/release/web/public/`. These are static
 files that can be served by any web server or by boardswarm itself.
 
 ## Serving from boardswarm

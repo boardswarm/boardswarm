@@ -98,8 +98,7 @@ jobs:
       - name: Install dioxus-cli
         run: cargo install dioxus-cli --locked
       - name: Build web UI
-        working-directory: boardswarm-web
-        run: dx build --release
+        run: dx build --release --package boardswarm-web
       - name: Upload web UI artifacts
         uses: actions/upload-artifact@v7
         with:
