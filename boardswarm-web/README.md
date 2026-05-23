@@ -39,6 +39,11 @@ Start the boardswarm server (no `--web-ui` flag needed during development):
 boardswarm server.conf
 ```
 
+> **Important:** The `dx serve` proxy only supports plain HTTP backends — it
+> does **not** support TLS (HTTPS). Your boardswarm server must be configured
+> **without** a `certificate:` block in server.conf when using `dx serve`.
+> If you need TLS in production, use a production build instead (see below).
+
 Then from the workspace root, start the Dioxus dev server:
 
 ```
@@ -52,8 +57,8 @@ traffic to boardswarm at `http://localhost:6683`:
 
 The browser stays same-origin throughout — no CORS configuration needed.
 
-**If your boardswarm server runs on a different address**, edit
-`boardswarm-web/Dioxus.toml`:
+**If your boardswarm server runs on a different address**, edit the `backend`
+URLs in `boardswarm-web/Dioxus.toml`:
 
 ```toml
 [[web.proxy]]
@@ -62,6 +67,9 @@ backend = "http://myserver:6683/boardswarm.Boardswarm"
 [[web.proxy]]
 backend = "http://myserver:6683/api"
 ```
+
+Note the `http://` scheme — HTTPS backends are not supported by `dx serve`'s
+built-in proxy (see above).
 
 ### Production build
 
