@@ -7,6 +7,12 @@ members = [
   "boardswarm-client",
   "boardswarm-web",
 ]
+default-members = [
+  "boardswarm",
+  "boardswarm-protocol",
+  "boardswarm-cli",
+  "boardswarm-client",
+]
 
 [workspace.package]
 rust-version = "1.90"
