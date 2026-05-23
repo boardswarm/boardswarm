@@ -40,6 +40,10 @@ server:
   web_ui: boardswarm-web/
 ```
 
+During development (after `dx build --release` from the `boardswarm-web/`
+directory), the built assets are at
+`target/dx/boardswarm-web/release/web/public/`.
+
 ## Authentication
 
 Boardswarm always validates authentication against [JWT] bearer tokens; The

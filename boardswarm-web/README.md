@@ -45,7 +45,8 @@ cd boardswarm-web
 dx build --release
 ```
 
-The compiled assets (HTML, JS, WASM) are placed in `dist/`. These are static
+The compiled assets (HTML, JS, WASM) are placed in
+`../target/dx/boardswarm-web/release/web/public/`. These are static
 files that can be served by any web server or by boardswarm itself.
 
 ## Serving from boardswarm

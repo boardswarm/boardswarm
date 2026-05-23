@@ -93,6 +93,7 @@ impl ConsoleWs {
     }
 
     /// Close the WebSocket connection
+    #[allow(dead_code)]
     pub fn close(&self) {
         let _ = self.ws.close();
     }

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use dioxus::prelude::*;
 
 mod api;

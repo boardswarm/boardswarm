@@ -39,7 +39,3 @@ gloo-timers = { version = "0.3", features = ["futures"] }
 futures = "0.3"
 tracing = "0.1"
 tracing-wasm = "0.2"
-
-[lib]
-crate-type = ["cdylib"]
-path = "src/lib.rs"
