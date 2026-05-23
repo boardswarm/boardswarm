@@ -30,7 +30,7 @@ use thiserror::Error;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Streaming;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::{ServeDir, ServeFile};
 use tower_oauth2_resource_server::auth_resolver::KidAuthorizerResolver;
 use tower_oauth2_resource_server::error::AuthError;
 use tower_oauth2_resource_server::jwt_resolver::BearerTokenResolver;
@@ -1829,10 +1829,6 @@ async fn main() -> anyhow::Result<()> {
         "/{}/LoginInfo",
         <boardswarm_protocol::boardswarm_server::BoardswarmServer<Server> as tonic::server::NamedService>::NAME,
     );
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
     let router = boardswarm
         .into_axum_router()
         .layer(grpc_auth.into_layer())
@@ -1857,14 +1853,11 @@ async fn main() -> anyhow::Result<()> {
 
     // Serve static web UI files if configured
     let router = if let Some(ref web_ui_path) = web_ui_path {
-        use tower_http::services::{ServeDir, ServeFile};
         let index = web_ui_path.join("index.html");
         router.fallback_service(ServeDir::new(web_ui_path).fallback(ServeFile::new(index)))
     } else {
         router.fallback(|| async { StatusCode::NOT_FOUND })
     };
-
-    let router = router.layer(cors);
 
     if let Some(cert) = config.server.certificate {
         info!("Server listening on {}", listen_addr);

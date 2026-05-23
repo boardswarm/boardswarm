@@ -33,13 +33,35 @@ Browser-based interface for boardswarm, built with [Dioxus](https://dioxuslabs.c
 
 ### Development (with hot-reload)
 
+Start the boardswarm server (no `--web-ui` flag needed during development):
+
+```
+boardswarm server.conf
+```
+
+Then from the workspace root, start the Dioxus dev server:
+
 ```
 dx serve --package boardswarm-web
 ```
 
-This starts a local dev server (default `http://localhost:8080`) that proxies
-API requests to a running boardswarm server. Configure the proxy target if
-the server is not on `localhost:6683`.
+Open http://localhost:8080. The dev server automatically proxies all API
+traffic to boardswarm at `http://localhost:6683`:
+- `/boardswarm.Boardswarm/*` — all gRPC-Web calls
+- `/api/*` — WebSocket console
+
+The browser stays same-origin throughout — no CORS configuration needed.
+
+**If your boardswarm server runs on a different address**, edit
+`boardswarm-web/Dioxus.toml`:
+
+```toml
+[[web.proxy]]
+backend = "http://myserver:6683/boardswarm.Boardswarm"
+
+[[web.proxy]]
+backend = "http://myserver:6683/api"
+```
 
 ### Production build
 
@@ -57,12 +79,11 @@ The boardswarm server can serve the web UI directly using the `--web-ui` flag,
 which points to the directory containing the built assets:
 
 ```
-boardswarm --web-ui boardswarm-web/dist/ server.conf
+boardswarm --web-ui target/dx/boardswarm-web/release/web/public/ server.conf
 ```
 
 This serves the web UI as a fallback on the same port as the gRPC API (default
-6683), so both the API and UI share a single origin — no CORS configuration
-needed for production.
+6683), so both the API and UI share a single origin — no CORS needed.
 
 ## Architecture
 
