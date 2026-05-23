@@ -1848,8 +1848,15 @@ async fn main() -> anyhow::Result<()> {
                 .with_state(server.clone()),
         );
 
+    // Resolve web UI path: CLI flag takes precedence over config file setting.
+    // Config-relative paths are resolved against the config file directory.
+    let web_ui_path = match opts.web_ui {
+        Some(p) => Some(p),
+        None => config.server.web_ui.map(|p| opts.config.with_file_name(p)),
+    };
+
     // Serve static web UI files if configured
-    let router = if let Some(ref web_ui_path) = opts.web_ui {
+    let router = if let Some(ref web_ui_path) = web_ui_path {
         use tower_http::services::{ServeDir, ServeFile};
         let index = web_ui_path.join("index.html");
         router.fallback_service(ServeDir::new(web_ui_path).fallback(ServeFile::new(index)))

@@ -21,6 +21,7 @@ pub struct Server {
     pub listen: Option<String>,
     pub certificate: Option<Certificate>,
     pub authentication: Vec<Authentication>,
+    pub web_ui: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
