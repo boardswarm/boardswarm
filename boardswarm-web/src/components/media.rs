@@ -17,6 +17,16 @@ extern "C" {
     fn webrtc_dispose(handle: u32);
 }
 
+fn request_fullscreen(element_id: &str) {
+    if let Some(window) = web_sys::window() {
+        if let Some(document) = window.document() {
+            if let Some(element) = document.get_element_by_id(element_id) {
+                let _ = element.request_fullscreen();
+            }
+        }
+    }
+}
+
 /// A component that streams video from a boardswarm media item via WebRTC.
 ///
 /// Opens a WebSocket signaling connection to `/api/ws/media`, negotiates WebRTC
@@ -26,6 +36,7 @@ extern "C" {
 pub fn MediaViewer(media_id: u64, token: String) -> Element {
     let mut status = use_signal(|| "Connecting...".to_string());
     let mut connected = use_signal(|| false);
+    let mut fill_window = use_signal(|| false);
 
     let video_id = format!("media-video-{media_id}");
     let video_id_clone = video_id.clone();
@@ -102,21 +113,57 @@ pub fn MediaViewer(media_id: u64, token: String) -> Element {
         });
     });
 
+    let video_style = if fill_window() {
+        "position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; \
+         z-index: 1000; background: #000; object-fit: contain;"
+    } else {
+        "width: 100%; max-width: 800px; background: #000; border-radius: 4px;"
+    };
+
+    let video_id_for_fullscreen = video_id.clone();
+
     rsx! {
         div {
-            p {
-                style: if connected() {
-                    "color: #4caf50; font-size: 0.85rem;"
-                } else {
-                    "color: #888; font-size: 0.85rem;"
-                },
-                "{status}"
+            // Status bar and controls
+            div { style: "display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;",
+                p {
+                    style: if connected() {
+                        "color: #4caf50; font-size: 0.85rem; margin: 0;"
+                    } else {
+                        "color: #888; font-size: 0.85rem; margin: 0;"
+                    },
+                    "{status}"
+                }
+                button {
+                    class: "btn",
+                    title: if fill_window() { "Restore size" } else { "Fill window" },
+                    onclick: move |_| fill_window.set(!fill_window()),
+                    if fill_window() { "⤡ Restore" } else { "⤢ Fill window" }
+                }
+                button {
+                    class: "btn",
+                    title: "Fullscreen",
+                    onclick: move |_| request_fullscreen(&video_id_for_fullscreen),
+                    "⛶ Fullscreen"
+                }
             }
+
+            // Overlay close button when filling the window
+            if fill_window() {
+                button {
+                    style: "position: fixed; top: 1rem; right: 1rem; z-index: 1001; \
+                            background: rgba(0,0,0,0.6); color: #fff; border: none; \
+                            border-radius: 4px; padding: 0.4rem 0.8rem; cursor: pointer; font-size: 1rem;",
+                    onclick: move |_| fill_window.set(false),
+                    "✕"
+                }
+            }
+
             video {
                 id: "{video_id}",
                 autoplay: "true",
                 playsinline: "true",
-                style: "width: 100%; max-width: 800px; background: #000; border-radius: 4px;",
+                style: "{video_style}",
             }
         }
     }
