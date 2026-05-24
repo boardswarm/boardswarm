@@ -27,6 +27,10 @@ service Boardswarm {
   // Erase all data of target
   rpc VolumeErase(VolumeEraseRequest) returns (google.protobuf.Empty);
 
+
+  // Set a media stream, can be audio or video
+  rpc MediaSetup(stream MediaRequest) returns (stream SignalMessage);
+
 }
 
 message OidcInfo {
@@ -50,6 +54,7 @@ enum ItemType {
   ITEM_TYPE_CONSOLE = 1;
   ITEM_TYPE_ACTUATOR = 2;
   ITEM_TYPE_VOLUME = 3;
+  ITEM_TYPE_MEDIA = 4;
 }
 
 message ItemTypeRequest {
@@ -233,4 +238,28 @@ message VolumeIoReply {
   }
 }
 
+// The first message should be the media item to start negotiation with,
+// everything after that are signal messages 
+message MediaRequest {
+  oneof ItemOrSignal {
+    uint64 item = 1;
+    SignalMessage signal = 2;
+  }
+}
 
+message SignalMessageSdp {
+  string sdp = 1;
+}
+
+message SignalMessageIceCandidate {
+  string candidate = 1;
+  uint32 mline_index = 2;
+}
+
+message SignalMessage {
+  oneof SdpMessage {
+    SignalMessageSdp offer = 1;
+    SignalMessageSdp answer = 2;
+    SignalMessageIceCandidate ice = 3;
+  }
+}

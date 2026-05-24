@@ -65,6 +65,7 @@ impl std::fmt::Display for ItemTypes {
                 ItemType::Console => f.write_str("console"),
                 ItemType::Actuator => f.write_str("actuator"),
                 ItemType::Volume => f.write_str("volume"),
+                ItemType::Media => f.write_str("media"),
             }
         }
     }
@@ -77,6 +78,7 @@ impl ValueEnum for ItemTypes {
             ItemTypes(ItemType::Console),
             ItemTypes(ItemType::Device),
             ItemTypes(ItemType::Volume),
+            ItemTypes(ItemType::Media),
         ]
     }
 
@@ -86,6 +88,7 @@ impl ValueEnum for ItemTypes {
             ItemType::Console => PossibleValue::new("consoles"),
             ItemType::Device => PossibleValue::new("devices"),
             ItemType::Volume => PossibleValue::new("volumes"),
+            ItemType::Media => PossibleValue::new("media"),
         })
     }
 }

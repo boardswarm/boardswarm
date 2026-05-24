@@ -18,6 +18,7 @@ use tracing::warn;
 use crate::ActuatorId;
 use crate::ConsoleId;
 use crate::DeviceId;
+use crate::MediaId;
 use crate::VolumeId;
 use crate::{Server, registry::Properties};
 
@@ -45,6 +46,7 @@ pub struct Provider {
     consoles: Mutex<HashMap<u64, ConsoleId>>,
     devices: Mutex<HashMap<u64, DeviceId>>,
     volumes: Mutex<HashMap<u64, VolumeId>>,
+    media: Mutex<HashMap<u64, MediaId>>,
     notifier: broadcast::Sender<()>,
 }
 
@@ -54,11 +56,13 @@ impl Provider {
         let consoles = Mutex::new(HashMap::new());
         let volumes = Mutex::new(HashMap::new());
         let devices = Mutex::new(HashMap::new());
+        let media = Mutex::new(HashMap::new());
         Self {
             actuators,
             consoles,
             volumes,
             devices,
+            media,
             notifier: broadcast::channel(1).0,
         }
     }
@@ -116,6 +120,7 @@ async fn add_item(
             }
             Err(e) => warn!("Failed to setup remote volume: {e}"),
         },
+        ItemType::Media => todo!(),
     }
     let _ = provider.notifier.send(());
 }
@@ -146,6 +151,7 @@ fn remove_item(provider: &Provider, type_: ItemType, server: &Server, id: u64) {
                 server.unregister_volume(local)
             }
         }
+        ItemType::Media => todo!(),
     }
     let _ = provider.notifier.send(());
 }
@@ -202,6 +208,7 @@ async fn monitor_items(
                 server.unregister_volume(local);
             }
         }
+        ItemType::Media => todo!(),
     }
 }
 

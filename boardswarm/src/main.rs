@@ -1,9 +1,11 @@
 use anyhow::{Context, bail};
 use boardswarm_protocol::item_event::Event;
+use boardswarm_protocol::signal_message::SdpMessage;
 use boardswarm_protocol::{
     ConsoleConfigureRequest, ConsoleInputRequest, ConsoleOutputRequest, ItemEvent, ItemList,
-    ItemPropertiesMsg, ItemPropertiesRequest, ItemTypeRequest, LoginInfoList, Property,
-    VolumeEraseRequest, VolumeInfoMsg, VolumeIoTargetReply, VolumeRequest, console_input_request,
+    ItemPropertiesMsg, ItemPropertiesRequest, ItemTypeRequest, LoginInfoList, MediaRequest,
+    Property, SignalMessage, SignalMessageIceCandidate, SignalMessageSdp, VolumeEraseRequest,
+    VolumeInfoMsg, VolumeIoTargetReply, VolumeRequest, console_input_request, media_request,
     volume_io_reply, volume_io_request,
 };
 use bytes::Bytes;
@@ -43,6 +45,7 @@ mod rockusb;
 mod serial;
 mod udev;
 mod utils;
+mod v4l2_provider;
 
 #[derive(Error, Debug)]
 #[error("Actuator failed")]
@@ -235,6 +238,60 @@ pub trait Volume: std::fmt::Debug + Send + Sync {
     async fn erase(&self, _target: &str) -> Result<(), VolumeError> {
         Err(VolumeError::NotImplemented)
     }
+}
+
+pub enum MediaSignalMsg {
+    Offer(String),
+    Answer(String),
+    Ice(String, u32),
+}
+
+impl From<MediaSignalMsg> for SignalMessage {
+    fn from(value: MediaSignalMsg) -> Self {
+        match value {
+            MediaSignalMsg::Offer(sdp) => SignalMessage {
+                sdp_message: Some(SdpMessage::Offer(SignalMessageSdp { sdp })),
+            },
+            MediaSignalMsg::Answer(sdp) => SignalMessage {
+                sdp_message: Some(SdpMessage::Answer(SignalMessageSdp { sdp })),
+            },
+
+            MediaSignalMsg::Ice(candidate, mline_index) => SignalMessage {
+                sdp_message: Some(SdpMessage::Ice(SignalMessageIceCandidate {
+                    candidate,
+                    mline_index,
+                })),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Error, Debug)]
+pub enum MediaError {}
+
+impl From<MediaError> for tonic::Status {
+    fn from(_value: MediaError) -> Self {
+        tonic::Status::internal("Not yet implemented".to_string())
+    }
+}
+
+pub trait MediaSignallingRx: Send {
+    fn offer(&mut self, offer: &str);
+    fn answer(&mut self, offer: &str);
+    fn ice(&mut self, candidate: &str, mline_index: u32);
+}
+
+#[async_trait::async_trait]
+pub trait Media: std::fmt::Debug + Send + Sync {
+    async fn open(
+        &self,
+    ) -> Result<
+        (
+            Box<dyn MediaSignallingRx>,
+            stream::BoxStream<'static, MediaSignalMsg>,
+        ),
+        MediaError,
+    >;
 }
 
 pub struct ReadCompletion(oneshot::Sender<Result<Bytes, tonic::Status>>);
@@ -459,6 +516,7 @@ impl_u64_index!(ActuatorId, Actuator);
 impl_u64_index!(ConsoleId, Console);
 impl_u64_index!(DeviceId, Device);
 impl_u64_index!(VolumeId, Volume);
+impl_u64_index!(MediaId, Media);
 
 struct ServerInner {
     config_dir: PathBuf,
@@ -467,6 +525,7 @@ struct ServerInner {
     consoles: Registry<ConsoleId, Arc<dyn Console>>,
     actuators: Registry<ActuatorId, Arc<dyn Actuator>>,
     volumes: Registry<VolumeId, Arc<dyn Volume>>,
+    media: Registry<MediaId, Arc<dyn Media>>,
 }
 
 fn to_item_list<I, T>(registry: &Registry<I, T>) -> ItemList
@@ -501,6 +560,7 @@ impl Server {
                 devices: Registry::new(),
                 actuators: Registry::new(),
                 volumes: Registry::new(),
+                media: Registry::new(),
             }),
         }
     }
@@ -590,6 +650,26 @@ impl Server {
             .map(registry::Item::into_inner)
     }
 
+    fn register_media<M>(&self, properties: Properties, media: M) -> MediaId
+    where
+        M: Media + 'static,
+    {
+        let (id, item) = self.inner.media.add(properties, Arc::new(media));
+        info!("Registered media: {} - {}", id, item);
+        id
+    }
+
+    fn unregister_media(&self, id: MediaId) {
+        if let Some(item) = self.inner.media.lookup(id) {
+            info!("Unregistering media: {} - {}", id, item.name());
+            self.inner.media.remove(id);
+        }
+    }
+
+    pub fn get_media(&self, id: MediaId) -> Option<Arc<dyn Media>> {
+        self.inner.media.lookup(id).map(registry::Item::into_inner)
+    }
+
     fn register_device<D>(&self, properties: Properties, device: D) -> DeviceId
     where
         D: Device + 'static,
@@ -619,11 +699,15 @@ impl Server {
             boardswarm_protocol::ItemType::Device => to_item_list(&self.inner.devices),
             boardswarm_protocol::ItemType::Console => to_item_list(&self.inner.consoles),
             boardswarm_protocol::ItemType::Volume => to_item_list(&self.inner.volumes),
+            boardswarm_protocol::ItemType::Media => to_item_list(&self.inner.media),
         }
     }
 }
 
 type ItemMonitorStream = BoxStream<'static, Result<boardswarm_protocol::ItemEvent, tonic::Status>>;
+
+type MediaSignalStream =
+    stream::BoxStream<'static, Result<boardswarm_protocol::SignalMessage, tonic::Status>>;
 
 #[async_trait::async_trait]
 impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
@@ -723,6 +807,7 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
             boardswarm_protocol::ItemType::Device => to_item_stream(&self.inner.devices),
             boardswarm_protocol::ItemType::Console => to_item_stream(&self.inner.consoles),
             boardswarm_protocol::ItemType::Volume => to_item_stream(&self.inner.volumes),
+            boardswarm_protocol::ItemType::Media => to_item_stream(&self.inner.media),
         };
         Ok(tonic::Response::new(response))
     }
@@ -759,6 +844,12 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
                 .inner
                 .volumes
                 .lookup(VolumeId(request.item))
+                .ok_or_else(|| tonic::Status::not_found("Item not found"))?
+                .properties(),
+            boardswarm_protocol::ItemType::Media => self
+                .inner
+                .media
+                .lookup(MediaId(request.item))
                 .ok_or_else(|| tonic::Status::not_found("Item not found"))?
                 .properties(),
         };
@@ -1034,6 +1125,65 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         };
         Ok(tonic::Response::new(info))
     }
+
+    type MediaSetupStream = MediaSignalStream;
+    async fn media_setup(
+        &self,
+        request: tonic::Request<tonic::Streaming<MediaRequest>>,
+    ) -> Result<tonic::Response<Self::MediaSetupStream>, tonic::Status> {
+        let mut request = request.into_inner();
+        let initial_msg = match request.message().await? {
+            Some(msg) => msg,
+            None => {
+                return Err(tonic::Status::invalid_argument("No media id selection"));
+            }
+        };
+
+        let Some(media_request::ItemOrSignal::Item(media)) = initial_msg.item_or_signal else {
+            return Err(tonic::Status::invalid_argument(
+                "First message should be an item",
+            ));
+        };
+
+        let media = MediaId(media);
+        let media = self
+            .get_media(media)
+            .ok_or_else(|| tonic::Status::not_found("Media not found"))?;
+        let (mut rx, tx) = media.open().await?;
+
+        // Handle ongoing incoming stream
+        tokio::spawn(async move {
+            while let Ok(Some(msg)) = request.message().await {
+                match msg.item_or_signal {
+                    Some(media_request::ItemOrSignal::Signal(signal)) => match signal.sdp_message {
+                        Some(SdpMessage::Offer(offer)) => {
+                            rx.offer(&offer.sdp);
+                        }
+                        Some(SdpMessage::Answer(answer)) => {
+                            rx.answer(&answer.sdp);
+                        }
+                        Some(SdpMessage::Ice(ice)) => {
+                            rx.ice(&ice.candidate, ice.mline_index);
+                        }
+                        None => {
+                            warn!("Ignoring empty signalling message (signal)")
+                        }
+                    },
+                    Some(media_request::ItemOrSignal::Item(_)) => {
+                        warn!("Not expecting media item after the first message");
+                    }
+                    None => {
+                        warn!("Ignoring empty signalling message")
+                    }
+                }
+            }
+        });
+
+        let replies = tx.map(|msg| Ok(msg.into()));
+
+        // Handle outgoing stream
+        Ok(tonic::Response::new(replies.boxed()))
+    }
 }
 
 fn parse_listen_address(addr: &str) -> Result<SocketAddr, AddrParseError> {
@@ -1204,6 +1354,14 @@ async fn main() -> anyhow::Result<()> {
                     .context("Missing boardswarm provider parameters")?,
                 server.clone(),
             ),
+            v4l2_provider::PROVIDER => {
+                local.spawn_local(v4l2_provider::start_provider(
+                    p.name,
+                    p.parameters.unwrap_or_default(),
+                    server.clone(),
+                ));
+            }
+
             t => warn!("Unknown provider: {t}"),
         }
     }
