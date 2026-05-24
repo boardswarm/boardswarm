@@ -9,9 +9,11 @@ use std::{
 use boardswarm_protocol::{
     ActuatorModeRequest, ConsoleConfigureRequest, ConsoleInputRequest, ConsoleOutputRequest,
     DeviceModeRequest, DeviceRequest, Item, ItemPropertiesRequest, ItemType, ItemTypeRequest,
+    MediaRequest, SignalMessage, SignalMessageIceCandidate, SignalMessageSdp,
     VolumeEraseRequest, VolumeInfoMsg, VolumeIoFlush, VolumeIoRead, VolumeIoReply, VolumeIoRequest,
     VolumeIoShutdown, VolumeIoTarget, VolumeIoWrite, VolumeRequest, VolumeTarget,
-    boardswarm_client::BoardswarmClient, console_input_request, volume_io_reply, volume_io_request,
+    boardswarm_client::BoardswarmClient, console_input_request, media_request, signal_message,
+    volume_io_reply, volume_io_request,
 };
 use bytes::Bytes;
 use futures::{FutureExt, Stream, StreamExt, future::BoxFuture, stream};
@@ -362,6 +364,101 @@ impl Boardswarm {
         });
         self.client.volume_erase(request).await?;
         Ok(())
+    }
+
+    /// Start a WebRTC media session with the given media item.
+    ///
+    /// The returned [`MediaSession`] is used to exchange WebRTC signaling messages
+    /// (SDP offer/answer and ICE candidates) with the server over the gRPC stream.
+    pub async fn media_setup(&mut self, media: u64) -> Result<MediaSession, tonic::Status> {
+        let (tx, rx) = mpsc::channel::<MediaRequest>(16);
+
+        // Pre-queue the initial item-selection message before the streaming call.
+        // The channel has ample capacity so this will not block.
+        tx.try_send(MediaRequest {
+            item_or_signal: Some(media_request::ItemOrSignal::Item(media)),
+        })
+        .map_err(|_| tonic::Status::internal("Media channel error"))?;
+
+        let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+        let response = self.client.media_setup(stream).await?;
+
+        Ok(MediaSession {
+            tx,
+            rx: response.into_inner(),
+        })
+    }
+}
+
+/// An incoming WebRTC signaling message from the server.
+#[derive(Debug)]
+pub enum SignalMsg {
+    Offer(String),
+    Answer(String),
+    Ice { candidate: String, mline_index: u32 },
+}
+
+/// An active WebRTC media session returned by [`Boardswarm::media_setup`].
+///
+/// Use [`MediaSession::send_answer`] and [`MediaSession::send_ice`] to send
+/// signaling messages to the server, and [`MediaSession::next_signal`] to
+/// receive messages from the server.
+pub struct MediaSession {
+    tx: mpsc::Sender<MediaRequest>,
+    rx: tonic::Streaming<SignalMessage>,
+}
+
+impl MediaSession {
+    pub async fn send_answer(&mut self, sdp: String) -> Result<(), tonic::Status> {
+        self.tx
+            .send(MediaRequest {
+                item_or_signal: Some(media_request::ItemOrSignal::Signal(SignalMessage {
+                    sdp_message: Some(signal_message::SdpMessage::Answer(SignalMessageSdp {
+                        sdp,
+                    })),
+                })),
+            })
+            .await
+            .map_err(|_| tonic::Status::aborted("Media session closed"))
+    }
+
+    pub async fn send_ice(
+        &mut self,
+        candidate: String,
+        mline_index: u32,
+    ) -> Result<(), tonic::Status> {
+        self.tx
+            .send(MediaRequest {
+                item_or_signal: Some(media_request::ItemOrSignal::Signal(SignalMessage {
+                    sdp_message: Some(signal_message::SdpMessage::Ice(
+                        SignalMessageIceCandidate {
+                            candidate,
+                            mline_index,
+                        },
+                    )),
+                })),
+            })
+            .await
+            .map_err(|_| tonic::Status::aborted("Media session closed"))
+    }
+
+    /// Receive the next signal from the server, or `None` if the session ended.
+    pub async fn next_signal(&mut self) -> Option<Result<SignalMsg, tonic::Status>> {
+        match self.rx.message().await {
+            Ok(Some(msg)) => {
+                let signal = match msg.sdp_message? {
+                    signal_message::SdpMessage::Offer(sdp) => SignalMsg::Offer(sdp.sdp),
+                    signal_message::SdpMessage::Answer(sdp) => SignalMsg::Answer(sdp.sdp),
+                    signal_message::SdpMessage::Ice(ice) => SignalMsg::Ice {
+                        candidate: ice.candidate,
+                        mline_index: ice.mline_index,
+                    },
+                };
+                Some(Ok(signal))
+            }
+            Ok(None) => None,
+            Err(e) => Some(Err(e)),
+        }
     }
 }
 

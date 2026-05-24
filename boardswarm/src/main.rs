@@ -267,11 +267,21 @@ impl From<MediaSignalMsg> for SignalMessage {
 }
 
 #[derive(Clone, Error, Debug)]
-pub enum MediaError {}
+pub enum MediaError {
+    #[error("Not supported")]
+    NotSupported,
+    #[error("Internal error: {0}")]
+    Internal(String),
+}
 
 impl From<MediaError> for tonic::Status {
-    fn from(_value: MediaError) -> Self {
-        tonic::Status::internal("Not yet implemented".to_string())
+    fn from(e: MediaError) -> Self {
+        match e {
+            MediaError::NotSupported => {
+                tonic::Status::unimplemented("Media streaming not supported")
+            }
+            MediaError::Internal(msg) => tonic::Status::internal(msg),
+        }
     }
 }
 

@@ -44,7 +44,7 @@ pub async fn start_provider(name: String, _parameters: serde_yaml::Value, server
                     continue;
                 }
 
-                let d = V4l2Device::new();
+                let d = V4l2Device::new(node.to_string_lossy().into_owned());
                 let mut properties = device.properties(name.to_string_lossy().into_owned());
                 properties.extend(provider_properties);
                 let id = server.register_media(properties, d);

@@ -15,6 +15,8 @@ use boardswarm_client::{
     device::{Device, DeviceVolume},
     oidc::{OidcClientBuilder, StdoutAuth},
 };
+#[cfg(feature = "gstreamer")]
+use boardswarm_client::client::SignalMsg;
 use boardswarm_protocol::ItemType;
 use bytes::{Bytes, BytesMut};
 use clap::{Args, Parser, Subcommand, ValueEnum, builder::PossibleValue};
@@ -198,6 +200,238 @@ where
         stdout.write_all(&data).await?;
         stdout.flush().await?;
     }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// GStreamer-based WebRTC receive pipeline for the `media stream` command
+// ---------------------------------------------------------------------------
+
+/// Outbound signals generated locally by the receive-side webrtcbin.
+#[cfg(feature = "gstreamer")]
+enum OutboundSignal {
+    Answer(String),
+    Ice { candidate: String, mline_index: u32 },
+}
+
+/// Build a GStreamer receive pipeline (webrtcbin → decode chain → autovideosink).
+///
+/// Returns the pipeline and the webrtcbin element.  The pipeline is NOT yet
+/// set to PLAYING — call `pipeline.set_state(Playing)` after connecting
+/// all signal callbacks.
+#[cfg(feature = "gstreamer")]
+fn build_receive_pipeline(stun_server: &str) -> (gstreamer::Pipeline, gstreamer::Element) {
+    use gstreamer::prelude::*;
+
+    let pipeline = gstreamer::Pipeline::new();
+
+    let webrtcbin = gstreamer::ElementFactory::make("webrtcbin")
+        .name("recvbin")
+        .property_from_str("bundle-policy", "max-bundle")
+        .build()
+        .expect("webrtcbin — install gstreamer1.0-plugins-bad");
+
+    if !stun_server.is_empty() {
+        webrtcbin.set_property("stun-server", stun_server);
+    }
+
+    pipeline.add(&webrtcbin).unwrap();
+
+    // When webrtcbin exposes a new src pad, attach the decode chain
+    let pipeline_weak = pipeline.downgrade();
+    webrtcbin.connect_pad_added(move |_webrtcbin, pad| {
+        let Some(pipeline) = pipeline_weak.upgrade() else {
+            return;
+        };
+        if pad.direction() != gstreamer::PadDirection::Src {
+            return;
+        }
+
+        let queue = gstreamer::ElementFactory::make("queue").build().expect("queue");
+        let depay = gstreamer::ElementFactory::make("rtph264depay")
+            .build()
+            .expect("rtph264depay — install gstreamer1.0-plugins-good");
+        let parse = gstreamer::ElementFactory::make("h264parse")
+            .build()
+            .expect("h264parse — install gstreamer1.0-plugins-bad");
+        let decodebin = gstreamer::ElementFactory::make("decodebin")
+            .build()
+            .expect("decodebin");
+        let convert = gstreamer::ElementFactory::make("videoconvert")
+            .build()
+            .expect("videoconvert");
+        let sink = gstreamer::ElementFactory::make("autovideosink")
+            .build()
+            .expect("autovideosink — install gstreamer1.0-plugins-good");
+
+        pipeline
+            .add_many([&queue, &depay, &parse, &decodebin, &convert, &sink])
+            .unwrap();
+        gstreamer::Element::link_many([&queue, &depay, &parse, &decodebin]).unwrap();
+
+        let convert_weak = convert.downgrade();
+        let sink_weak = sink.downgrade();
+        decodebin.connect_pad_added(move |_, src_pad| {
+            let Some(convert) = convert_weak.upgrade() else {
+                return;
+            };
+            let Some(sink) = sink_weak.upgrade() else {
+                return;
+            };
+            let caps = src_pad.current_caps().unwrap_or_else(|| src_pad.query_caps(None));
+            if caps.iter().any(|s| s.name().starts_with("video/x-raw")) {
+                let convert_sink = convert.static_pad("sink").unwrap();
+                if !convert_sink.is_linked() {
+                    src_pad.link(&convert_sink).expect("decodebin → videoconvert");
+                    gstreamer::Element::link(&convert, &sink).expect("videoconvert → autovideosink");
+                    convert.sync_state_with_parent().unwrap();
+                    sink.sync_state_with_parent().unwrap();
+                }
+            }
+        });
+
+        let queue_sink = queue.static_pad("sink").unwrap();
+        pad.link(&queue_sink).expect("webrtcbin → queue");
+        for el in [&queue, &depay, &parse, &decodebin] {
+            el.sync_state_with_parent().unwrap();
+        }
+    });
+
+    (pipeline, webrtcbin)
+}
+
+/// Run the WebRTC media stream: connect to the server, exchange signaling,
+/// and display the received video in a window via autovideosink.
+#[cfg(feature = "gstreamer")]
+async fn run_media_stream(media_id: u64, mut client: Boardswarm) -> anyhow::Result<()> {
+    use gstreamer::prelude::*;
+    use gstreamer_webrtc::{WebRTCSDPType, WebRTCSessionDescription};
+    use tokio::sync::mpsc as tokio_mpsc;
+
+    gstreamer::init()?;
+
+    let stun_server = "stun://stun.l.google.com:19302";
+    let (pipeline, webrtcbin) = build_receive_pipeline(stun_server);
+
+    // Channel for outbound signals generated by the local webrtcbin
+    let (outbound_tx, mut outbound_rx) = tokio_mpsc::unbounded_channel::<OutboundSignal>();
+
+    // Forward local ICE candidates to the outbound channel
+    let tx_ice = outbound_tx.clone();
+    webrtcbin.connect("on-ice-candidate", false, move |values| {
+        let mline_index = values[1].get::<u32>().unwrap();
+        let candidate = values[2].get::<String>().unwrap();
+        let _ = tx_ice.send(OutboundSignal::Ice {
+            candidate,
+            mline_index,
+        });
+        None
+    });
+
+    pipeline.set_state(gstreamer::State::Playing)?;
+    tracing::info!("GStreamer receive pipeline started");
+
+    // Monitor the pipeline bus for errors / EOS in a background thread
+    let bus = pipeline.bus().expect("Pipeline has no bus");
+    let pipeline_for_bus = pipeline.clone();
+    std::thread::spawn(move || {
+        for msg in bus.iter_timed(gstreamer::ClockTime::NONE) {
+            match msg.view() {
+                gstreamer::MessageView::Eos(..) => {
+                    tracing::warn!("Media stream ended");
+                    break;
+                }
+                gstreamer::MessageView::Error(err) => {
+                    tracing::error!(
+                        "Pipeline error from {:?}: {}",
+                        err.src().map(|s| s.path_string()),
+                        err.error()
+                    );
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let _ = pipeline_for_bus.set_state(gstreamer::State::Null);
+    });
+
+    // Start the gRPC media session
+    let mut session = client.media_setup(media_id).await?;
+    println!("Media session established — waiting for stream…");
+
+    loop {
+        tokio::select! {
+            // Forward locally-generated signals (ICE, answer) to the server
+            Some(outbound) = outbound_rx.recv() => {
+                match outbound {
+                    OutboundSignal::Answer(sdp) => {
+                        session.send_answer(sdp).await?;
+                    }
+                    OutboundSignal::Ice { candidate, mline_index } => {
+                        session.send_ice(candidate, mline_index).await?;
+                    }
+                }
+            }
+
+            // Handle signals from the server
+            msg = session.next_signal() => {
+                match msg {
+                    Some(Ok(SignalMsg::Offer(sdp))) => {
+                        tracing::info!("Received offer, creating answer…");
+                        let sdp_msg = gstreamer_sdp::SDPMessage::parse_buffer(sdp.as_bytes())
+                            .map_err(|e| anyhow::anyhow!("SDP parse error: {e}"))?;
+                        let remote_desc = WebRTCSessionDescription::new(
+                            WebRTCSDPType::Offer,
+                            sdp_msg,
+                        );
+                        webrtcbin.emit_by_name::<()>(
+                            "set-remote-description",
+                            &[&remote_desc, &None::<gstreamer::Promise>],
+                        );
+
+                        let webrtcbin_promise = webrtcbin.clone();
+                        let tx_answer = outbound_tx.clone();
+                        let promise = gstreamer::Promise::with_change_func(move |reply| {
+                            let Ok(Some(reply)) = reply else { return; };
+                            let answer = reply
+                                .get::<WebRTCSessionDescription>("answer")
+                                .expect("answer in promise");
+                            webrtcbin_promise.emit_by_name::<()>(
+                                "set-local-description",
+                                &[&answer, &None::<gstreamer::Promise>],
+                            );
+                            let sdp_text = answer.sdp().as_text().unwrap();
+                            let _ = tx_answer.send(OutboundSignal::Answer(sdp_text));
+                        });
+                        webrtcbin.emit_by_name::<()>(
+                            "create-answer",
+                            &[&None::<gstreamer::Structure>, &promise],
+                        );
+                    }
+                    Some(Ok(SignalMsg::Ice { candidate, mline_index })) => {
+                        tracing::debug!("Received ICE candidate");
+                        webrtcbin.emit_by_name::<()>(
+                            "add-ice-candidate",
+                            &[&mline_index, &candidate],
+                        );
+                    }
+                    Some(Ok(SignalMsg::Answer(_))) => {
+                        tracing::warn!("Unexpected answer from server (server is the offerer)");
+                    }
+                    Some(Err(e)) => {
+                        return Err(e.into());
+                    }
+                    None => {
+                        tracing::info!("Media session ended by server");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    pipeline.set_state(gstreamer::State::Null)?;
+    tracing::info!("Shut down cleanly");
     Ok(())
 }
 
@@ -673,6 +907,22 @@ enum RockCommand {
     },
 }
 
+fn parse_media(s: &str) -> Result<ItemArg, Infallible> {
+    if let Ok(id) = s.parse() {
+        Ok(ItemArg::Id(id))
+    } else {
+        Ok(ItemArg::Name(s.to_string()))
+    }
+}
+
+#[derive(Debug, Subcommand)]
+enum MediaCommand {
+    /// Stream video from a media device to a display window
+    Stream,
+    /// Display media item properties
+    Properties,
+}
+
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Configure client authentication to boardswarm servers
@@ -753,6 +1003,14 @@ enum Command {
         #[clap(long, default_value_t = 5000)]
         /// Number of lines to keep for scrollback
         scrollback_lines: usize,
+    },
+    /// Media item specific commands
+    Media {
+        /// The media item to use
+        #[arg(value_parser = parse_media)]
+        media: ItemArg,
+        #[command(subcommand)]
+        command: MediaCommand,
     },
 }
 
@@ -1466,6 +1724,22 @@ async fn main() -> anyhow::Result<()> {
 
             let console = console.open(&device).await?;
             ui::run_ui(device, console, terminal_size, scrollback_lines).await
+        }
+        Command::Media { media, command } => {
+            let media_id = item_lookup(media, ItemType::Media, boardswarm.clone()).await?;
+            match command {
+                MediaCommand::Properties => {
+                    let items = boardswarm.properties(ItemType::Media, media_id).await?;
+                    println!("{:#?}", items);
+                }
+                MediaCommand::Stream => {
+                    #[cfg(feature = "gstreamer")]
+                    run_media_stream(media_id, boardswarm).await?;
+                    #[cfg(not(feature = "gstreamer"))]
+                    bail!("GStreamer support not compiled in. Rebuild with --features gstreamer");
+                }
+            }
+            Ok(())
         }
     }
 }

@@ -47,3 +47,9 @@ strum_macros = "0.28.0"
 regex = "1.11.1"
 proc-mounts = "0.3.0"
 rustls = { version = "0.23.37", features = ["aws-lc-rs"] }
+gstreamer = { version = "0.23", optional = true }
+gstreamer-webrtc = { version = "0.23", optional = true }
+gstreamer-sdp = { version = "0.23", optional = true }
+
+[features]
+gstreamer = ["dep:gstreamer", "dep:gstreamer-webrtc", "dep:gstreamer-sdp"]
