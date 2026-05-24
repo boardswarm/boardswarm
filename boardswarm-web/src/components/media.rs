@@ -115,7 +115,7 @@ pub fn MediaViewer(media_id: u64, token: String) -> Element {
 
     let video_style = if fill_window() {
         "position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; \
-         z-index: 1000; background: #000; object-fit: contain;"
+         z-index: 9999; background: #000; object-fit: contain; margin: 0;"
     } else {
         "width: 100%; max-width: 800px; background: #000; border-radius: 4px;"
     };
@@ -148,22 +148,24 @@ pub fn MediaViewer(media_id: u64, token: String) -> Element {
                 }
             }
 
-            // Overlay close button when filling the window
-            if fill_window() {
-                button {
-                    style: "position: fixed; top: 1rem; right: 1rem; z-index: 1001; \
-                            background: rgba(0,0,0,0.6); color: #fff; border: none; \
-                            border-radius: 4px; padding: 0.4rem 0.8rem; cursor: pointer; font-size: 1rem;",
-                    onclick: move |_| fill_window.set(false),
-                    "✕"
-                }
-            }
-
             video {
                 id: "{video_id}",
                 autoplay: "true",
                 playsinline: "true",
                 style: "{video_style}",
+            }
+
+            // Close button rendered after <video> in the DOM so it is always
+            // painted on top regardless of z-index stacking context.
+            if fill_window() {
+                button {
+                    style: "position: fixed; top: 1rem; right: 1rem; z-index: 10000; \
+                            background: rgba(0,0,0,0.6); color: #fff; border: none; \
+                            border-radius: 4px; padding: 0.4rem 0.8rem; cursor: pointer; \
+                            font-size: 1.2rem; line-height: 1;",
+                    onclick: move |_| fill_window.set(false),
+                    "✕"
+                }
             }
         }
     }
