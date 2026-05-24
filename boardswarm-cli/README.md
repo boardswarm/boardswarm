@@ -21,13 +21,19 @@ For more information see `boardswarm-cli auth --help`
 
 ## Boardswarm UI
 
-The ui subcommand launches a tui:
+The ui subcommand launches a tui for a specific device:
 ```
 $ boardswarm-cli ui <device name or id>
 ```
 
+Alternatively, you may choose a device from a list of devices with:
+```
+$ boardswarm-cli ui
+```
+
 The UI has the follow keyboard shortcuts:
 * ^a q: Quit the ui
+* ^a s: Open the device switcher UI to choose a different device
 * ^a o: Change the device to mode "on"
 * ^a f: Change the device to mode "off"
 * ^a r: Reset the device's power (same as changing mode to "off" then "on")

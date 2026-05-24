@@ -1,26 +1,18 @@
-use std::task::Poll;
-use std::{num::ParseIntError, str::FromStr};
+use std::{num::ParseIntError, pin::Pin, str::FromStr};
 
+use boardswarm_client::client::Boardswarm;
+use boardswarm_protocol::ItemType;
 use bytes::Bytes;
-use futures::{Stream, StreamExt, pin_mut, ready};
+use futures::{Stream, StreamExt};
 use ratatui::{
-    Terminal as TuiTerminal,
-    backend::CrosstermBackend,
+    crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     layout::{Rect, Size},
-    widgets::{Block, Borders},
+    style::Style,
+    widgets::{Block, Borders, List, ListItem, ListState},
 };
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio_util::sync::ReusableBoxFuture;
-use tracing::warn;
 
 use crate::ui_term;
-
-struct Terminal {
-    parser: vt100::Parser,
-    tui: TuiTerminal<CrosstermBackend<std::io::Stdout>>,
-    size_setting: TerminalSizeSetting,
-}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TerminalSizeSetting {
@@ -67,275 +59,405 @@ impl FromStr for TerminalSizeSetting {
     }
 }
 
-impl Terminal {
+struct DeviceSelector {
+    items: Vec<boardswarm_protocol::Item>,
+    list_state: ListState,
+}
+
+enum SelectAction {
+    Select(u64),
+    Quit,
+}
+
+impl DeviceSelector {
+    fn new(items: Vec<boardswarm_protocol::Item>) -> Self {
+        let mut list_state = ListState::default();
+        list_state.select(Some(0));
+        Self { items, list_state }
+    }
+
+    fn render(&mut self, frame: &mut ratatui::Frame) {
+        let area = frame.area();
+        let list_items: Vec<ListItem> = self
+            .items
+            .iter()
+            .map(|i| ListItem::new(i.name.clone()))
+            .collect();
+        let list = List::new(list_items)
+            .block(
+                Block::default()
+                    .title(" Select a device (↑/↓ or j/k to navigate, Enter to select, q to quit) ")
+                    .borders(Borders::ALL),
+            )
+            .highlight_style(Style::new().reversed())
+            .highlight_symbol("> ");
+        frame.render_stateful_widget(list, area, &mut self.list_state);
+    }
+
+    fn handle_key(&mut self, key: KeyEvent) -> Option<SelectAction> {
+        if key.kind != KeyEventKind::Press {
+            return None;
+        }
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => {
+                let i = self.list_state.selected().unwrap_or(0);
+                self.list_state
+                    .select(Some((i + 1).min(self.items.len() - 1)));
+                None
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                let i = self.list_state.selected().unwrap_or(0);
+                self.list_state.select(Some(i.saturating_sub(1)));
+                None
+            }
+            KeyCode::Enter => self
+                .list_state
+                .selected()
+                .map(|i| SelectAction::Select(self.items[i].id)),
+            KeyCode::Char('q') | KeyCode::Esc => Some(SelectAction::Quit),
+            _ => None,
+        }
+    }
+}
+
+struct RunningState {
+    parser: vt100::Parser,
+    size_setting: TerminalSizeSetting,
+    output: Pin<Box<dyn Stream<Item = Bytes> + Send>>,
+    input_tx: futures::channel::mpsc::Sender<Bytes>,
+    device: boardswarm_client::device::Device,
+    saw_escape: bool,
+}
+
+enum RunAction {
+    Exit,
+    SwitchDevice,
+}
+
+impl RunningState {
     async fn new(
+        device: boardswarm_client::device::Device,
+        console_name: Option<&str>,
         size_setting: TerminalSizeSetting,
         scrollback_lines: usize,
-        tui: TuiTerminal<CrosstermBackend<std::io::Stdout>>,
-    ) -> Self {
+        tui_size: Size,
+    ) -> anyhow::Result<Self> {
         let size = match size_setting {
             TerminalSizeSetting::Fixed(s) => s,
-            TerminalSizeSetting::Auto => match tui.size() {
-                Ok(s) => s,
-                Err(_) => {
-                    warn!("Unable to retrieve terminal size, use default value ('80x24')");
-                    Size {
-                        width: 80,
-                        height: 24,
-                    }
-                }
-            },
+            TerminalSizeSetting::Auto => tui_size,
         };
+
+        let mut console = match console_name {
+            Some(name) => device.console_by_name(name),
+            None => device.console(),
+        }
+        .ok_or_else(|| anyhow::anyhow!("Console not available"))?;
+
+        let output = console.stream_output().await?;
+
+        let (input_tx, input_rx) = futures::channel::mpsc::channel::<Bytes>(16);
+        tokio::spawn(async move {
+            let _ = console.stream_input(input_rx).await;
+        });
 
         let parser = vt100::Parser::new(size.height, size.width, scrollback_lines);
-        let mut this = Self {
+
+        Ok(Self {
             parser,
-            tui,
             size_setting,
-        };
-        this.update().await;
-        this
+            output: Box::pin(output),
+            input_tx,
+            device,
+            saw_escape: false,
+        })
     }
 
-    fn scroll_up(&mut self) {
-        let offset = self.parser.screen().scrollback();
-        self.parser.screen_mut().set_scrollback(offset + 1)
-    }
-
-    fn scroll_down(&mut self) {
-        let offset = self.parser.screen().scrollback();
-        if offset > 0 {
-            self.parser.screen_mut().set_scrollback(offset - 1)
-        }
-    }
-
-    fn scroll_reset(&mut self) {
-        self.parser.screen_mut().set_scrollback(0)
-    }
-
-    fn process(&mut self, bytes: &[u8]) {
-        self.parser.process(bytes);
-    }
-
-    async fn update(&mut self) {
+    fn render(&self, frame: &mut ratatui::Frame) {
+        let area = frame.area();
         let term_size = match self.size_setting {
             TerminalSizeSetting::Fixed(s) => s,
-            TerminalSizeSetting::Auto => {
-                // Try to auto resize terminal and parser
-                if self.tui.autoresize().is_ok() {
-                    match self.tui.size() {
-                        Ok(s) => s,
-                        Err(_) => Size {
-                            width: 80,
-                            height: 24,
-                        },
-                    }
-                } else {
-                    // Fallback
-                    Size {
-                        width: 80,
-                        height: 24,
-                    }
-                }
-            }
+            TerminalSizeSetting::Auto => Size {
+                width: area.width,
+                height: area.height,
+            },
         };
-        self.parser
-            .screen_mut()
-            .set_size(term_size.height, term_size.width);
-
         let screen = self.parser.screen();
         let term = ui_term::UiTerm::new(screen);
-        self.tui
-            .draw(|f| {
-                let area = f.area();
-                let term_area = Rect::new(
-                    0,
-                    0,
-                    term_size.width.min(area.width),
-                    term_size.height.min(area.height),
-                );
-                f.render_widget(term, term_area);
-                if !screen.hide_cursor() && screen.scrollback() == 0 {
-                    let cursor = screen.cursor_position();
-                    f.set_cursor_position((cursor.1 + term_area.x, cursor.0 + term_area.y));
+        let term_area = Rect::new(
+            0,
+            0,
+            term_size.width.min(area.width),
+            term_size.height.min(area.height),
+        );
+        frame.render_widget(term, term_area);
+        if !screen.hide_cursor() && screen.scrollback() == 0 {
+            let cursor = screen.cursor_position();
+            frame.set_cursor_position((cursor.1 + term_area.x, cursor.0 + term_area.y));
+        }
+    }
+
+    fn process_output(&mut self, data: Bytes) {
+        self.parser.process(&data);
+    }
+
+    fn handle_resize(&mut self, width: u16, height: u16) {
+        if self.size_setting == TerminalSizeSetting::Auto {
+            self.parser.screen_mut().set_size(height, width);
+        }
+    }
+
+    async fn handle_key(&mut self, key: KeyEvent) -> Option<RunAction> {
+        if key.kind != KeyEventKind::Press {
+            return None;
+        }
+
+        if self.saw_escape {
+            self.saw_escape = false;
+            match key.code {
+                KeyCode::Char('q') => return Some(RunAction::Exit),
+                KeyCode::Char('s') => return Some(RunAction::SwitchDevice),
+                KeyCode::Char('o') => {
+                    let _ = self.device.change_mode("on").await;
                 }
-            })
-            .unwrap();
-    }
-}
-
-async fn process_input<R>(mut input: R) -> (Bytes, R)
-where
-    R: AsyncRead + Unpin,
-{
-    let mut buffer = [0; 4096];
-    let read = input.read(&mut buffer).await.unwrap();
-    (Bytes::copy_from_slice(&buffer[0..read]), input)
-}
-
-#[derive(Debug, Clone)]
-enum Input {
-    PowerOn,
-    PowerOff,
-    PowerReset,
-    Up,
-    Down,
-    ScrollReset,
-    Bytes(Bytes),
-}
-
-struct InputStream<R> {
-    saw_escape: bool,
-    future: tokio_util::sync::ReusableBoxFuture<'static, (Bytes, R)>,
-}
-
-impl<R> InputStream<R>
-where
-    R: AsyncRead + Unpin + Send + 'static,
-{
-    fn new(rx: R) -> Self {
-        let future = ReusableBoxFuture::new(process_input(rx));
-        Self {
-            saw_escape: false,
-            future,
-        }
-    }
-
-    fn check_input(&mut self, input: Bytes) -> Option<Input> {
-        for i in &input {
-            match i {
-                0x1 => self.saw_escape = true, /* ^a */
-                b'q' if self.saw_escape => return None,
-                b'o' if self.saw_escape => return Some(Input::PowerOn),
-                b'f' if self.saw_escape => return Some(Input::PowerOff),
-                b'r' if self.saw_escape => return Some(Input::PowerReset),
-                b'k' if self.saw_escape => return Some(Input::Up),
-                b'j' if self.saw_escape => return Some(Input::Down),
-                // FIXME enter doesn't work
-                b'\n' if self.saw_escape => return Some(Input::ScrollReset),
-                b'0' if self.saw_escape => return Some(Input::ScrollReset),
-                _ => self.saw_escape = false,
+                KeyCode::Char('f') => {
+                    let _ = self.device.change_mode("off").await;
+                }
+                KeyCode::Char('r') => {
+                    let _ = self.device.change_mode("off").await;
+                    let _ = self.device.change_mode("on").await;
+                }
+                KeyCode::Char('k') => {
+                    let offset = self.parser.screen().scrollback();
+                    self.parser.screen_mut().set_scrollback(offset + 1);
+                }
+                KeyCode::Char('j') => {
+                    let offset = self.parser.screen().scrollback();
+                    if offset > 0 {
+                        self.parser.screen_mut().set_scrollback(offset - 1);
+                    }
+                }
+                KeyCode::Enter | KeyCode::Char('0') => {
+                    self.parser.screen_mut().set_scrollback(0);
+                }
+                _ => {}
             }
+            return None;
         }
-        Some(Input::Bytes(input))
+
+        if key.code == KeyCode::Char('a') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.saw_escape = true;
+            return None;
+        }
+
+        if let Some(bytes) = key_to_bytes(key) {
+            let _ = self.input_tx.try_send(bytes);
+        }
+        None
     }
 }
 
-impl<R> Stream for InputStream<R>
-where
-    R: AsyncRead + Unpin + Send + 'static,
-{
-    type Item = Input;
+fn key_to_bytes(key: KeyEvent) -> Option<Bytes> {
+    match key.code {
+        KeyCode::Char(c) => {
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                let byte = (c as u8)
+                    .to_ascii_lowercase()
+                    .wrapping_sub(b'a')
+                    .wrapping_add(1);
+                return Some(Bytes::from(vec![byte]));
+            }
+            let mut buf = [0u8; 4];
+            let s = c.encode_utf8(&mut buf);
+            Some(Bytes::copy_from_slice(s.as_bytes()))
+        }
+        KeyCode::Enter => Some(Bytes::from_static(b"\r")),
+        KeyCode::Backspace => Some(Bytes::from_static(b"\x7f")),
+        KeyCode::Tab => Some(Bytes::from_static(b"\t")),
+        KeyCode::BackTab => Some(Bytes::from_static(b"\x1b[Z")),
+        KeyCode::Esc => Some(Bytes::from_static(b"\x1b")),
+        KeyCode::Up => Some(Bytes::from_static(b"\x1b[A")),
+        KeyCode::Down => Some(Bytes::from_static(b"\x1b[B")),
+        KeyCode::Right => Some(Bytes::from_static(b"\x1b[C")),
+        KeyCode::Left => Some(Bytes::from_static(b"\x1b[D")),
+        KeyCode::Home => Some(Bytes::from_static(b"\x1b[H")),
+        KeyCode::End => Some(Bytes::from_static(b"\x1b[F")),
+        KeyCode::Insert => Some(Bytes::from_static(b"\x1b[2~")),
+        KeyCode::Delete => Some(Bytes::from_static(b"\x1b[3~")),
+        KeyCode::PageUp => Some(Bytes::from_static(b"\x1b[5~")),
+        KeyCode::PageDown => Some(Bytes::from_static(b"\x1b[6~")),
+        KeyCode::F(1) => Some(Bytes::from_static(b"\x1bOP")),
+        KeyCode::F(2) => Some(Bytes::from_static(b"\x1bOQ")),
+        KeyCode::F(3) => Some(Bytes::from_static(b"\x1bOR")),
+        KeyCode::F(4) => Some(Bytes::from_static(b"\x1bOS")),
+        KeyCode::F(5) => Some(Bytes::from_static(b"\x1b[15~")),
+        KeyCode::F(6) => Some(Bytes::from_static(b"\x1b[17~")),
+        KeyCode::F(7) => Some(Bytes::from_static(b"\x1b[18~")),
+        KeyCode::F(8) => Some(Bytes::from_static(b"\x1b[19~")),
+        KeyCode::F(9) => Some(Bytes::from_static(b"\x1b[20~")),
+        KeyCode::F(10) => Some(Bytes::from_static(b"\x1b[21~")),
+        KeyCode::F(11) => Some(Bytes::from_static(b"\x1b[23~")),
+        KeyCode::F(12) => Some(Bytes::from_static(b"\x1b[24~")),
+        _ => None,
+    }
+}
 
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        let (data, rx) = ready!(self.future.poll(cx));
-        self.future.set(process_input(rx));
+enum AppState {
+    SelectingDevice(DeviceSelector, Option<Box<RunningState>>),
+    Running(Box<RunningState>),
+}
 
-        Poll::Ready(self.check_input(data))
+impl AppState {
+    fn render(&mut self, frame: &mut ratatui::Frame) {
+        match self {
+            AppState::SelectingDevice(s, _) => s.render(frame),
+            AppState::Running(r) => r.render(frame),
+        }
     }
 }
 
 pub async fn run_ui(
-    device: boardswarm_client::device::Device,
-    mut console: boardswarm_client::device::DeviceConsole,
+    device: Option<boardswarm_client::device::Device>,
+    boardswarm: Boardswarm,
+    console: Option<String>,
     terminal_size_setting: TerminalSizeSetting,
     scrollback_lines: usize,
 ) -> anyhow::Result<()> {
-    let mut terminal = ratatui::init();
-
-    terminal.draw(|f| {
-        let area = f.area();
-        let block = Block::default().title("Block").borders(Borders::ALL);
-        f.render_widget(block, area);
-    })?;
-
-    let stdin = tokio::io::stdin();
-    let stdin_termios = nix::sys::termios::tcgetattr(&stdin).unwrap();
-
-    let mut stdin_termios_mod = stdin_termios.clone();
-    nix::sys::termios::cfmakeraw(&mut stdin_termios_mod);
-    nix::sys::termios::tcsetattr(
-        &stdin,
-        nix::sys::termios::SetArg::TCSANOW,
-        &stdin_termios_mod,
+    let mut tui = ratatui::init();
+    let result = run_app(
+        &mut tui,
+        device,
+        boardswarm,
+        console.as_deref(),
+        terminal_size_setting,
+        scrollback_lines,
     )
-    .unwrap();
+    .await;
+    ratatui::restore();
+    result
+}
 
-    let mut terminal = Terminal::new(terminal_size_setting, scrollback_lines, terminal).await;
+async fn run_app(
+    tui: &mut ratatui::DefaultTerminal,
+    device: Option<boardswarm_client::device::Device>,
+    mut boardswarm: Boardswarm,
+    console_name: Option<&str>,
+    terminal_size_setting: TerminalSizeSetting,
+    scrollback_lines: usize,
+) -> anyhow::Result<()> {
+    let tui_size = tui.size().unwrap_or(Size {
+        width: 80,
+        height: 24,
+    });
 
-    let mut output_console = console.clone();
-    let output = output_console.stream_output().await?;
+    let mut state = if let Some(d) = device {
+        AppState::Running(Box::new(
+            RunningState::new(
+                d,
+                console_name,
+                terminal_size_setting.clone(),
+                scrollback_lines,
+                tui_size,
+            )
+            .await?,
+        ))
+    } else {
+        let items = boardswarm.list(ItemType::Device).await?;
+        if items.is_empty() {
+            anyhow::bail!("No devices available on the server");
+        }
+        AppState::SelectingDevice(DeviceSelector::new(items), None)
+    };
 
-    let (input_tx, input_rx) = tokio::sync::mpsc::channel(16);
-    let _writer = tokio::spawn(async move {
-        pin_mut!(output);
-        pin_mut!(input_rx);
-        loop {
-            tokio::select! {
-                data = output.next() => {
-                    if let Some(data) = &data {
-                        terminal.process(data);
-                    } else {
-                        break
-                    }
-                }
-                Some(input) = input_rx.recv() => {
-                    match input {
-                        Input::Up => { terminal.scroll_up(); },
-                        Input::Down => { terminal.scroll_down(); },
-                        Input::ScrollReset => { terminal.scroll_reset(); },
-                        _ => (),
+    let mut event_stream = EventStream::new();
+    tui.draw(|f| state.render(f))?;
+
+    loop {
+        let mut next_state: Option<AppState> = None;
+
+        match &mut state {
+            AppState::SelectingDevice(selector, return_to) => {
+                let Some(Ok(event)) = event_stream.next().await else {
+                    break;
+                };
+                if let Event::Key(key) = event {
+                    match selector.handle_key(key) {
+                        Some(SelectAction::Select(id)) => {
+                            let tui_size = tui.size().unwrap_or(Size {
+                                width: 80,
+                                height: 24,
+                            });
+                            let device = boardswarm_client::device::DeviceBuilder::from_client(
+                                boardswarm.clone(),
+                            )
+                            .by_id(id)
+                            .await?;
+                            next_state = Some(AppState::Running(Box::new(
+                                RunningState::new(
+                                    device,
+                                    console_name,
+                                    terminal_size_setting.clone(),
+                                    scrollback_lines,
+                                    tui_size,
+                                )
+                                .await?,
+                            )));
+                        }
+                        Some(SelectAction::Quit) => match return_to.take() {
+                            Some(previous) => next_state = Some(AppState::Running(previous)),
+                            None => break,
+                        },
+                        None => {}
                     }
                 }
             }
-            terminal.update().await;
-        }
-    });
-
-    let reader = tokio::spawn(async move {
-        let input = InputStream::new(stdin);
-        console
-            .stream_input(input.filter_map(move |i| {
-                let device = device.clone();
-                let input_tx = input_tx.clone();
-                async move {
-                    match i {
-                        Input::PowerOn => {
-                            device.change_mode("on").await.unwrap();
-                            None
+            AppState::Running(runner) => {
+                tokio::select! {
+                    event = event_stream.next() => {
+                        let Some(Ok(event)) = event else { break; };
+                        match event {
+                            Event::Key(key) => {
+                                match runner.handle_key(key).await {
+                                    Some(RunAction::Exit) => break,
+                                    Some(RunAction::SwitchDevice) => {
+                                        let items = boardswarm.list(ItemType::Device).await?;
+                                        if !items.is_empty() {
+                                            // Take the runner out of state to store as return_to.
+                                            // We'll overwrite state below via next_state.
+                                            let selector = DeviceSelector::new(items);
+                                            if let AppState::Running(runner) =
+                                                std::mem::replace(&mut state, AppState::SelectingDevice(selector, None))
+                                                && let AppState::SelectingDevice(_, return_to) = &mut state {
+                                                    *return_to = Some(runner);
+                                                }
+                                            tui.draw(|f| state.render(f))?;
+                                            continue;
+                                        }
+                                    }
+                                    None => {}
+                                }
+                            }
+                            Event::Resize(w, h) => runner.handle_resize(w, h),
+                            _ => {}
                         }
-                        Input::PowerOff => {
-                            device.change_mode("off").await.unwrap();
-                            None
+                    }
+                    data = runner.output.next() => {
+                        match data {
+                            Some(data) => runner.process_output(data),
+                            None => break,
                         }
-                        Input::PowerReset => {
-                            device.change_mode("off").await.unwrap();
-                            device.change_mode("on").await.unwrap();
-                            None
-                        }
-                        Input::Up | Input::Down | Input::ScrollReset => {
-                            input_tx.send(i).await.unwrap();
-                            None
-                        }
-                        Input::Bytes(data) => Some(data),
                     }
                 }
-            }))
-            .await
-    });
+            }
+        }
 
-    let r = reader.await;
+        if let Some(new_state) = next_state {
+            state = new_state;
+        }
 
-    ratatui::restore();
-    match r {
-        Ok(_) => Ok(()),
-        //Ok(Ok(_)) => Ok(()),
-        //Ok(Err(e)) => Err(e.into()),
-        Err(e) => Err(e.into()),
+        tui.draw(|f| state.render(f))?;
     }
+
+    Ok(())
 }
 
 #[cfg(test)]

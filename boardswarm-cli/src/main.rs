@@ -735,11 +735,11 @@ enum Command {
         #[clap(long, short)]
         verbose: bool,
     },
-    /// Open the UI for a given device
+    /// Open the UI
     Ui {
         #[arg(value_parser = parse_device)]
-        /// The device to use
-        device: DeviceArg,
+        /// The device to use. If unspecified, a selection menu is shown
+        device: Option<DeviceArg>,
         #[command(flatten)]
         console: DeviceConsoleArgs,
         /// Terminal size, with the possible formats:
@@ -1456,13 +1456,23 @@ async fn main() -> anyhow::Result<()> {
             terminal_size,
             scrollback_lines,
         } => {
-            let device = device
-                .device(boardswarm)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("Device not found"))?;
+            let device = match device {
+                Some(d) => Some(
+                    d.device(boardswarm.clone())
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("Device not found"))?,
+                ),
+                None => None,
+            };
 
-            let console = console.open(&device).await?;
-            ui::run_ui(device, console, terminal_size, scrollback_lines).await
+            ui::run_ui(
+                device,
+                boardswarm,
+                console.console,
+                terminal_size,
+                scrollback_lines,
+            )
+            .await
         }
     }
 }
