@@ -15,6 +15,12 @@ extern "C" {
     fn webrtc_set_offer(handle: u32, offer_sdp: &str, on_answer: &Closure<dyn FnMut(String)>);
     fn webrtc_add_ice(handle: u32, candidate: &str, mline_index: u32);
     fn webrtc_dispose(handle: u32);
+    /// Move the video element into a top-level <dialog> modal that covers the
+    /// full viewport. The dialog manages its own close button; Dioxus state is
+    /// not involved so there are no re-render / stacking-context issues.
+    fn webrtc_enter_fill(video_element_id: &str);
+    /// Restore the video element to its original DOM position and close the dialog.
+    fn webrtc_exit_fill(video_element_id: &str);
 }
 
 fn request_fullscreen(element_id: &str) {
@@ -36,7 +42,6 @@ fn request_fullscreen(element_id: &str) {
 pub fn MediaViewer(media_id: u64, token: String) -> Element {
     let mut status = use_signal(|| "Connecting...".to_string());
     let mut connected = use_signal(|| false);
-    let mut fill_window = use_signal(|| false);
 
     let video_id = format!("media-video-{media_id}");
     let video_id_clone = video_id.clone();
@@ -80,12 +85,11 @@ pub fn MediaViewer(media_id: u64, token: String) -> Element {
                 // on_offer: server sent SDP offer → create answer → send back
                 move |offer_sdp: String| {
                     let ws_cell = ws_for_answer.clone();
-                    let on_answer_cb =
-                        Closure::once(move |answer_sdp: String| {
-                            if let Some(ws) = ws_cell.borrow().as_ref() {
-                                let _ = ws.send_answer(answer_sdp);
-                            }
-                        });
+                    let on_answer_cb = Closure::once(move |answer_sdp: String| {
+                        if let Some(ws) = ws_cell.borrow().as_ref() {
+                            let _ = ws.send_answer(answer_sdp);
+                        }
+                    });
                     webrtc_set_offer(pc_handle, &offer_sdp, &on_answer_cb);
                     on_answer_cb.forget();
                 },
@@ -113,14 +117,8 @@ pub fn MediaViewer(media_id: u64, token: String) -> Element {
         });
     });
 
-    let video_style = if fill_window() {
-        "position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; \
-         z-index: 9999; background: #000; object-fit: contain; margin: 0;"
-    } else {
-        "width: 100%; max-width: 800px; background: #000; border-radius: 4px;"
-    };
-
-    let video_id_for_fullscreen = video_id.clone();
+    let video_id_fill = video_id.clone();
+    let video_id_fullscreen = video_id.clone();
 
     rsx! {
         div {
@@ -136,14 +134,14 @@ pub fn MediaViewer(media_id: u64, token: String) -> Element {
                 }
                 button {
                     class: "btn",
-                    title: if fill_window() { "Restore size" } else { "Fill window" },
-                    onclick: move |_| fill_window.set(!fill_window()),
-                    if fill_window() { "⤡ Restore" } else { "⤢ Fill window" }
+                    title: "Fill window",
+                    onclick: move |_| webrtc_enter_fill(&video_id_fill),
+                    "⤢ Fill window"
                 }
                 button {
                     class: "btn",
                     title: "Fullscreen",
-                    onclick: move |_| request_fullscreen(&video_id_for_fullscreen),
+                    onclick: move |_| request_fullscreen(&video_id_fullscreen),
                     "⛶ Fullscreen"
                 }
             }
@@ -152,21 +150,9 @@ pub fn MediaViewer(media_id: u64, token: String) -> Element {
                 id: "{video_id}",
                 autoplay: "true",
                 playsinline: "true",
-                style: "{video_style}",
-            }
-
-            // Close button rendered after <video> in the DOM so it is always
-            // painted on top regardless of z-index stacking context.
-            if fill_window() {
-                button {
-                    style: "position: fixed; top: 1rem; right: 1rem; z-index: 10000; \
-                            background: rgba(0,0,0,0.6); color: #fff; border: none; \
-                            border-radius: 4px; padding: 0.4rem 0.8rem; cursor: pointer; \
-                            font-size: 1.2rem; line-height: 1;",
-                    onclick: move |_| fill_window.set(false),
-                    "✕"
-                }
+                style: "width: 100%; max-width: 800px; background: #000; border-radius: 4px;",
             }
         }
     }
 }
+
