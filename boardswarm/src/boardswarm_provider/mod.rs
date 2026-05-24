@@ -177,7 +177,15 @@ async fn monitor_items(
     server: Server,
     instance: &str,
 ) {
-    let monitor = remote.monitor(type_).await.unwrap();
+    let monitor = match remote.monitor(type_).await {
+        Ok(m) => m,
+        Err(e) => {
+            // Older servers may not support all item types (e.g. Media).
+            // Treat this as "no items of this type" rather than a fatal error.
+            warn!("Remote {instance} does not support monitoring {type_:?}: {e}");
+            return;
+        }
+    };
     pin_mut!(monitor);
     while let Ok(Some(event)) = monitor.try_next().await {
         match event {
