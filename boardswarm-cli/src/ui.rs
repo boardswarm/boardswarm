@@ -318,7 +318,7 @@ impl AppState {
 pub async fn run_ui(
     device: Option<boardswarm_client::device::Device>,
     boardswarm: Boardswarm,
-    mut console: Option<boardswarm_client::device::DeviceConsole>,
+    console: Option<String>,
     terminal_size_setting: TerminalSizeSetting,
     scrollback_lines: usize,
 ) -> anyhow::Result<()> {

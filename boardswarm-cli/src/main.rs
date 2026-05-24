@@ -1465,11 +1465,10 @@ async fn main() -> anyhow::Result<()> {
                 None => None,
             };
 
-            let console = console.open(&device).await?;
             ui::run_ui(
                 device,
                 boardswarm,
-                console,
+                console.console,
                 terminal_size,
                 scrollback_lines,
             )
