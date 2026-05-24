@@ -5,7 +5,7 @@ use tracing::warn;
 
 use crate::{
     ActuatorError, ActuatorId, Console, ConsoleId, DeviceConfigItem, DeviceMonitor,
-    DeviceSetModeError, Server, VolumeId,
+    DeviceSetModeError, MediaId, Server, VolumeId,
     registry::{self, Properties, RegistryChange},
 };
 
@@ -105,6 +105,7 @@ struct DeviceInner {
     current_mode: std::sync::Mutex<Option<String>>,
     consoles: Vec<DeviceItem<ConsoleId, crate::config::Console>>,
     volumes: Vec<DeviceItem<VolumeId, crate::config::Volume>>,
+    media: Vec<DeviceItem<MediaId, crate::config::Media>>,
     modes: Vec<DeviceMode>,
     server: Server,
 }
@@ -119,6 +120,7 @@ impl Device {
         let name = config.name;
         let consoles = config.consoles.into_iter().map(DeviceItem::new).collect();
         let volumes = config.volumes.into_iter().map(DeviceItem::new).collect();
+        let media = config.media.into_iter().map(DeviceItem::new).collect();
         let notifier = DeviceNotifier::new();
         let modes = config.modes.into_iter().map(Into::into).collect();
         let device = Device {
@@ -128,6 +130,7 @@ impl Device {
                 current_mode: Mutex::new(None),
                 consoles,
                 volumes,
+                media,
                 modes,
                 server,
             }),
@@ -215,6 +218,7 @@ impl Device {
         let mut actuator_monitor = self.inner.server.inner.actuators.monitor();
         let mut console_monitor = self.inner.server.inner.consoles.monitor();
         let mut volume_monitor = self.inner.server.inner.volumes.monitor();
+        let mut media_monitor = self.inner.server.inner.media.monitor();
         let mut changed = false;
 
         for (id, item) in self.inner.server.inner.actuators.contents() {
@@ -231,6 +235,10 @@ impl Device {
 
         for (id, item) in self.inner.server.inner.volumes.contents() {
             changed |= add_item(self.inner.volumes.iter(), id, item);
+        }
+
+        for (id, item) in self.inner.server.inner.media.contents() {
+            changed |= add_item(self.inner.media.iter(), id, item);
         }
 
         if changed {
@@ -260,6 +268,13 @@ impl Device {
                         Ok(c) => change(self.inner.volumes.iter(), c),
                         Err(e) => {
                             warn!("Issue with monitoring volumes: {:?}", e); return },
+                    }
+                }
+                msg = media_monitor.recv() => {
+                    match msg {
+                        Ok(c) => change(self.inner.media.iter(), c),
+                        Err(e) => {
+                            warn!("Issue with monitoring media: {:?}", e); return },
                     }
                 }
             };
@@ -338,6 +353,17 @@ impl crate::Device for Device {
             .map(|v| crate::DeviceVolume {
                 name: v.config().name.clone(),
                 id: v.get(),
+            })
+            .collect()
+    }
+
+    fn media(&self) -> Vec<crate::DeviceMedia> {
+        self.inner
+            .media
+            .iter()
+            .map(|m| crate::DeviceMedia {
+                name: m.config().name.clone(),
+                id: m.get(),
             })
             .collect()
     }

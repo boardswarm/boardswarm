@@ -8,7 +8,7 @@ use futures::{Stream, StreamExt, pin_mut};
 use tokio::sync::broadcast;
 use tracing::{trace, warn};
 
-use crate::{ConsoleId, DeviceMonitor, DeviceSetModeError, VolumeId};
+use crate::{ConsoleId, DeviceMedia, DeviceMonitor, DeviceSetModeError, MediaId, VolumeId};
 
 use super::Provider;
 
@@ -24,6 +24,7 @@ struct BoardswarmDeviceInner {
     // Remote to local mapping
     console_mapping: HashMap<u64, ConsoleId>,
     volume_mapping: HashMap<u64, VolumeId>,
+    media_mapping: HashMap<u64, MediaId>,
     provider: Arc<Provider>,
     info: boardswarm_protocol::Device,
 }
@@ -60,6 +61,7 @@ impl BoardswarmDeviceInner {
         let mut inner = BoardswarmDeviceInner {
             console_mapping: HashMap::new(),
             volume_mapping: HashMap::new(),
+            media_mapping: HashMap::new(),
             provider,
             info,
         };
@@ -86,6 +88,15 @@ impl BoardswarmDeviceInner {
                 self.volume_mapping.insert(remote, local);
             }
         }
+
+        self.media_mapping.clear();
+        for m in &self.info.media {
+            if let Some(remote) = m.id
+                && let Some(local) = self.provider.media_id(remote)
+            {
+                self.media_mapping.insert(remote, local);
+            }
+        }
     }
 
     // Check if the remote id provider had relevant changes changing our mappings
@@ -102,6 +113,13 @@ impl BoardswarmDeviceInner {
         for remote in self.info.volumes.iter().filter_map(|v| v.id) {
             let local = self.volume_mapping.get(&remote).copied();
             if self.provider.volume_id(remote) != local {
+                changed = true
+            }
+        }
+
+        for remote in self.info.media.iter().filter_map(|m| m.id) {
+            let local = self.media_mapping.get(&remote).copied();
+            if self.provider.media_id(remote) != local {
                 changed = true
             }
         }
@@ -197,6 +215,19 @@ impl crate::Device for BoardswarmDevice {
             .map(|v| crate::DeviceVolume {
                 name: v.name.to_string(),
                 id: v.id.and_then(|id| inner.volume_mapping.get(&id).copied()),
+            })
+            .collect()
+    }
+
+    fn media(&self) -> Vec<DeviceMedia> {
+        let inner = self.inner.lock().unwrap();
+        inner
+            .info
+            .media
+            .iter()
+            .map(|m| DeviceMedia {
+                name: m.name.to_string(),
+                id: m.id.and_then(|id| inner.media_mapping.get(&id).copied()),
             })
             .collect()
     }

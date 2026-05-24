@@ -395,6 +395,16 @@ impl DeviceConfigItem for config::Volume {
     }
 }
 
+impl DeviceConfigItem for config::Media {
+    #[instrument(fields(name = self.name), skip_all, level="error")]
+    fn matches(&self, properties: &Properties) -> bool {
+        if self.match_.is_empty() {
+            warn!("Media matches is empty - will match any media item");
+        }
+        properties.matches(&self.match_)
+    }
+}
+
 impl DeviceConfigItem for config::ModeStep {
     #[instrument(skip_all, level = "error")]
     fn matches(&self, properties: &Properties) -> bool {
@@ -423,6 +433,14 @@ impl From<&dyn Device> for boardswarm_protocol::Device {
                 id: v.id.map(Into::into),
             })
             .collect();
+        let media = d
+            .media()
+            .into_iter()
+            .map(|m| boardswarm_protocol::Media {
+                name: m.name,
+                id: m.id.map(Into::into),
+            })
+            .collect();
         let modes = d
             .modes()
             .into_iter()
@@ -436,6 +454,7 @@ impl From<&dyn Device> for boardswarm_protocol::Device {
         boardswarm_protocol::Device {
             consoles,
             volumes,
+            media,
             current_mode,
             modes,
         }
@@ -481,6 +500,11 @@ struct DeviceVolume {
     id: Option<VolumeId>,
 }
 
+struct DeviceMedia {
+    name: String,
+    id: Option<MediaId>,
+}
+
 struct DeviceMode {
     name: String,
     depends: Option<String>,
@@ -493,6 +517,7 @@ trait Device: Send + Sync {
     fn updates(&self) -> DeviceMonitor;
     fn consoles(&self) -> Vec<DeviceConsole>;
     fn volumes(&self) -> Vec<DeviceVolume>;
+    fn media(&self) -> Vec<DeviceMedia>;
     fn modes(&self) -> Vec<DeviceMode>;
     fn current_mode(&self) -> Option<String>;
 }

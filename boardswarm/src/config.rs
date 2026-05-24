@@ -57,6 +57,8 @@ pub struct Device {
     pub modes: Vec<Mode>,
     #[serde(default)]
     pub volumes: Vec<Volume>,
+    #[serde(default)]
+    pub media: Vec<Media>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -71,6 +73,13 @@ pub struct Console {
 
 #[derive(Debug, Deserialize)]
 pub struct Volume {
+    pub name: String,
+    #[serde(rename = "match")]
+    pub match_: HashMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Media {
     pub name: String,
     #[serde(rename = "match")]
     pub match_: HashMap<String, String>,

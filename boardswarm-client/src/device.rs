@@ -6,7 +6,7 @@ use futures::{Stream, StreamExt, pin_mut};
 use tokio::{select, sync::broadcast};
 use tracing::info;
 
-use crate::client::{Boardswarm, VolumeIo, VolumeIoRW};
+use crate::client::{Boardswarm, MediaSession, VolumeIo, VolumeIoRW};
 
 #[derive(Debug, Clone)]
 pub struct DeviceBuilder {
@@ -189,6 +189,58 @@ impl DeviceConsole {
     }
 }
 
+/// A named media item associated with a device.
+///
+/// Analogous to [`DeviceVolume`] — the underlying media item may or may not be
+/// currently available (the V4L2 camera may not be connected yet).
+#[derive(Clone)]
+pub struct DeviceMedia {
+    device: Device,
+    name: String,
+}
+
+impl DeviceMedia {
+    fn new(device: Device, name: String) -> Self {
+        Self { device, name }
+    }
+
+    fn get_id(&self) -> Option<u64> {
+        let d = self.device.inner.device.lock().unwrap();
+        d.media
+            .iter()
+            .find(|m| m.name == self.name)
+            .and_then(|m| m.id)
+    }
+
+    pub fn available(&self) -> bool {
+        self.get_id().is_some()
+    }
+
+    /// Wait for the media item to become available.
+    pub async fn wait(&self) {
+        let mut watch = self.device.watch();
+        while !self.available() {
+            watch.changed().await;
+        }
+    }
+
+    /// Wait until the media item becomes unavailable.
+    pub async fn wait_unavailable(&self) {
+        let mut watch = self.device.watch();
+        while self.available() {
+            watch.changed().await;
+        }
+    }
+
+    /// Start a WebRTC media session for this media item.
+    pub async fn media_setup(&self) -> Result<MediaSession, tonic::Status> {
+        let id = self
+            .get_id()
+            .ok_or_else(|| tonic::Status::unavailable("Media item currently not available"))?;
+        self.device.client.clone().media_setup(id).await
+    }
+}
+
 struct DeviceWatcher {
     watch: tokio::sync::watch::Receiver<()>,
 }
@@ -288,6 +340,22 @@ impl Device {
             .iter()
             .find(|u| u.name == name)
             .map(|u| DeviceVolume::new(self.clone(), u.name.clone()))
+    }
+
+    pub fn media(&self) -> Vec<DeviceMedia> {
+        let d = self.inner.device.lock().unwrap();
+        d.media
+            .iter()
+            .map(|m| DeviceMedia::new(self.clone(), m.name.clone()))
+            .collect()
+    }
+
+    pub fn media_by_name(&self, name: &str) -> Option<DeviceMedia> {
+        let d = self.inner.device.lock().unwrap();
+        d.media
+            .iter()
+            .find(|m| m.name == name)
+            .map(|m| DeviceMedia::new(self.clone(), m.name.clone()))
     }
 
     async fn monitor<M>(monitor: M, mut shutdown: broadcast::Receiver<()>, inner: Arc<DeviceInner>)

@@ -101,6 +101,7 @@ message Device {
   repeated Volume volumes = 2;
   repeated Mode modes = 3;
   optional string current_mode = 4;
+  repeated Media media = 5;
 }
 
 message Console {
@@ -109,6 +110,11 @@ message Console {
 }
 
 message Volume {
+  string name = 1;
+  optional uint64 id = 2;
+}
+
+message Media {
   string name = 1;
   optional uint64 id = 2;
 }

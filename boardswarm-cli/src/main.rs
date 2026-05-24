@@ -12,11 +12,11 @@ use bmap_parser::Bmap;
 use boardswarm_client::{
     client::{Boardswarm, BoardswarmBuilder, VolumeIoRW},
     config,
-    device::{Device, DeviceVolume},
+    device::{Device, DeviceMedia, DeviceVolume},
     oidc::{OidcClientBuilder, StdoutAuth},
 };
 #[cfg(feature = "gstreamer")]
-use boardswarm_client::client::SignalMsg;
+use boardswarm_client::client::{MediaSession, SignalMsg};
 use boardswarm_protocol::ItemType;
 use bytes::{Bytes, BytesMut};
 use clap::{Args, Parser, Subcommand, ValueEnum, builder::PossibleValue};
@@ -303,7 +303,7 @@ fn build_receive_pipeline(stun_server: &str) -> (gstreamer::Pipeline, gstreamer:
 /// Run the WebRTC media stream: connect to the server, exchange signaling,
 /// and display the received video in a window via autovideosink.
 #[cfg(feature = "gstreamer")]
-async fn run_media_stream(media_id: u64, mut client: Boardswarm) -> anyhow::Result<()> {
+async fn run_media_stream(mut session: MediaSession) -> anyhow::Result<()> {
     use gstreamer::prelude::*;
     use gstreamer_webrtc::{WebRTCSDPType, WebRTCSessionDescription};
     use tokio::sync::mpsc as tokio_mpsc;
@@ -355,8 +355,6 @@ async fn run_media_stream(media_id: u64, mut client: Boardswarm) -> anyhow::Resu
         let _ = pipeline_for_bus.set_state(gstreamer::State::Null);
     });
 
-    // Start the gRPC media session
-    let mut session = client.media_setup(media_id).await?;
     println!("Media session established — waiting for stream…");
 
     loop {
@@ -774,6 +772,32 @@ impl DeviceCommonVolumeArgs {
 }
 
 #[derive(Debug, Args)]
+struct DeviceMediaArgs {
+    /// Media item name on the device
+    media: String,
+    /// Wait for the media item to become available
+    #[arg(short, long)]
+    wait: bool,
+}
+
+impl DeviceMediaArgs {
+    async fn open(&self, device: &Device) -> anyhow::Result<DeviceMedia> {
+        let media = device
+            .media_by_name(&self.media)
+            .ok_or_else(|| anyhow!("Media item not found on device"))?;
+        if !media.available() {
+            if self.wait {
+                println!("Waiting for media item..");
+                media.wait().await;
+            } else {
+                bail!("media item not available");
+            }
+        }
+        Ok(media)
+    }
+}
+
+#[derive(Debug, Args)]
 struct DeviceCommonVolumeTargetArgs {
     #[clap(flatten)]
     volume: DeviceCommonVolumeArgs,
@@ -891,6 +915,8 @@ enum DeviceCommand {
     Connect(DeviceConsoleArgs),
     /// Tail to the console
     Tail(DeviceConsoleArgs),
+    /// Stream video from a device media item
+    StreamMedia(DeviceMediaArgs),
     /// Display device properties
     Properties,
 }
@@ -1669,6 +1695,19 @@ async fn main() -> anyhow::Result<()> {
                     let output = console.stream_output().await?;
                     copy_output_to_stdout(output).await?;
                 }
+                DeviceCommand::StreamMedia(args) => {
+                    let media = args.open(&device).await?;
+                    #[cfg(feature = "gstreamer")]
+                    {
+                        let session = media.media_setup().await?;
+                        run_media_stream(session).await?;
+                    }
+                    #[cfg(not(feature = "gstreamer"))]
+                    {
+                        let _ = media;
+                        bail!("GStreamer support not compiled in. Rebuild with --features gstreamer");
+                    }
+                }
                 DeviceCommand::Properties => {
                     let properties = boardswarm.properties(ItemType::Device, device.id()).await?;
                     for key in properties.keys().sorted_unstable() {
@@ -1734,7 +1773,10 @@ async fn main() -> anyhow::Result<()> {
                 }
                 MediaCommand::Stream => {
                     #[cfg(feature = "gstreamer")]
-                    run_media_stream(media_id, boardswarm).await?;
+                    {
+                        let session = boardswarm.media_setup(media_id).await?;
+                        run_media_stream(session).await?;
+                    }
                     #[cfg(not(feature = "gstreamer"))]
                     bail!("GStreamer support not compiled in. Rebuild with --features gstreamer");
                 }

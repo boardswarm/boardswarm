@@ -82,6 +82,10 @@ impl Provider {
         self.volumes.lock().unwrap().get(&remote).copied()
     }
 
+    pub fn media_id(&self, remote: u64) -> Option<MediaId> {
+        self.media.lock().unwrap().get(&remote).copied()
+    }
+
     pub fn watch(&self) -> broadcast::Receiver<()> {
         self.notifier.subscribe()
     }
