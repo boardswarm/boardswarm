@@ -57,6 +57,7 @@ mod udev;
 mod utils;
 mod v4l2_provider;
 mod ws_console;
+mod ws_media;
 
 #[derive(Error, Debug)]
 #[error("Actuator failed")]
@@ -1825,6 +1826,9 @@ async fn main() -> anyhow::Result<()> {
     let ws_auth =
         setup_auth_layer_with_resolver(&server.inner.auth_info, Some(Arc::new(QueryTokenResolver)))
             .await?;
+    let ws_media_auth =
+        setup_auth_layer_with_resolver(&server.inner.auth_info, Some(Arc::new(QueryTokenResolver)))
+            .await?;
     let login_info_path = format!(
         "/{}/LoginInfo",
         <boardswarm_protocol::boardswarm_server::BoardswarmServer<Server> as tonic::server::NamedService>::NAME,
@@ -1841,6 +1845,12 @@ async fn main() -> anyhow::Result<()> {
             "/api/ws/console",
             get(ws_console::handler)
                 .layer(ws_auth.into_layer())
+                .with_state(server.clone()),
+        )
+        .route(
+            "/api/ws/media",
+            get(ws_media::handler)
+                .layer(ws_media_auth.into_layer())
                 .with_state(server.clone()),
         );
 

@@ -7,6 +7,7 @@ pub fn DeviceDetail(
     device_name: String,
     token: String,
     on_console_open: EventHandler<(u64, String)>,
+    on_media_open: EventHandler<(u64, String)>,
 ) -> Element {
     let mut device_info = use_signal(|| None::<boardswarm_protocol::Device>);
     let mut error = use_signal(|| None::<String>);
@@ -126,6 +127,33 @@ pub fn DeviceDetail(
                         span { "{volume.name}" }
                         if volume.id.is_none() {
                             span { style: "color: #888;", " (offline)" }
+                        }
+                    }
+                }
+            }
+
+            // Media
+            div { style: "margin-top: 1.5rem;",
+                h3 { "Media" }
+                if info.media.is_empty() {
+                    p { style: "color: #888;", "No media available" }
+                }
+                for item in info.media.iter() {
+                    div { style: "display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;",
+                        span { "{item.name}" }
+                        if let Some(id) = item.id {
+                            button {
+                                class: "btn",
+                                onclick: {
+                                    let name = item.name.clone();
+                                    move |_| {
+                                        on_media_open.call((id, name.clone()));
+                                    }
+                                },
+                                "Stream"
+                            }
+                        } else {
+                            span { style: "color: #888;", "(offline)" }
                         }
                     }
                 }

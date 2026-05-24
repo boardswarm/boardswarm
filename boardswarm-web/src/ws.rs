@@ -1,7 +1,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use boardswarm_protocol::{ConsoleInputRequest, ConsoleOutput, console_input_request};
+use boardswarm_protocol::{
+    ConsoleInputRequest, ConsoleOutput, MediaRequest, SignalMessage, SignalMessageIceCandidate,
+    SignalMessageSdp, console_input_request, media_request, signal_message,
+};
 use prost::Message;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
@@ -100,6 +103,128 @@ impl ConsoleWs {
 }
 
 impl Drop for ConsoleWs {
+    fn drop(&mut self) {
+        let _ = self.ws.close();
+    }
+}
+
+/// WebSocket-based media signaling connection using protobuf framing.
+///
+/// Sends [`MediaRequest`] protobuf frames to the server and receives
+/// [`SignalMessage`] protobuf frames (SDP offer, ICE candidates) from it.
+pub struct MediaWs {
+    ws: WebSocket,
+    _on_message: Closure<dyn FnMut(MessageEvent)>,
+    _on_close: Closure<dyn FnMut()>,
+}
+
+impl MediaWs {
+    /// Open a WebSocket connection to the media signaling endpoint.
+    ///
+    /// `on_offer` is called with the SDP offer string from the server.
+    /// `on_ice` is called with (candidate, mline_index) for each ICE candidate from the server.
+    /// `on_close` is called when the connection is closed.
+    pub fn connect(
+        media_id: u64,
+        token: &str,
+        mut on_offer: impl FnMut(String) + 'static,
+        mut on_ice: impl FnMut(String, u32) + 'static,
+        on_close: impl FnMut() + 'static,
+    ) -> Result<Self, String> {
+        let origin = web_sys::window()
+            .unwrap()
+            .location()
+            .origin()
+            .unwrap_or_else(|_| "http://localhost:6683".to_string());
+
+        let ws_origin = origin
+            .replace("https://", "wss://")
+            .replace("http://", "ws://");
+
+        let url = format!("{ws_origin}/api/ws/media?token={token}");
+        let ws = WebSocket::new(&url).map_err(|e| format!("WebSocket open failed: {e:?}"))?;
+        ws.set_binary_type(BinaryType::Arraybuffer);
+
+        // Send initial media selection message once connected
+        let ws_clone = ws.clone();
+        let on_open = Closure::once(move || {
+            let msg = MediaRequest {
+                item_or_signal: Some(media_request::ItemOrSignal::Item(media_id)),
+            };
+            let _ = ws_clone.send_with_u8_array(&msg.encode_to_vec());
+        });
+        ws.set_onopen(Some(on_open.as_ref().unchecked_ref()));
+        on_open.forget();
+
+        // Handle incoming signal messages
+        let on_message = Closure::wrap(Box::new(move |event: MessageEvent| {
+            if let Ok(buf) = event.data().dyn_into::<js_sys::ArrayBuffer>() {
+                let array = js_sys::Uint8Array::new(&buf);
+                let data = array.to_vec();
+                if let Ok(signal) = SignalMessage::decode(data.as_slice()) {
+                    match signal.sdp_message {
+                        Some(signal_message::SdpMessage::Offer(sdp)) => on_offer(sdp.sdp),
+                        Some(signal_message::SdpMessage::Ice(ice)) => {
+                            on_ice(ice.candidate, ice.mline_index)
+                        }
+                        Some(signal_message::SdpMessage::Answer(_)) => {
+                            // Browser is always the answerer; server should never send an answer
+                        }
+                        None => {}
+                    }
+                }
+            }
+        }) as Box<dyn FnMut(MessageEvent)>);
+        ws.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
+
+        // Handle close
+        let on_close = Rc::new(RefCell::new(on_close));
+        let on_close_clone = on_close.clone();
+        let on_close_cb = Closure::wrap(Box::new(move || {
+            (on_close_clone.borrow_mut())();
+        }) as Box<dyn FnMut()>);
+        ws.set_onclose(Some(on_close_cb.as_ref().unchecked_ref()));
+
+        Ok(Self {
+            ws,
+            _on_message: on_message,
+            _on_close: on_close_cb,
+        })
+    }
+
+    /// Send an SDP answer to the server.
+    pub fn send_answer(&self, sdp: String) -> Result<(), String> {
+        let msg = MediaRequest {
+            item_or_signal: Some(media_request::ItemOrSignal::Signal(SignalMessage {
+                sdp_message: Some(signal_message::SdpMessage::Answer(SignalMessageSdp {
+                    sdp,
+                })),
+            })),
+        };
+        self.ws
+            .send_with_u8_array(&msg.encode_to_vec())
+            .map_err(|e| format!("WebSocket send failed: {e:?}"))
+    }
+
+    /// Send a local ICE candidate to the server.
+    pub fn send_ice(&self, candidate: String, mline_index: u32) -> Result<(), String> {
+        let msg = MediaRequest {
+            item_or_signal: Some(media_request::ItemOrSignal::Signal(SignalMessage {
+                sdp_message: Some(signal_message::SdpMessage::Ice(
+                    SignalMessageIceCandidate {
+                        candidate,
+                        mline_index,
+                    },
+                )),
+            })),
+        };
+        self.ws
+            .send_with_u8_array(&msg.encode_to_vec())
+            .map_err(|e| format!("WebSocket send failed: {e:?}"))
+    }
+}
+
+impl Drop for MediaWs {
     fn drop(&mut self) {
         let _ = self.ws.close();
     }
