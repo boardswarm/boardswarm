@@ -584,12 +584,15 @@ struct DeviceKvmArgs {
     /// Media item name on the device (required for video)
     #[arg(long)]
     media: String,
-    /// Keyboard item name on the device
+    /// Keyboard item name; defaults to the first keyboard on the device
     #[arg(long)]
     keyboard: Option<String>,
-    /// Mouse item name on the device
+    /// Mouse item name; defaults to the first mouse on the device
     #[arg(long)]
     mouse: Option<String>,
+    /// Only stream video, do not open keyboard or mouse
+    #[arg(long)]
+    view_only: bool,
     /// Wait for items to become available
     #[arg(short, long)]
     wait: bool,
@@ -1607,40 +1610,58 @@ async fn main() -> anyhow::Result<()> {
                         }
                     }
 
-                    // Open optional keyboard item
-                    let keyboard_session = if let Some(ref kname) = args.keyboard {
-                        let kb = device
-                            .keyboard_by_name(kname)
-                            .ok_or_else(|| anyhow!("Keyboard item '{}' not found on device", kname))?;
-                        if !kb.available() {
-                            if args.wait {
-                                println!("Waiting for keyboard item '{kname}'…");
-                                kb.wait().await;
-                            } else {
-                                bail!("keyboard item '{kname}' not available");
-                            }
-                        }
-                        Some(kb.keyboard_io().await?)
-                    } else {
+                    // Resolve keyboard: named > first available > none (view-only)
+                    let keyboard_session = if args.view_only {
                         None
+                    } else {
+                        let kb = match &args.keyboard {
+                            Some(name) => Some(
+                                device
+                                    .keyboard_by_name(name)
+                                    .ok_or_else(|| anyhow!("Keyboard item '{name}' not found on device"))?,
+                            ),
+                            None => device.keyboards().into_iter().next(),
+                        };
+                        if let Some(kb) = kb {
+                            if !kb.available() {
+                                if args.wait {
+                                    println!("Waiting for keyboard item…");
+                                    kb.wait().await;
+                                } else {
+                                    bail!("keyboard item not available");
+                                }
+                            }
+                            Some(kb.keyboard_io().await?)
+                        } else {
+                            None
+                        }
                     };
 
-                    // Open optional mouse item
-                    let mouse_session = if let Some(ref mname) = args.mouse {
-                        let ms = device
-                            .mouse_by_name(mname)
-                            .ok_or_else(|| anyhow!("Mouse item '{}' not found on device", mname))?;
-                        if !ms.available() {
-                            if args.wait {
-                                println!("Waiting for mouse item '{mname}'…");
-                                ms.wait().await;
-                            } else {
-                                bail!("mouse item '{mname}' not available");
-                            }
-                        }
-                        Some(ms.mouse_io().await?)
-                    } else {
+                    // Resolve mouse: named > first available > none (view-only)
+                    let mouse_session = if args.view_only {
                         None
+                    } else {
+                        let ms = match &args.mouse {
+                            Some(name) => Some(
+                                device
+                                    .mouse_by_name(name)
+                                    .ok_or_else(|| anyhow!("Mouse item '{name}' not found on device"))?,
+                            ),
+                            None => device.mice().into_iter().next(),
+                        };
+                        if let Some(ms) = ms {
+                            if !ms.available() {
+                                if args.wait {
+                                    println!("Waiting for mouse item…");
+                                    ms.wait().await;
+                                } else {
+                                    bail!("mouse item not available");
+                                }
+                            }
+                            Some(ms.mouse_io().await?)
+                        } else {
+                            None
+                        }
                     };
 
                     #[cfg(feature = "gstreamer")]
