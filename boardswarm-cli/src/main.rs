@@ -68,6 +68,8 @@ impl std::fmt::Display for ItemTypes {
                 ItemType::Actuator => f.write_str("actuator"),
                 ItemType::Volume => f.write_str("volume"),
                 ItemType::Media => f.write_str("media"),
+                ItemType::Keyboard => f.write_str("keyboard"),
+                ItemType::Mouse => f.write_str("mouse"),
             }
         }
     }
@@ -81,6 +83,8 @@ impl ValueEnum for ItemTypes {
             ItemTypes(ItemType::Device),
             ItemTypes(ItemType::Volume),
             ItemTypes(ItemType::Media),
+            ItemTypes(ItemType::Keyboard),
+            ItemTypes(ItemType::Mouse),
         ]
     }
 
@@ -91,6 +95,8 @@ impl ValueEnum for ItemTypes {
             ItemType::Device => PossibleValue::new("devices"),
             ItemType::Volume => PossibleValue::new("volumes"),
             ItemType::Media => PossibleValue::new("media"),
+            ItemType::Keyboard => PossibleValue::new("keyboards"),
+            ItemType::Mouse => PossibleValue::new("mice"),
         })
     }
 }
@@ -949,6 +955,34 @@ enum MediaCommand {
     Properties,
 }
 
+fn parse_keyboard(s: &str) -> Result<ItemArg, Infallible> {
+    if let Ok(id) = s.parse() {
+        Ok(ItemArg::Id(id))
+    } else {
+        Ok(ItemArg::Name(s.to_string()))
+    }
+}
+
+#[derive(Debug, Subcommand)]
+enum KeyboardCommand {
+    /// Display keyboard item properties
+    Properties,
+}
+
+fn parse_mouse(s: &str) -> Result<ItemArg, Infallible> {
+    if let Ok(id) = s.parse() {
+        Ok(ItemArg::Id(id))
+    } else {
+        Ok(ItemArg::Name(s.to_string()))
+    }
+}
+
+#[derive(Debug, Subcommand)]
+enum MouseCommand {
+    /// Display mouse item properties
+    Properties,
+}
+
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Configure client authentication to boardswarm servers
@@ -1037,6 +1071,22 @@ enum Command {
         media: ItemArg,
         #[command(subcommand)]
         command: MediaCommand,
+    },
+    /// Keyboard item specific commands
+    Keyboard {
+        /// The keyboard item to use
+        #[arg(value_parser = parse_keyboard)]
+        keyboard: ItemArg,
+        #[command(subcommand)]
+        command: KeyboardCommand,
+    },
+    /// Mouse item specific commands
+    Mouse {
+        /// The mouse item to use
+        #[arg(value_parser = parse_mouse)]
+        mouse: ItemArg,
+        #[command(subcommand)]
+        command: MouseCommand,
     },
 }
 
@@ -1779,6 +1829,29 @@ async fn main() -> anyhow::Result<()> {
                     }
                     #[cfg(not(feature = "gstreamer"))]
                     bail!("GStreamer support not compiled in. Rebuild with --features gstreamer");
+                }
+            }
+            Ok(())
+        }
+        Command::Keyboard { keyboard, command } => {
+            let keyboard_id =
+                item_lookup(keyboard, ItemType::Keyboard, boardswarm.clone()).await?;
+            match command {
+                KeyboardCommand::Properties => {
+                    let items = boardswarm
+                        .properties(ItemType::Keyboard, keyboard_id)
+                        .await?;
+                    println!("{:#?}", items);
+                }
+            }
+            Ok(())
+        }
+        Command::Mouse { mouse, command } => {
+            let mouse_id = item_lookup(mouse, ItemType::Mouse, boardswarm.clone()).await?;
+            match command {
+                MouseCommand::Properties => {
+                    let items = boardswarm.properties(ItemType::Mouse, mouse_id).await?;
+                    println!("{:#?}", items);
                 }
             }
             Ok(())

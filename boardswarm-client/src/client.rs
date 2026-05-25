@@ -9,11 +9,11 @@ use std::{
 use boardswarm_protocol::{
     ActuatorModeRequest, ConsoleConfigureRequest, ConsoleInputRequest, ConsoleOutputRequest,
     DeviceModeRequest, DeviceRequest, Item, ItemPropertiesRequest, ItemType, ItemTypeRequest,
-    MediaRequest, SignalMessage, SignalMessageIceCandidate, SignalMessageSdp,
-    VolumeEraseRequest, VolumeInfoMsg, VolumeIoFlush, VolumeIoRead, VolumeIoReply, VolumeIoRequest,
-    VolumeIoShutdown, VolumeIoTarget, VolumeIoWrite, VolumeRequest, VolumeTarget,
-    boardswarm_client::BoardswarmClient, console_input_request, media_request, signal_message,
-    volume_io_reply, volume_io_request,
+    KeyboardRequest, MediaRequest, MouseRequest, SignalMessage, SignalMessageIceCandidate,
+    SignalMessageSdp, VolumeEraseRequest, VolumeInfoMsg, VolumeIoFlush, VolumeIoRead, VolumeIoReply,
+    VolumeIoRequest, VolumeIoShutdown, VolumeIoTarget, VolumeIoWrite, VolumeRequest, VolumeTarget,
+    boardswarm_client::BoardswarmClient, console_input_request, keyboard_request, media_request,
+    mouse_request, signal_message, volume_io_reply, volume_io_request,
 };
 use bytes::Bytes;
 use futures::{FutureExt, Stream, StreamExt, future::BoxFuture, stream};
@@ -388,6 +388,49 @@ impl Boardswarm {
             rx: response.into_inner(),
         })
     }
+
+    /// Start a keyboard I/O session with the given keyboard item.
+    ///
+    /// The returned [`KeyboardSession`] is used to send key events and receive
+    /// LED state updates from the server.
+    pub async fn keyboard_io(&mut self, keyboard: u64) -> Result<KeyboardSession, tonic::Status> {
+        let (tx, rx) = mpsc::channel::<KeyboardRequest>(16);
+
+        tx.try_send(KeyboardRequest {
+            item_or_signal: Some(keyboard_request::ItemOrSignal::Item(keyboard)),
+        })
+        .map_err(|_| tonic::Status::internal("Keyboard channel error"))?;
+
+        let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+        let response = self.client.keyboard_io(stream).await?;
+
+        Ok(KeyboardSession {
+            tx,
+            rx: response.into_inner(),
+        })
+    }
+
+    /// Start a mouse I/O session with the given mouse item.
+    ///
+    /// The returned [`MouseSession`] is used to send mouse input reports to the server.
+    pub async fn mouse_io(&mut self, mouse: u64) -> Result<MouseSession, tonic::Status> {
+        let (tx, rx) = mpsc::channel::<MouseRequest>(16);
+
+        tx.try_send(MouseRequest {
+            item_or_signal: Some(mouse_request::ItemOrSignal::Item(mouse)),
+        })
+        .map_err(|_| tonic::Status::internal("Mouse channel error"))?;
+
+        let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+        // Spawn the RPC call so it runs concurrently; the response arrives when
+        // the stream closes (MouseSession is dropped).
+        let mut client = self.client.clone();
+        tokio::spawn(async move {
+            let _ = client.mouse_io(stream).await;
+        });
+
+        Ok(MouseSession { tx })
+    }
 }
 
 /// An incoming WebRTC signaling message from the server.
@@ -459,6 +502,91 @@ impl MediaSession {
             Ok(None) => None,
             Err(e) => Some(Err(e)),
         }
+    }
+}
+
+/// An active keyboard I/O session returned by [`Boardswarm::keyboard_io`].
+pub struct KeyboardSession {
+    tx: mpsc::Sender<KeyboardRequest>,
+    rx: tonic::Streaming<boardswarm_protocol::KeyboardState>,
+}
+
+impl KeyboardSession {
+    /// Send a key-down event for the given HID usage ID.
+    pub async fn send_key_down(&mut self, key: u8) -> Result<(), tonic::Status> {
+        self.tx
+            .send(KeyboardRequest {
+                item_or_signal: Some(keyboard_request::ItemOrSignal::Event(
+                    boardswarm_protocol::KeyboardEvent {
+                        r#type: boardswarm_protocol::KeyboardEventType::KeyDown as i32,
+                        key: key as u32,
+                    },
+                )),
+            })
+            .await
+            .map_err(|_| tonic::Status::aborted("Keyboard session closed"))
+    }
+
+    /// Send a key-up event for the given HID usage ID.
+    pub async fn send_key_up(&mut self, key: u8) -> Result<(), tonic::Status> {
+        self.tx
+            .send(KeyboardRequest {
+                item_or_signal: Some(keyboard_request::ItemOrSignal::Event(
+                    boardswarm_protocol::KeyboardEvent {
+                        r#type: boardswarm_protocol::KeyboardEventType::KeyUp as i32,
+                        key: key as u32,
+                    },
+                )),
+            })
+            .await
+            .map_err(|_| tonic::Status::aborted("Keyboard session closed"))
+    }
+
+    /// Receive the next LED state update from the server, or `None` if the session ended.
+    pub async fn next_state(
+        &mut self,
+    ) -> Option<Result<boardswarm_protocol::KeyboardState, tonic::Status>> {
+        match self.rx.message().await {
+            Ok(Some(state)) => Some(Ok(state)),
+            Ok(None) => None,
+            Err(e) => Some(Err(e)),
+        }
+    }
+}
+
+/// An active mouse I/O session returned by [`Boardswarm::mouse_io`].
+pub struct MouseSession {
+    tx: mpsc::Sender<MouseRequest>,
+}
+
+impl MouseSession {
+    /// Send a mouse input report.
+    ///
+    /// - `buttons`: bitmask of pressed buttons (bits 0–7)
+    /// - `x`, `y`: absolute position (signed 16-bit)
+    /// - `wheel`, `hwheel`: vertical/horizontal scroll (signed 8-bit)
+    pub async fn send_input(
+        &mut self,
+        buttons: u8,
+        x: i16,
+        y: i16,
+        wheel: i8,
+        hwheel: i8,
+    ) -> Result<(), tonic::Status> {
+        self.tx
+            .send(MouseRequest {
+                item_or_signal: Some(mouse_request::ItemOrSignal::Input(
+                    boardswarm_protocol::MouseInput {
+                        buttons: buttons as u32,
+                        x: x as u32,
+                        y: y as u32,
+                        wheel: wheel as i32,
+                        hwheel: hwheel as i32,
+                    },
+                )),
+            })
+            .await
+            .map_err(|_| tonic::Status::aborted("Mouse session closed"))
     }
 }
 
