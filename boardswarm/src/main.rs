@@ -38,6 +38,7 @@ mod dfu;
 mod eswin_eic7700_storage;
 mod fastboot;
 mod gpio;
+mod hid_gadget;
 mod hifive_p550_mcu;
 mod mediatek_brom;
 mod pdudaemon;
@@ -1722,6 +1723,9 @@ async fn main() -> anyhow::Result<()> {
                     p.parameters.context("Missing gpio provider parameters")?,
                     server.clone(),
                 ));
+            }
+            hid_gadget::PROVIDER => {
+                hid_gadget::start_provider(p.name, p.parameters.unwrap_or_default(), server.clone())
             }
             pdudaemon::PROVIDER => pdudaemon::start_provider(
                 p.name,

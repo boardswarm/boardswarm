@@ -367,6 +367,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "usb-gadget",
 ]
 
 [[package]]
@@ -460,6 +461,12 @@ name = "bytemuck"
 version = "1.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8efb64bd706a16a1bdde310ae86b351e4d21550d98d056f22f8a7f7a2183fec"
+
+[[package]]
+name = "byteorder"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
 name = "bytes"
@@ -2275,6 +2282,12 @@ dependencies = [
  "nix 0.29.0",
  "winapi",
 ]
+
+[[package]]
+name = "macaddr"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "baee0bbc17ce759db233beb01648088061bf678383130602a298e6998eedb2d8"
 
 [[package]]
 name = "mach2"
@@ -4839,6 +4852,25 @@ dependencies = [
  "percent-encoding",
  "serde",
  "serde_derive",
+]
+
+[[package]]
+name = "usb-gadget"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a57f5767e127a41fefc1de7f55bfe707e1080de797ccf3e3089c7d35635cfd3a"
+dependencies = [
+ "bitflags 2.11.0",
+ "byteorder",
+ "bytes",
+ "libc",
+ "log",
+ "macaddr",
+ "proc-mounts",
+ "rustix 1.1.4",
+ "strum 0.28.0",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

@@ -50,6 +50,7 @@ rustls = { version = "0.23.37", features = ["aws-lc-rs"] }
 gstreamer = { version = "0.23", optional = true }
 gstreamer-webrtc = { version = "0.23", optional = true }
 gstreamer-sdp = { version = "0.23", optional = true }
+usb-gadget = { version = "1.2.0", features = ["tokio"] }
 
 [features]
 gstreamer = ["dep:gstreamer", "dep:gstreamer-webrtc", "dep:gstreamer-sdp"]
