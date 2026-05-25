@@ -130,6 +130,9 @@ async fn add_item(
             let local = server.register_media(properties, BoardswarmMedia::new(id, remote));
             provider.media.lock().unwrap().insert(id, local);
         }
+        ItemType::Keyboard | ItemType::Mouse => {
+            warn!("Proxying of {type_:?} items is not yet supported, ignoring item {id}");
+        }
     }
     let _ = provider.notifier.send(());
 }
@@ -166,6 +169,7 @@ fn remove_item(provider: &Provider, type_: ItemType, server: &Server, id: u64) {
                 server.unregister_media(local)
             }
         }
+        ItemType::Keyboard | ItemType::Mouse => {}
     }
     let _ = provider.notifier.send(());
 }
@@ -235,6 +239,7 @@ async fn monitor_items(
                 server.unregister_media(local);
             }
         }
+        ItemType::Keyboard | ItemType::Mouse => {}
     }
 }
 
