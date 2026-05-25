@@ -8,7 +8,7 @@ use futures::{Stream, StreamExt, pin_mut};
 use tokio::sync::broadcast;
 use tracing::{trace, warn};
 
-use crate::{ConsoleId, DeviceMedia, DeviceMonitor, DeviceSetModeError, MediaId, VolumeId};
+use crate::{ConsoleId, DeviceMedia, DeviceMonitor, DeviceSetModeError, KeyboardId, MediaId, MouseId, VolumeId};
 
 use super::Provider;
 
@@ -25,6 +25,8 @@ struct BoardswarmDeviceInner {
     console_mapping: HashMap<u64, ConsoleId>,
     volume_mapping: HashMap<u64, VolumeId>,
     media_mapping: HashMap<u64, MediaId>,
+    keyboard_mapping: HashMap<u64, KeyboardId>,
+    mouse_mapping: HashMap<u64, MouseId>,
     provider: Arc<Provider>,
     info: boardswarm_protocol::Device,
 }
@@ -62,6 +64,8 @@ impl BoardswarmDeviceInner {
             console_mapping: HashMap::new(),
             volume_mapping: HashMap::new(),
             media_mapping: HashMap::new(),
+            keyboard_mapping: HashMap::new(),
+            mouse_mapping: HashMap::new(),
             provider,
             info,
         };
@@ -97,6 +101,24 @@ impl BoardswarmDeviceInner {
                 self.media_mapping.insert(remote, local);
             }
         }
+
+        self.keyboard_mapping.clear();
+        for k in &self.info.keyboards {
+            if let Some(remote) = k.id
+                && let Some(local) = self.provider.keyboard_id(remote)
+            {
+                self.keyboard_mapping.insert(remote, local);
+            }
+        }
+
+        self.mouse_mapping.clear();
+        for m in &self.info.mice {
+            if let Some(remote) = m.id
+                && let Some(local) = self.provider.mouse_id(remote)
+            {
+                self.mouse_mapping.insert(remote, local);
+            }
+        }
     }
 
     // Check if the remote id provider had relevant changes changing our mappings
@@ -120,6 +142,20 @@ impl BoardswarmDeviceInner {
         for remote in self.info.media.iter().filter_map(|m| m.id) {
             let local = self.media_mapping.get(&remote).copied();
             if self.provider.media_id(remote) != local {
+                changed = true
+            }
+        }
+
+        for remote in self.info.keyboards.iter().filter_map(|k| k.id) {
+            let local = self.keyboard_mapping.get(&remote).copied();
+            if self.provider.keyboard_id(remote) != local {
+                changed = true
+            }
+        }
+
+        for remote in self.info.mice.iter().filter_map(|m| m.id) {
+            let local = self.mouse_mapping.get(&remote).copied();
+            if self.provider.mouse_id(remote) != local {
                 changed = true
             }
         }
@@ -228,6 +264,32 @@ impl crate::Device for BoardswarmDevice {
             .map(|m| DeviceMedia {
                 name: m.name.to_string(),
                 id: m.id.and_then(|id| inner.media_mapping.get(&id).copied()),
+            })
+            .collect()
+    }
+
+    fn keyboards(&self) -> Vec<crate::DeviceKeyboard> {
+        let inner = self.inner.lock().unwrap();
+        inner
+            .info
+            .keyboards
+            .iter()
+            .map(|k| crate::DeviceKeyboard {
+                name: k.name.to_string(),
+                id: k.id.and_then(|id| inner.keyboard_mapping.get(&id).copied()),
+            })
+            .collect()
+    }
+
+    fn mice(&self) -> Vec<crate::DeviceMouse> {
+        let inner = self.inner.lock().unwrap();
+        inner
+            .info
+            .mice
+            .iter()
+            .map(|m| crate::DeviceMouse {
+                name: m.name.to_string(),
+                id: m.id.and_then(|id| inner.mouse_mapping.get(&id).copied()),
             })
             .collect()
     }

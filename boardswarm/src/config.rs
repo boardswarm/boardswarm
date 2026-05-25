@@ -59,6 +59,10 @@ pub struct Device {
     pub volumes: Vec<Volume>,
     #[serde(default)]
     pub media: Vec<Media>,
+    #[serde(default)]
+    pub keyboards: Vec<Keyboard>,
+    #[serde(default)]
+    pub mice: Vec<Mouse>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -80,6 +84,20 @@ pub struct Volume {
 
 #[derive(Debug, Deserialize)]
 pub struct Media {
+    pub name: String,
+    #[serde(rename = "match")]
+    pub match_: HashMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Keyboard {
+    pub name: String,
+    #[serde(rename = "match")]
+    pub match_: HashMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Mouse {
     pub name: String,
     #[serde(rename = "match")]
     pub match_: HashMap<String, String>,

@@ -804,6 +804,58 @@ impl DeviceMediaArgs {
 }
 
 #[derive(Debug, Args)]
+struct DeviceKeyboardArgs {
+    /// Keyboard item name on the device
+    keyboard: String,
+    /// Wait for the keyboard item to become available
+    #[arg(short, long)]
+    wait: bool,
+}
+
+impl DeviceKeyboardArgs {
+    async fn open(&self, device: &Device) -> anyhow::Result<boardswarm_client::device::DeviceKeyboard> {
+        let keyboard = device
+            .keyboard_by_name(&self.keyboard)
+            .ok_or_else(|| anyhow!("Keyboard item not found on device"))?;
+        if !keyboard.available() {
+            if self.wait {
+                println!("Waiting for keyboard item..");
+                keyboard.wait().await;
+            } else {
+                bail!("keyboard item not available");
+            }
+        }
+        Ok(keyboard)
+    }
+}
+
+#[derive(Debug, Args)]
+struct DeviceMouseArgs {
+    /// Mouse item name on the device
+    mouse: String,
+    /// Wait for the mouse item to become available
+    #[arg(short, long)]
+    wait: bool,
+}
+
+impl DeviceMouseArgs {
+    async fn open(&self, device: &Device) -> anyhow::Result<boardswarm_client::device::DeviceMouse> {
+        let mouse = device
+            .mouse_by_name(&self.mouse)
+            .ok_or_else(|| anyhow!("Mouse item not found on device"))?;
+        if !mouse.available() {
+            if self.wait {
+                println!("Waiting for mouse item..");
+                mouse.wait().await;
+            } else {
+                bail!("mouse item not available");
+            }
+        }
+        Ok(mouse)
+    }
+}
+
+#[derive(Debug, Args)]
 struct DeviceCommonVolumeTargetArgs {
     #[clap(flatten)]
     volume: DeviceCommonVolumeArgs,
@@ -925,6 +977,10 @@ enum DeviceCommand {
     StreamMedia(DeviceMediaArgs),
     /// Display device properties
     Properties,
+    /// Interact with a device keyboard
+    Keyboard(DeviceKeyboardArgs),
+    /// Interact with a device mouse
+    Mouse(DeviceMouseArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -1763,6 +1819,18 @@ async fn main() -> anyhow::Result<()> {
                     for key in properties.keys().sorted_unstable() {
                         println!(r#""{}" => "{}""#, key, properties[key]);
                     }
+                }
+                DeviceCommand::Keyboard(args) => {
+                    let keyboard = args.open(&device).await?;
+                    let session = keyboard.keyboard_io().await?;
+                    let _ = session;
+                    println!("Keyboard session opened (no interactive mode implemented yet)");
+                }
+                DeviceCommand::Mouse(args) => {
+                    let mouse = args.open(&device).await?;
+                    let session = mouse.mouse_io().await?;
+                    let _ = session;
+                    println!("Mouse session opened (no interactive mode implemented yet)");
                 }
             }
             Ok(())

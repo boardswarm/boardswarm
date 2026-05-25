@@ -6,7 +6,7 @@ use futures::{Stream, StreamExt, pin_mut};
 use tokio::{select, sync::broadcast};
 use tracing::info;
 
-use crate::client::{Boardswarm, MediaSession, VolumeIo, VolumeIoRW};
+use crate::client::{Boardswarm, KeyboardSession, MediaSession, MouseSession, VolumeIo, VolumeIoRW};
 
 #[derive(Debug, Clone)]
 pub struct DeviceBuilder {
@@ -241,6 +241,104 @@ impl DeviceMedia {
     }
 }
 
+/// A named keyboard item associated with a device.
+#[derive(Clone)]
+pub struct DeviceKeyboard {
+    device: Device,
+    name: String,
+}
+
+impl DeviceKeyboard {
+    fn new(device: Device, name: String) -> Self {
+        Self { device, name }
+    }
+
+    fn get_id(&self) -> Option<u64> {
+        let d = self.device.inner.device.lock().unwrap();
+        d.keyboards
+            .iter()
+            .find(|k| k.name == self.name)
+            .and_then(|k| k.id)
+    }
+
+    pub fn available(&self) -> bool {
+        self.get_id().is_some()
+    }
+
+    /// Wait for the keyboard item to become available.
+    pub async fn wait(&self) {
+        let mut watch = self.device.watch();
+        while !self.available() {
+            watch.changed().await;
+        }
+    }
+
+    /// Wait until the keyboard item becomes unavailable.
+    pub async fn wait_unavailable(&self) {
+        let mut watch = self.device.watch();
+        while self.available() {
+            watch.changed().await;
+        }
+    }
+
+    /// Start a keyboard I/O session for this keyboard item.
+    pub async fn keyboard_io(&self) -> Result<KeyboardSession, tonic::Status> {
+        let id = self
+            .get_id()
+            .ok_or_else(|| tonic::Status::unavailable("Keyboard item currently not available"))?;
+        self.device.client.clone().keyboard_io(id).await
+    }
+}
+
+/// A named mouse item associated with a device.
+#[derive(Clone)]
+pub struct DeviceMouse {
+    device: Device,
+    name: String,
+}
+
+impl DeviceMouse {
+    fn new(device: Device, name: String) -> Self {
+        Self { device, name }
+    }
+
+    fn get_id(&self) -> Option<u64> {
+        let d = self.device.inner.device.lock().unwrap();
+        d.mice
+            .iter()
+            .find(|m| m.name == self.name)
+            .and_then(|m| m.id)
+    }
+
+    pub fn available(&self) -> bool {
+        self.get_id().is_some()
+    }
+
+    /// Wait for the mouse item to become available.
+    pub async fn wait(&self) {
+        let mut watch = self.device.watch();
+        while !self.available() {
+            watch.changed().await;
+        }
+    }
+
+    /// Wait until the mouse item becomes unavailable.
+    pub async fn wait_unavailable(&self) {
+        let mut watch = self.device.watch();
+        while self.available() {
+            watch.changed().await;
+        }
+    }
+
+    /// Start a mouse I/O session for this mouse item.
+    pub async fn mouse_io(&self) -> Result<MouseSession, tonic::Status> {
+        let id = self
+            .get_id()
+            .ok_or_else(|| tonic::Status::unavailable("Mouse item currently not available"))?;
+        self.device.client.clone().mouse_io(id).await
+    }
+}
+
 struct DeviceWatcher {
     watch: tokio::sync::watch::Receiver<()>,
 }
@@ -356,6 +454,38 @@ impl Device {
             .iter()
             .find(|m| m.name == name)
             .map(|m| DeviceMedia::new(self.clone(), m.name.clone()))
+    }
+
+    pub fn keyboards(&self) -> Vec<DeviceKeyboard> {
+        let d = self.inner.device.lock().unwrap();
+        d.keyboards
+            .iter()
+            .map(|k| DeviceKeyboard::new(self.clone(), k.name.clone()))
+            .collect()
+    }
+
+    pub fn keyboard_by_name(&self, name: &str) -> Option<DeviceKeyboard> {
+        let d = self.inner.device.lock().unwrap();
+        d.keyboards
+            .iter()
+            .find(|k| k.name == name)
+            .map(|k| DeviceKeyboard::new(self.clone(), k.name.clone()))
+    }
+
+    pub fn mice(&self) -> Vec<DeviceMouse> {
+        let d = self.inner.device.lock().unwrap();
+        d.mice
+            .iter()
+            .map(|m| DeviceMouse::new(self.clone(), m.name.clone()))
+            .collect()
+    }
+
+    pub fn mouse_by_name(&self, name: &str) -> Option<DeviceMouse> {
+        let d = self.inner.device.lock().unwrap();
+        d.mice
+            .iter()
+            .find(|m| m.name == name)
+            .map(|m| DeviceMouse::new(self.clone(), m.name.clone()))
     }
 
     async fn monitor<M>(monitor: M, mut shutdown: broadcast::Receiver<()>, inner: Arc<DeviceInner>)

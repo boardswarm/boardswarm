@@ -5,7 +5,7 @@ use tracing::warn;
 
 use crate::{
     ActuatorError, ActuatorId, Console, ConsoleId, DeviceConfigItem, DeviceMonitor,
-    DeviceSetModeError, MediaId, Server, VolumeId,
+    DeviceSetModeError, KeyboardId, MediaId, MouseId, Server, VolumeId,
     registry::{self, Properties, RegistryChange},
 };
 
@@ -106,6 +106,8 @@ struct DeviceInner {
     consoles: Vec<DeviceItem<ConsoleId, crate::config::Console>>,
     volumes: Vec<DeviceItem<VolumeId, crate::config::Volume>>,
     media: Vec<DeviceItem<MediaId, crate::config::Media>>,
+    keyboards: Vec<DeviceItem<KeyboardId, crate::config::Keyboard>>,
+    mice: Vec<DeviceItem<MouseId, crate::config::Mouse>>,
     modes: Vec<DeviceMode>,
     server: Server,
 }
@@ -121,6 +123,8 @@ impl Device {
         let consoles = config.consoles.into_iter().map(DeviceItem::new).collect();
         let volumes = config.volumes.into_iter().map(DeviceItem::new).collect();
         let media = config.media.into_iter().map(DeviceItem::new).collect();
+        let keyboards = config.keyboards.into_iter().map(DeviceItem::new).collect();
+        let mice = config.mice.into_iter().map(DeviceItem::new).collect();
         let notifier = DeviceNotifier::new();
         let modes = config.modes.into_iter().map(Into::into).collect();
         let device = Device {
@@ -131,6 +135,8 @@ impl Device {
                 consoles,
                 volumes,
                 media,
+                keyboards,
+                mice,
                 modes,
                 server,
             }),
@@ -219,6 +225,8 @@ impl Device {
         let mut console_monitor = self.inner.server.inner.consoles.monitor();
         let mut volume_monitor = self.inner.server.inner.volumes.monitor();
         let mut media_monitor = self.inner.server.inner.media.monitor();
+        let mut keyboard_monitor = self.inner.server.inner.keyboards.monitor();
+        let mut mouse_monitor = self.inner.server.inner.mice.monitor();
         let mut changed = false;
 
         for (id, item) in self.inner.server.inner.actuators.contents() {
@@ -239,6 +247,14 @@ impl Device {
 
         for (id, item) in self.inner.server.inner.media.contents() {
             changed |= add_item(self.inner.media.iter(), id, item);
+        }
+
+        for (id, item) in self.inner.server.inner.keyboards.contents() {
+            changed |= add_item(self.inner.keyboards.iter(), id, item);
+        }
+
+        for (id, item) in self.inner.server.inner.mice.contents() {
+            changed |= add_item(self.inner.mice.iter(), id, item);
         }
 
         if changed {
@@ -275,6 +291,20 @@ impl Device {
                         Ok(c) => change(self.inner.media.iter(), c),
                         Err(e) => {
                             warn!("Issue with monitoring media: {:?}", e); return },
+                    }
+                }
+                msg = keyboard_monitor.recv() => {
+                    match msg {
+                        Ok(c) => change(self.inner.keyboards.iter(), c),
+                        Err(e) => {
+                            warn!("Issue with monitoring keyboards: {:?}", e); return },
+                    }
+                }
+                msg = mouse_monitor.recv() => {
+                    match msg {
+                        Ok(c) => change(self.inner.mice.iter(), c),
+                        Err(e) => {
+                            warn!("Issue with monitoring mice: {:?}", e); return },
                     }
                 }
             };
@@ -362,6 +392,28 @@ impl crate::Device for Device {
             .media
             .iter()
             .map(|m| crate::DeviceMedia {
+                name: m.config().name.clone(),
+                id: m.get(),
+            })
+            .collect()
+    }
+
+    fn keyboards(&self) -> Vec<crate::DeviceKeyboard> {
+        self.inner
+            .keyboards
+            .iter()
+            .map(|k| crate::DeviceKeyboard {
+                name: k.config().name.clone(),
+                id: k.get(),
+            })
+            .collect()
+    }
+
+    fn mice(&self) -> Vec<crate::DeviceMouse> {
+        self.inner
+            .mice
+            .iter()
+            .map(|m| crate::DeviceMouse {
                 name: m.config().name.clone(),
                 id: m.get(),
             })

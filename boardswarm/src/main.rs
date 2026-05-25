@@ -532,6 +532,26 @@ impl DeviceConfigItem for config::Media {
     }
 }
 
+impl DeviceConfigItem for config::Keyboard {
+    #[instrument(fields(name = self.name), skip_all, level="error")]
+    fn matches(&self, properties: &Properties) -> bool {
+        if self.match_.is_empty() {
+            warn!("Keyboard matches is empty - will match any keyboard");
+        }
+        properties.matches(&self.match_)
+    }
+}
+
+impl DeviceConfigItem for config::Mouse {
+    #[instrument(fields(name = self.name), skip_all, level="error")]
+    fn matches(&self, properties: &Properties) -> bool {
+        if self.match_.is_empty() {
+            warn!("Mouse matches is empty - will match any mouse");
+        }
+        properties.matches(&self.match_)
+    }
+}
+
 impl DeviceConfigItem for config::ModeStep {
     #[instrument(skip_all, level = "error")]
     fn matches(&self, properties: &Properties) -> bool {
@@ -568,6 +588,22 @@ impl From<&dyn Device> for boardswarm_protocol::Device {
                 id: m.id.map(Into::into),
             })
             .collect();
+        let keyboards = d
+            .keyboards()
+            .into_iter()
+            .map(|k| boardswarm_protocol::Keyboard {
+                name: k.name,
+                id: k.id.map(Into::into),
+            })
+            .collect();
+        let mice = d
+            .mice()
+            .into_iter()
+            .map(|m| boardswarm_protocol::Mouse {
+                name: m.name,
+                id: m.id.map(Into::into),
+            })
+            .collect();
         let modes = d
             .modes()
             .into_iter()
@@ -582,6 +618,8 @@ impl From<&dyn Device> for boardswarm_protocol::Device {
             consoles,
             volumes,
             media,
+            keyboards,
+            mice,
             current_mode,
             modes,
         }
@@ -632,6 +670,16 @@ struct DeviceMedia {
     id: Option<MediaId>,
 }
 
+struct DeviceKeyboard {
+    name: String,
+    id: Option<KeyboardId>,
+}
+
+struct DeviceMouse {
+    name: String,
+    id: Option<MouseId>,
+}
+
 struct DeviceMode {
     name: String,
     depends: Option<String>,
@@ -645,6 +693,8 @@ trait Device: Send + Sync {
     fn consoles(&self) -> Vec<DeviceConsole>;
     fn volumes(&self) -> Vec<DeviceVolume>;
     fn media(&self) -> Vec<DeviceMedia>;
+    fn keyboards(&self) -> Vec<DeviceKeyboard>;
+    fn mice(&self) -> Vec<DeviceMouse>;
     fn modes(&self) -> Vec<DeviceMode>;
     fn current_mode(&self) -> Option<String>;
 }

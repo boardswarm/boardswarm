@@ -112,6 +112,8 @@ message Device {
   repeated Mode modes = 3;
   optional string current_mode = 4;
   repeated Media media = 5;
+  repeated Keyboard keyboards = 6;
+  repeated Mouse mice = 7;
 }
 
 message Console {
@@ -125,6 +127,16 @@ message Volume {
 }
 
 message Media {
+  string name = 1;
+  optional uint64 id = 2;
+}
+
+message Keyboard {
+  string name = 1;
+  optional uint64 id = 2;
+}
+
+message Mouse {
   string name = 1;
   optional uint64 id = 2;
 }
