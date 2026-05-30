@@ -1,10 +1,16 @@
 use std::time::Duration;
 
-use tokio::{fs::File, sync::watch};
+use tokio::{
+    fs::File,
+    sync::{mpsc, watch},
+};
 use tracing::instrument;
 use usb_gadget::{Class, Id, Strings, UdcState, function::hid::Hid};
 
-use crate::Server;
+use crate::{
+    KeyboardEvent, KeyboardState, Server,
+    registry::{self, Properties},
+};
 
 pub const PROVIDER: &str = "hid_gadget";
 
@@ -115,9 +121,33 @@ struct Mouse {
     udc_state: watch::Receiver<UdcState>,
 }
 
+#[derive(Debug)]
 struct Keyboard {
-    hidg: File,
-    udc_state: watch::Receiver<UdcState>,
+    events: mpsc::Sender<KeyboardEvent>,
+    state: watch::Receiver<KeyboardState>,
+}
+
+impl Keyboard {
+    fn new(hidg: File, state: watch::Receiver<UdcState>) -> Self {
+        let (events, input) = mpsc::channel(32);
+        let (state_tx, state) = watch::channel(Default::default());
+        Keyboard { events, state }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::Keyboard for Keyboard {
+    async fn open(
+        &self,
+    ) -> Result<
+        (
+            mpsc::Sender<KeyboardEvent>,
+            futures::stream::BoxStream<'static, KeyboardState>,
+        ),
+        KeyboardError,
+    > {
+        todo!()
+    }
 }
 
 struct Gadget {
@@ -176,10 +206,16 @@ impl Gadget {
             .await
             .unwrap();
 
-        let keyboard = Keyboard {
-            hidg,
-            udc_state: tx.clone(),
-        };
+        let keyboard = Keyboard::new(hidg, tx.clone());
+
+        let provider_properties = &[
+            (registry::PROVIDER_NAME, self.name.as_str()),
+            (registry::PROVIDER, PROVIDER),
+        ];
+
+        let mut properties = Properties::new("HID Keyboard");
+        properties.extend(provider_properties);
+        self.server.register_keyboard(properties, keyboard);
 
         let hidg = tokio::fs::OpenOptions::new()
             .read(true)

@@ -328,6 +328,7 @@ impl TryFrom<boardswarm_protocol::KeyboardEvent> for KeyboardEvent {
 }
 
 /// Rust-side representation of keyboard LED state returned by a keyboard device.
+#[derive(Debug, Default)]
 pub struct KeyboardState {
     pub leds: Vec<boardswarm_protocol::KeyboardLed>,
 }
