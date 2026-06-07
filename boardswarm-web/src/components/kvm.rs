@@ -34,20 +34,52 @@ fn request_fullscreen(element_id: &str) {
     }
 }
 
-/// Scale an element-relative position in pixels to the HID absolute range 0-32767.
-fn scale_to_hid(pos_px: f64, size_px: f64) -> u32 {
-    if size_px <= 0.0 {
-        return 0;
-    }
-    ((pos_px.clamp(0.0, size_px) / size_px) * 32767.0) as u32
-}
-
-/// Get (width, height) in pixels for a DOM element by id.
-fn element_size(element_id: &str) -> Option<(f64, f64)> {
+/// Map element-relative coordinates (ex, ey) to HID absolute range 0-32767,
+/// accounting for letterboxing/pillarboxing from `object-fit: contain`.
+///
+/// When the video aspect ratio doesn't match the element's, the browser
+/// renders black bars. We compute the actual rendered video rect, clamp the
+/// cursor position to it, and scale only within that rect.
+fn video_coords_to_hid(video_element_id: &str, ex: f64, ey: f64) -> Option<(u32, u32)> {
     let document = web_sys::window()?.document()?;
-    let el = document.get_element_by_id(element_id)?;
-    let rect = el.get_bounding_client_rect();
-    Some((rect.width(), rect.height()))
+    let el = document.get_element_by_id(video_element_id)?;
+    let video = el.dyn_ref::<web_sys::HtmlVideoElement>()?;
+
+    let rect = video.get_bounding_client_rect();
+    let el_w = rect.width();
+    let el_h = rect.height();
+    if el_w <= 0.0 || el_h <= 0.0 {
+        return None;
+    }
+
+    let vid_w = video.video_width() as f64;
+    let vid_h = video.video_height() as f64;
+
+    // Compute the rendered content rect within the element (object-fit: contain).
+    let (rendered_w, rendered_h, offset_x, offset_y) = if vid_w > 0.0 && vid_h > 0.0 {
+        let el_ar = el_w / el_h;
+        let vid_ar = vid_w / vid_h;
+        if vid_ar > el_ar {
+            // Wider than display box — bars on top and bottom (letterbox)
+            let rw = el_w;
+            let rh = el_w / vid_ar;
+            (rw, rh, 0.0, (el_h - rh) / 2.0)
+        } else {
+            // Taller than display box — bars on left and right (pillarbox)
+            let rh = el_h;
+            let rw = el_h * vid_ar;
+            (rw, rh, (el_w - rw) / 2.0, 0.0)
+        }
+    } else {
+        // Video metadata not yet available — fall back to full element area.
+        (el_w, el_h, 0.0, 0.0)
+    };
+
+    let rel_x = (ex - offset_x).clamp(0.0, rendered_w);
+    let rel_y = (ey - offset_y).clamp(0.0, rendered_h);
+    let x = ((rel_x / rendered_w) * 32767.0) as u32;
+    let y = ((rel_y / rendered_h) * 32767.0) as u32;
+    Some((x, y))
 }
 
 /// Build a mouse buttons bitmask from a Dioxus `MouseButtonSet`.
@@ -242,13 +274,8 @@ pub fn KvmViewer(
         if mouse_ws_move.borrow().is_none() {
             return;
         }
-        let (ex, ey) = {
-            let coords = evt.element_coordinates();
-            (coords.x, coords.y)
-        };
-        if let Some((w, h)) = element_size(&video_id_mousemove) {
-            let x = scale_to_hid(ex, w);
-            let y = scale_to_hid(ey, h);
+        let coords = evt.element_coordinates();
+        if let Some((x, y)) = video_coords_to_hid(&video_id_mousemove, coords.x, coords.y) {
             let buttons = build_buttons(evt.held_buttons());
             if let Some(ws) = mouse_ws_move.borrow().as_ref() {
                 let _ = ws.send_input(buttons, x, y, 0, 0);
@@ -260,13 +287,8 @@ pub fn KvmViewer(
         if mouse_ws_down.borrow().is_none() {
             return;
         }
-        let (ex, ey) = {
-            let coords = evt.element_coordinates();
-            (coords.x, coords.y)
-        };
-        if let Some((w, h)) = element_size(&video_id_mousedown) {
-            let x = scale_to_hid(ex, w);
-            let y = scale_to_hid(ey, h);
+        let coords = evt.element_coordinates();
+        if let Some((x, y)) = video_coords_to_hid(&video_id_mousedown, coords.x, coords.y) {
             let buttons = build_buttons(evt.held_buttons());
             if let Some(ws) = mouse_ws_down.borrow().as_ref() {
                 let _ = ws.send_input(buttons, x, y, 0, 0);
@@ -278,13 +300,8 @@ pub fn KvmViewer(
         if mouse_ws_up.borrow().is_none() {
             return;
         }
-        let (ex, ey) = {
-            let coords = evt.element_coordinates();
-            (coords.x, coords.y)
-        };
-        if let Some((w, h)) = element_size(&video_id_mouseup) {
-            let x = scale_to_hid(ex, w);
-            let y = scale_to_hid(ey, h);
+        let coords = evt.element_coordinates();
+        if let Some((x, y)) = video_coords_to_hid(&video_id_mouseup, coords.x, coords.y) {
             let buttons = build_buttons(evt.held_buttons());
             if let Some(ws) = mouse_ws_up.borrow().as_ref() {
                 let _ = ws.send_input(buttons, x, y, 0, 0);
@@ -297,13 +314,8 @@ pub fn KvmViewer(
         if mouse_ws_wheel.borrow().is_none() {
             return;
         }
-        let (ex, ey) = {
-            let coords = evt.element_coordinates();
-            (coords.x, coords.y)
-        };
-        if let Some((w, h)) = element_size(&video_id_wheel) {
-            let x = scale_to_hid(ex, w);
-            let y = scale_to_hid(ey, h);
+        let coords = evt.element_coordinates();
+        if let Some((x, y)) = video_coords_to_hid(&video_id_wheel, coords.x, coords.y) {
             let buttons = build_buttons(evt.held_buttons());
             let delta = evt.delta();
             let (wheel, hwheel) = match delta {
