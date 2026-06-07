@@ -15,6 +15,13 @@ export function webrtc_create(videoElementId) {
         iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
     });
 
+    // Suppress native browser media controls on the video element.
+    const video = document.getElementById(videoElementId);
+    if (video) {
+        video.disablePictureInPicture = true;
+        video.setAttribute("controlslist", "nodownload nofullscreen noremoteplayback");
+    }
+
     const session = {
         pc,
         videoElementId,
