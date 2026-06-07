@@ -307,11 +307,26 @@ pub trait Media: std::fmt::Debug + Send + Sync {
 }
 
 /// Rust-side representation of a keyboard key event.
+#[derive(Copy, Clone)]
 pub enum KeyboardEvent {
     /// Key press (key down). Contains the HID Keyboard/Keypad usage ID (see HID Usage Tables §10).
     Down(u8),
     /// Key release (key up). Contains the HID Keyboard/Keypad usage ID.
     Up(u8),
+}
+
+impl KeyboardEvent {
+    fn is_key(self) -> bool {
+        match self {
+            Self::Down(k) | Self::Up(k) => k > 0 && k <= 0xdd,
+        }
+    }
+
+    fn is_modifier(self) -> bool {
+        match self {
+            Self::Down(m) | Self::Up(m) => m >= 0xe0 && m <= 0xe7,
+        }
+    }
 }
 
 impl TryFrom<boardswarm_protocol::KeyboardEvent> for KeyboardEvent {
@@ -328,7 +343,7 @@ impl TryFrom<boardswarm_protocol::KeyboardEvent> for KeyboardEvent {
 }
 
 /// Rust-side representation of keyboard LED state returned by a keyboard device.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct KeyboardState {
     pub leds: Vec<boardswarm_protocol::KeyboardLed>,
 }
@@ -369,7 +384,13 @@ impl TryFrom<boardswarm_protocol::MouseInput> for MouseInput {
             .map_err(|_| tonic::Status::invalid_argument("Mouse wheel value out of range"))?;
         let hwheel = i8::try_from(m.hwheel)
             .map_err(|_| tonic::Status::invalid_argument("Mouse hwheel value out of range"))?;
-        Ok(MouseInput { buttons, x, y, wheel, hwheel })
+        Ok(MouseInput {
+            buttons,
+            x,
+            y,
+            wheel,
+            hwheel,
+        })
     }
 }
 
@@ -384,9 +405,7 @@ pub enum KeyboardError {
 impl From<KeyboardError> for tonic::Status {
     fn from(e: KeyboardError) -> Self {
         match e {
-            KeyboardError::NotSupported => {
-                tonic::Status::unimplemented("Keyboard not supported")
-            }
+            KeyboardError::NotSupported => tonic::Status::unimplemented("Keyboard not supported"),
             KeyboardError::Internal(msg) => tonic::Status::internal(msg),
         }
     }
@@ -907,7 +926,10 @@ impl Server {
     }
 
     pub fn get_keyboard(&self, id: KeyboardId) -> Option<Arc<dyn Keyboard>> {
-        self.inner.keyboards.lookup(id).map(registry::Item::into_inner)
+        self.inner
+            .keyboards
+            .lookup(id)
+            .map(registry::Item::into_inner)
     }
 
     fn register_mouse<M>(&self, properties: Properties, mouse: M) -> MouseId

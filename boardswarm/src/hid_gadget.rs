@@ -1,14 +1,19 @@
-use std::time::Duration;
+use std::{future::Future, task::Poll, time::Duration};
 
+use futures::{FutureExt, StreamExt};
 use tokio::{
-    fs::File,
+    fs::{File, OpenOptions},
+    io::AsyncWriteExt,
+    select,
     sync::{mpsc, watch},
+    time::sleep,
 };
+use tokio_stream::wrappers::WatchStream;
 use tracing::instrument;
 use usb_gadget::{Class, Id, Strings, UdcState, function::hid::Hid};
 
 use crate::{
-    KeyboardEvent, KeyboardState, Server,
+    KeyboardError, KeyboardEvent, KeyboardState, Server,
     registry::{self, Properties},
 };
 
@@ -30,7 +35,7 @@ const KEYBOARD_DESC: &[u8] = &[
     0x75, 0x01, // 1 byte sie, global, tag 7 (report size ) - 1
     0x95, 0x08, // 1 byte size, global, tag 9 (report count) - 8
     0x81, 0x02, // 1 byte size, main, tag 8 (Input) -  variable, absolute
-    // // PADDING ? 1 byte why??
+    // // PADDING ? 1 byte why?? -> defined for boot keyboard
     0x95, 0x01, // 1 byte size, global, tag 9 (report count) - 1
     0x75, 0x08, // 1 byte size, global, tag 7 (report size) - 8
     0x81, 0x03, // 1 byte size, main, tag 8 (Input) - constant, variable - padding?
@@ -60,7 +65,7 @@ const KEYBOARD_DESC: &[u8] = &[
           // ------------ application collection end
 ];
 // Maximal size of the input descriptor
-const KEYBOARD_DESC_INPUT_SIZE: u8 = 6;
+const KEYBOARD_DESC_INPUT_SIZE: u8 = 8;
 
 const MOUSE_DESC: &[u8] = &[
     // Absolute mouse
@@ -121,17 +126,183 @@ struct Mouse {
     udc_state: watch::Receiver<UdcState>,
 }
 
+#[derive(Debug, Default)]
+struct KeyboardData {
+    down: [u8; 6],
+    modifiers: u8,
+}
+
+const KEYS: usize = 6;
+impl KeyboardData {
+    fn new() -> Self {
+        Self {
+            down: [0; KEYS],
+            modifiers: 0x0,
+        }
+    }
+
+    fn key_down(&mut self, key: u8) {
+        for i in 0..self.down.len() {
+            if self.down[i] == key {
+                return;
+            }
+            if self.down[i] == 0 {
+                self.down[i] = key;
+                return;
+            }
+        }
+
+        // all keys are down; drop the first
+        self.down[0] = key;
+        self.down.rotate_left(1);
+    }
+
+    fn key_up(&mut self, key: u8) {
+        for i in 0..self.down.len() {
+            if self.down[i] == key {
+                self.down[i] = 0;
+                self.down[i..].rotate_left(1);
+            }
+        }
+    }
+
+    fn event(&mut self, event: KeyboardEvent) {
+        if event.is_modifier() {
+            match event {
+                KeyboardEvent::Down(d) => {
+                    self.modifiers |= 1 << (d & 0x7);
+                }
+                KeyboardEvent::Up(u) => {
+                    self.modifiers &= !(1 << (u & 0x7));
+                }
+            }
+        }
+
+        if event.is_key() {
+            match event {
+                KeyboardEvent::Down(d) => self.key_down(d),
+                KeyboardEvent::Up(u) => self.key_up(u),
+            }
+        }
+    }
+
+    fn merge(&mut self, mut others: Vec<&mut KeyboardData>) {
+        // merge all modifiers
+        self.modifiers = 0x0;
+        for o in &others {
+            self.modifiers |= o.modifiers;
+        }
+
+        // Up all keys that are no longer down
+        for k in self.down {
+            if !others.iter().any(|o| o.down.contains(&k)) {
+                self.key_up(k);
+            }
+        }
+
+        // ensure all keys are down, with an overflow based on addition ordering
+        // TODO ensure fairness between remote clients
+        let mut dropped = vec![];
+        for o in &others {
+            for k in o.down {
+                if !self.down.contains(&k) && !dropped.contains(&k) {
+                    if self.down[KEYS - 1] != 0 {
+                        // Doing to drop the first
+                        dropped.push(self.down[0]);
+                    }
+                    self.key_down(k);
+                }
+            }
+        }
+
+        for k in dropped {
+            for o in others.iter_mut() {
+                o.key_down(k);
+            }
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct HidKeyboardData {
+    clients: Vec<(mpsc::Receiver<KeyboardEvent>, KeyboardData)>,
+    state: KeyboardData,
+}
+
+impl HidKeyboardData {
+    async fn recv_event(&mut self) -> (usize, Option<KeyboardEvent>) {
+        std::future::poll_fn(|cx| {
+            for (i, c) in self.clients.iter_mut().enumerate() {
+                if let std::task::Poll::Ready(r) = c.0.poll_recv(cx) {
+                    return Poll::Ready((i, r));
+                }
+            }
+            std::task::Poll::Pending
+        })
+        .await
+    }
+}
+
+// TODO error handling
+async fn keyboard_process(
+    mut hidg: File,
+    mut new_client_rx: mpsc::Receiver<mpsc::Receiver<KeyboardEvent>>,
+    keyboard_state_tx: watch::Sender<KeyboardState>,
+    udc_state_rx: watch::Receiver<UdcState>,
+) {
+    // TODO
+    let mut state = HidKeyboardData::default();
+
+    loop {
+        select! {
+            client = new_client_rx.recv() => {
+                if let Some(client)  = client {
+                    state.clients.push((client, KeyboardData::new()));
+                }
+            },
+            (index, event)= state.recv_event() => {
+                // TODO drain later ones?
+                match event {
+                    Some(event) => state.clients[index].1.event(event),
+                    None => { state.clients.swap_remove(index); }
+                }
+            }
+        }
+        // TODO ensure all client event are drained?
+        // Always assuming something has change
+        state
+            .state
+            .merge(state.clients.iter_mut().map(|x| &mut x.1).collect());
+
+        // create report
+        let mut report = [0u8; KEYBOARD_DESC_INPUT_SIZE as usize];
+        report[0] = state.state.modifiers;
+        report[2..].copy_from_slice(&state.state.down);
+
+        hidg.write_all(&report).await.unwrap();
+
+        sleep(Duration::from_millis(5)).await;
+    }
+}
+
 #[derive(Debug)]
 struct Keyboard {
-    events: mpsc::Sender<KeyboardEvent>,
+    new_client_tx: mpsc::Sender<mpsc::Receiver<KeyboardEvent>>,
     state: watch::Receiver<KeyboardState>,
 }
 
 impl Keyboard {
-    fn new(hidg: File, state: watch::Receiver<UdcState>) -> Self {
-        let (events, input) = mpsc::channel(32);
-        let (state_tx, state) = watch::channel(Default::default());
-        Keyboard { events, state }
+    fn new(hidg: File, udc_state: watch::Receiver<UdcState>) -> Self {
+        let (state_tx, state_rx) = watch::channel(Default::default());
+
+        let (new_client_tx, new_client_rx) = mpsc::channel(1);
+
+        tokio::spawn(keyboard_process(hidg, new_client_rx, state_tx, udc_state));
+
+        Keyboard {
+            new_client_tx,
+            state: state_rx,
+        }
     }
 }
 
@@ -146,7 +317,12 @@ impl crate::Keyboard for Keyboard {
         ),
         KeyboardError,
     > {
-        todo!()
+        let (tx, rx) = mpsc::channel(16);
+        let state = WatchStream::new(self.state.clone());
+
+        let _ = self.new_client_tx.send(rx).await;
+
+        Ok((tx, state.boxed()))
     }
 }
 
@@ -230,11 +406,11 @@ impl Gadget {
 
         loop {
             let state = udc.state().unwrap();
-            watcher.send_if_modified(|&mut s| {
-                if s == state {
+            watcher.send_if_modified(|s| {
+                if *s == state {
                     false
                 } else {
-                    s = state;
+                    *s = state;
                     true
                 }
             });
@@ -479,3 +655,69 @@ fn main() {
     std::thread::sleep(Duration::from_hours(1));
 }
 */
+
+mod test {
+    #[test]
+    fn keyboard_keys() {
+        let mut client = super::KeyboardData::new();
+        let mut expected = [0u8; super::KEYS];
+
+        assert_eq!(client.down, [0, 0, 0, 0, 0, 0]);
+        assert_eq!(client.modifiers, 0x0);
+
+        // Fill all slots
+        for k in 0x1..=0x6 {
+            client.event(crate::KeyboardEvent::Down(k));
+            expected[k as usize - 1] = k;
+            assert_eq!(client.down, expected);
+            assert_eq!(client.modifiers, 0x0);
+        }
+
+        // Overflow should cause the oldest to drop
+        client.event(crate::KeyboardEvent::Down(0x7));
+        assert_eq!(client.down, [0x2, 0x3, 0x4, 0x5, 0x6, 0x7]);
+        assert_eq!(client.modifiers, 0x0);
+
+        client.event(crate::KeyboardEvent::Up(0x5));
+        assert_eq!(client.down, [0x2, 0x3, 0x4, 0x6, 0x7, 0x0]);
+        assert_eq!(client.modifiers, 0x0);
+
+        client.event(crate::KeyboardEvent::Down(0x8));
+        assert_eq!(client.down, [0x2, 0x3, 0x4, 0x6, 0x7, 0x8]);
+        assert_eq!(client.modifiers, 0x0);
+
+        client.event(crate::KeyboardEvent::Down(0x9));
+        assert_eq!(client.down, [0x3, 0x4, 0x6, 0x7, 0x8, 0x9]);
+        assert_eq!(client.modifiers, 0x0);
+
+        client.event(crate::KeyboardEvent::Up(0x4));
+        assert_eq!(client.down, [0x3, 0x6, 0x7, 0x8, 0x9, 0x0]);
+
+        client.event(crate::KeyboardEvent::Up(0x3));
+        client.event(crate::KeyboardEvent::Up(0x6));
+        client.event(crate::KeyboardEvent::Up(0x7));
+        client.event(crate::KeyboardEvent::Up(0x8));
+        client.event(crate::KeyboardEvent::Up(0x9));
+        assert_eq!(client.down, [0; super::KEYS]);
+    }
+
+    #[test]
+    fn keyboard_modifiers() {
+        let mut client = super::KeyboardData::new();
+
+        client.event(crate::KeyboardEvent::Down(0xe1));
+        assert_eq!(client.modifiers, 0x2);
+
+        client.event(crate::KeyboardEvent::Down(0xe3));
+        assert_eq!(client.modifiers, 0xa);
+
+        client.event(crate::KeyboardEvent::Up(0xe1));
+        assert_eq!(client.modifiers, 0x8);
+
+        client.event(crate::KeyboardEvent::Up(0xe2));
+        assert_eq!(client.modifiers, 0x8);
+
+        client.event(crate::KeyboardEvent::Up(0xe3));
+        assert_eq!(client.modifiers, 0);
+    }
+}
