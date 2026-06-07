@@ -57,7 +57,9 @@ mod udev;
 mod utils;
 mod v4l2_provider;
 mod ws_console;
+mod ws_keyboard;
 mod ws_media;
+mod ws_mouse;
 
 #[derive(Error, Debug)]
 #[error("Actuator failed")]
@@ -1829,6 +1831,12 @@ async fn main() -> anyhow::Result<()> {
     let ws_media_auth =
         setup_auth_layer_with_resolver(&server.inner.auth_info, Some(Arc::new(QueryTokenResolver)))
             .await?;
+    let ws_keyboard_auth =
+        setup_auth_layer_with_resolver(&server.inner.auth_info, Some(Arc::new(QueryTokenResolver)))
+            .await?;
+    let ws_mouse_auth =
+        setup_auth_layer_with_resolver(&server.inner.auth_info, Some(Arc::new(QueryTokenResolver)))
+            .await?;
     let login_info_path = format!(
         "/{}/LoginInfo",
         <boardswarm_protocol::boardswarm_server::BoardswarmServer<Server> as tonic::server::NamedService>::NAME,
@@ -1851,6 +1859,18 @@ async fn main() -> anyhow::Result<()> {
             "/api/ws/media",
             get(ws_media::handler)
                 .layer(ws_media_auth.into_layer())
+                .with_state(server.clone()),
+        )
+        .route(
+            "/api/ws/keyboard",
+            get(ws_keyboard::handler)
+                .layer(ws_keyboard_auth.into_layer())
+                .with_state(server.clone()),
+        )
+        .route(
+            "/api/ws/mouse",
+            get(ws_mouse::handler)
+                .layer(ws_mouse_auth.into_layer())
                 .with_state(server.clone()),
         );
 

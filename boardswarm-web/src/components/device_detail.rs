@@ -8,6 +8,7 @@ pub fn DeviceDetail(
     token: String,
     on_console_open: EventHandler<(u64, String)>,
     on_media_open: EventHandler<(u64, String)>,
+    on_kvm_open: EventHandler<(u64, Option<u64>, Option<u64>, String)>,
 ) -> Element {
     let mut device_info = use_signal(|| None::<boardswarm_protocol::Device>);
     let mut error = use_signal(|| None::<String>);
@@ -117,7 +118,7 @@ pub fn DeviceDetail(
             }
 
             // Volumes
-            div {
+            div { style: "margin-bottom: 1.5rem;",
                 h3 { "Volumes" }
                 if info.volumes.is_empty() {
                     p { style: "color: #888;", "No volumes available" }
@@ -133,7 +134,7 @@ pub fn DeviceDetail(
             }
 
             // Media
-            div { style: "margin-top: 1.5rem;",
+            div { style: "margin-bottom: 1.5rem;",
                 h3 { "Media" }
                 if info.media.is_empty() {
                     p { style: "color: #888;", "No media available" }
@@ -141,19 +142,69 @@ pub fn DeviceDetail(
                 for item in info.media.iter() {
                     div { style: "display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;",
                         span { "{item.name}" }
-                        if let Some(id) = item.id {
-                            button {
-                                class: "btn",
-                                onclick: {
-                                    let name = item.name.clone();
-                                    move |_| {
-                                        on_media_open.call((id, name.clone()));
+                        if let Some(media_id) = item.id {
+                            {
+                                let name = item.name.clone();
+                                // First keyboard and mouse with an id (i.e. available)
+                                let keyboard_id = info.keyboards.iter().find_map(|k| k.id);
+                                let mouse_id = info.mice.iter().find_map(|m| m.id);
+                                let name_for_kvm = name.clone();
+                                rsx! {
+                                    // KVM: video + keyboard + mouse (if both HID devices available)
+                                    if keyboard_id.is_some() || mouse_id.is_some() {
+                                        button {
+                                            class: "btn",
+                                            onclick: move |_| {
+                                                on_kvm_open.call((media_id, keyboard_id, mouse_id, name_for_kvm.clone()));
+                                            },
+                                            "KVM"
+                                        }
                                     }
-                                },
-                                "Stream"
+                                    // View: video-only stream
+                                    button {
+                                        class: "btn",
+                                        onclick: {
+                                            let name = name.clone();
+                                            move |_| {
+                                                on_media_open.call((media_id, name.clone()));
+                                            }
+                                        },
+                                        "View"
+                                    }
+                                }
                             }
                         } else {
                             span { style: "color: #888;", "(offline)" }
+                        }
+                    }
+                }
+            }
+
+            // Keyboards
+            if !info.keyboards.is_empty() {
+                div { style: "margin-bottom: 1.5rem;",
+                    h3 { "Keyboards" }
+                    for kb in info.keyboards.iter() {
+                        div { style: "margin-bottom: 0.25rem;",
+                            span { "{kb.name}" }
+                            if kb.id.is_none() {
+                                span { style: "color: #888;", " (offline)" }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Mice
+            if !info.mice.is_empty() {
+                div { style: "margin-bottom: 1.5rem;",
+                    h3 { "Mice" }
+                    for ms in info.mice.iter() {
+                        div { style: "margin-bottom: 0.25rem;",
+                            span { "{ms.name}" }
+                            if ms.id.is_none() {
+                                span { style: "color: #888;", " (offline)" }
+                            }
                         }
                     }
                 }

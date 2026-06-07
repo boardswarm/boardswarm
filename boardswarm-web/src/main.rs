@@ -3,6 +3,7 @@ use dioxus::prelude::*;
 mod api;
 mod auth;
 mod components;
+mod kvm_input;
 mod ws;
 
 fn main() {

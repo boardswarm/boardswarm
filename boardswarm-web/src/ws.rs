@@ -2,8 +2,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use boardswarm_protocol::{
-    ConsoleInputRequest, ConsoleOutput, MediaRequest, SignalMessage, SignalMessageIceCandidate,
-    SignalMessageSdp, console_input_request, media_request, signal_message,
+    ConsoleInputRequest, ConsoleOutput, KeyboardRequest, KeyboardState, MediaRequest,
+    MouseRequest, SignalMessage, SignalMessageIceCandidate, SignalMessageSdp,
+    console_input_request, keyboard_request, media_request, mouse_request, signal_message,
 };
 use prost::Message;
 use wasm_bindgen::JsCast;
@@ -225,6 +226,157 @@ impl MediaWs {
 }
 
 impl Drop for MediaWs {
+    fn drop(&mut self) {
+        let _ = self.ws.close();
+    }
+}
+
+fn ws_url(path: &str, token: &str) -> Result<String, String> {
+    let origin = web_sys::window()
+        .unwrap()
+        .location()
+        .origin()
+        .unwrap_or_else(|_| "http://localhost:6683".to_string());
+    let ws_origin = origin
+        .replace("https://", "wss://")
+        .replace("http://", "ws://");
+    Ok(format!("{ws_origin}{path}?token={token}"))
+}
+
+/// WebSocket connection for keyboard input / LED state output.
+pub struct KeyboardWs {
+    ws: WebSocket,
+    _on_message: Closure<dyn FnMut(MessageEvent)>,
+    _on_close: Closure<dyn FnMut()>,
+}
+
+impl KeyboardWs {
+    /// Open a keyboard WebSocket.
+    ///
+    /// `on_state` is called whenever a `KeyboardState` (LED report) arrives.
+    /// `on_close` is called when the connection closes.
+    pub fn connect(
+        keyboard_id: u64,
+        token: &str,
+        mut on_state: impl FnMut(KeyboardState) + 'static,
+        on_close: impl FnMut() + 'static,
+    ) -> Result<Self, String> {
+        let url = ws_url("/api/ws/keyboard", token)?;
+        let ws = WebSocket::new(&url).map_err(|e| format!("WebSocket open failed: {e:?}"))?;
+        ws.set_binary_type(BinaryType::Arraybuffer);
+
+        let ws_clone = ws.clone();
+        let on_open = Closure::once(move || {
+            let msg = KeyboardRequest {
+                item_or_signal: Some(keyboard_request::ItemOrSignal::Item(keyboard_id)),
+            };
+            let _ = ws_clone.send_with_u8_array(&msg.encode_to_vec());
+        });
+        ws.set_onopen(Some(on_open.as_ref().unchecked_ref()));
+        on_open.forget();
+
+        let on_message = Closure::wrap(Box::new(move |event: MessageEvent| {
+            if let Ok(buf) = event.data().dyn_into::<js_sys::ArrayBuffer>() {
+                let array = js_sys::Uint8Array::new(&buf);
+                if let Ok(state) = KeyboardState::decode(array.to_vec().as_slice()) {
+                    on_state(state);
+                }
+            }
+        }) as Box<dyn FnMut(MessageEvent)>);
+        ws.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
+
+        let on_close = Rc::new(RefCell::new(on_close));
+        let on_close_clone = on_close.clone();
+        let on_close_cb = Closure::wrap(Box::new(move || {
+            (on_close_clone.borrow_mut())();
+        }) as Box<dyn FnMut()>);
+        ws.set_onclose(Some(on_close_cb.as_ref().unchecked_ref()));
+
+        Ok(Self {
+            ws,
+            _on_message: on_message,
+            _on_close: on_close_cb,
+        })
+    }
+
+    /// Send a keyboard event (key down or key up).
+    pub fn send_event(
+        &self,
+        event_type: boardswarm_protocol::KeyboardEventType,
+        key: u32,
+    ) -> Result<(), String> {
+        let msg = KeyboardRequest {
+            item_or_signal: Some(keyboard_request::ItemOrSignal::Event(
+                boardswarm_protocol::KeyboardEvent {
+                    r#type: event_type as i32,
+                    key,
+                },
+            )),
+        };
+        self.ws
+            .send_with_u8_array(&msg.encode_to_vec())
+            .map_err(|e| format!("WebSocket send failed: {e:?}"))
+    }
+}
+
+impl Drop for KeyboardWs {
+    fn drop(&mut self) {
+        let _ = self.ws.close();
+    }
+}
+
+/// WebSocket connection for sending mouse input events to the server.
+pub struct MouseWs {
+    ws: WebSocket,
+}
+
+impl MouseWs {
+    /// Open a mouse WebSocket.
+    pub fn connect(mouse_id: u64, token: &str) -> Result<Self, String> {
+        let url = ws_url("/api/ws/mouse", token)?;
+        let ws = WebSocket::new(&url).map_err(|e| format!("WebSocket open failed: {e:?}"))?;
+        ws.set_binary_type(BinaryType::Arraybuffer);
+
+        let ws_clone = ws.clone();
+        let on_open = Closure::once(move || {
+            let msg = MouseRequest {
+                item_or_signal: Some(mouse_request::ItemOrSignal::Item(mouse_id)),
+            };
+            let _ = ws_clone.send_with_u8_array(&msg.encode_to_vec());
+        });
+        ws.set_onopen(Some(on_open.as_ref().unchecked_ref()));
+        on_open.forget();
+
+        Ok(Self { ws })
+    }
+
+    /// Send a mouse input report with absolute position scaled to 0-32767.
+    pub fn send_input(
+        &self,
+        buttons: u32,
+        x: u32,
+        y: u32,
+        wheel: i32,
+        hwheel: i32,
+    ) -> Result<(), String> {
+        let msg = MouseRequest {
+            item_or_signal: Some(mouse_request::ItemOrSignal::Input(
+                boardswarm_protocol::MouseInput {
+                    buttons,
+                    x,
+                    y,
+                    wheel,
+                    hwheel,
+                },
+            )),
+        };
+        self.ws
+            .send_with_u8_array(&msg.encode_to_vec())
+            .map_err(|e| format!("WebSocket send failed: {e:?}"))
+    }
+}
+
+impl Drop for MouseWs {
     fn drop(&mut self) {
         let _ = self.ws.close();
     }
