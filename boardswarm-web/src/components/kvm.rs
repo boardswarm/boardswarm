@@ -308,15 +308,15 @@ pub fn KvmViewer(
             let delta = evt.delta();
             let (wheel, hwheel) = match delta {
                 WheelDelta::Pixels(v) => (
-                    (v.y.signum() as i32).clamp(-127, 127),
+                    (-v.y.signum() as i32).clamp(-127, 127),
                     (v.x.signum() as i32).clamp(-127, 127),
                 ),
                 WheelDelta::Lines(v) => (
-                    (v.y.signum() as i32).clamp(-127, 127),
+                    (-v.y.signum() as i32).clamp(-127, 127),
                     (v.x.signum() as i32).clamp(-127, 127),
                 ),
                 WheelDelta::Pages(v) => (
-                    (v.y.signum() as i32).clamp(-127, 127),
+                    (-v.y.signum() as i32).clamp(-127, 127),
                     (v.x.signum() as i32).clamp(-127, 127),
                 ),
             };
