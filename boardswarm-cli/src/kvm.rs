@@ -1,5 +1,6 @@
 use boardswarm_client::client::{KeyboardSession, MediaSession, MouseSession, SignalMsg};
 use gstreamer::prelude::*;
+use gstreamer_video::VideoInfo;
 use gstreamer_webrtc::{WebRTCSDPType, WebRTCSessionDescription};
 use tokio::sync::mpsc as tokio_mpsc;
 use tracing::{info, warn};
@@ -104,6 +105,7 @@ enum HidKeyEvent {
     Up(u8),
 }
 
+#[derive(Debug)]
 struct HidMouseEvent {
     buttons: u8,
     x: i16,
@@ -127,6 +129,7 @@ pub fn build_receive_pipeline(stun_server: &str) -> (gstreamer::Pipeline, gstrea
     let webrtcbin = gstreamer::ElementFactory::make("webrtcbin")
         .name("recvbin")
         .property_from_str("bundle-policy", "max-bundle")
+        .property_from_str("latency", "16")
         .build()
         .expect("webrtcbin — install gstreamer1.0-plugins-bad");
 
@@ -163,6 +166,7 @@ pub fn build_receive_pipeline(stun_server: &str) -> (gstreamer::Pipeline, gstrea
         let sink = gstreamer::ElementFactory::make("autovideosink")
             .build()
             .expect("autovideosink — install gstreamer1.0-plugins-good");
+        sink.set_property("sync", false);
 
         pipeline
             .add_many([&queue, &depay, &parse, &decodebin, &convert, &sink])
@@ -225,22 +229,69 @@ fn parse_navigation_from_message(msg: &gstreamer::Message) -> Option<NavEvent> {
         return None;
     }
     let event: gstreamer::Event = structure.get("event").ok()?;
+    let src = msg.src()?;
+    let video_sink: gstreamer::Element = src.clone().downcast().ok()?;
+    let (width, height) =
+        if let Some(caps) = video_sink.static_pad("sink").and_then(|p| p.current_caps()) {
+            let vid = VideoInfo::from_caps(&caps).ok()?;
+            (vid.width(), vid.height())
+        } else {
+            (1920, 1080)
+        };
+
     let nav_structure = event.structure()?;
-    parse_navigation_structure(nav_structure)
+    parse_navigation_structure(width, height, nav_structure)
 }
 
 enum NavEvent {
     KeyPress(String),
     KeyRelease(String),
-    MouseMove { x: f64, y: f64 },
-    MouseButtonPress { button: i32, x: f64, y: f64 },
-    MouseButtonRelease { button: i32, x: f64, y: f64 },
-    MouseScroll { delta_x: f64, delta_y: f64 },
+    MouseMove {
+        x: i16,
+        y: i16,
+    },
+    MouseButtonPress {
+        button: u8,
+        x: i16,
+        y: i16,
+    },
+    MouseButtonRelease {
+        button: u8,
+        x: i16,
+        y: i16,
+    },
+    MouseScroll {
+        x: i16,
+        y: i16,
+        delta_x: i8,
+        delta_y: i8,
+    },
 }
 
-fn parse_navigation_structure(s: &gstreamer::StructureRef) -> Option<NavEvent> {
+fn scale_axis(v: f64, max: u32) -> i16 {
+    let maxf = max as f64;
+    let v = v.clamp(0.0, maxf);
+    (v / maxf * i16::MAX as f64) as i16
+}
+
+fn scale_wheel(v: f64, max: u32) -> i8 {
+    let maxf = max as f64;
+    let v = v.clamp(0.0, maxf);
+    (v / maxf * i8::MAX as f64) as i8
+}
+
+fn get_pos(width: u32, height: u32, s: &gstreamer::StructureRef) -> Option<(i16, i16)> {
+    let x: f64 = s.get("pointer_x").ok()?;
+    let y: f64 = s.get("pointer_y").ok()?;
+    Some((scale_axis(x, width), scale_axis(y, height)))
+}
+
+fn parse_navigation_structure(
+    width: u32,
+    height: u32,
+    s: &gstreamer::StructureRef,
+) -> Option<NavEvent> {
     let event_type: String = s.get("event").ok()?;
-    eprintln!("=> {s:?}");
     match event_type.as_str() {
         "key-press" => {
             let key: String = s.get("key").ok()?;
@@ -251,43 +302,82 @@ fn parse_navigation_structure(s: &gstreamer::StructureRef) -> Option<NavEvent> {
             Some(NavEvent::KeyRelease(key))
         }
         "mouse-move" => {
-            let x: f64 = s.get("pointer_x").ok()?;
-            let y: f64 = s.get("pointer_y").ok()?;
+            let (x, y) = get_pos(width, height, s)?;
             Some(NavEvent::MouseMove { x, y })
         }
         "mouse-button-press" => {
-            let button: i32 = s.get("button").ok()?;
-            let x: f64 = s.get("pointer_x").ok()?;
-            let y: f64 = s.get("pointer_y").ok()?;
-            Some(NavEvent::MouseButtonPress { button, x, y })
+            let button = s.get::<i32>("button").ok()? as u8;
+            let (x, y) = get_pos(width, height, s)?;
+
+            match button {
+                1 => Some(NavEvent::MouseButtonPress { button: 0, x, y }),
+                3 => Some(NavEvent::MouseButtonPress { button: 1, x, y }),
+                2 => Some(NavEvent::MouseButtonPress { button: 2, x, y }),
+                8 => Some(NavEvent::MouseButtonPress { button: 3, x, y }),
+                9 => Some(NavEvent::MouseButtonPress { button: 4, x, y }),
+                4 => Some(NavEvent::MouseScroll {
+                    x,
+                    y,
+                    delta_x: 0,
+                    delta_y: 1,
+                }),
+                5 => Some(NavEvent::MouseScroll {
+                    x,
+                    y,
+                    delta_x: 0,
+                    delta_y: -1,
+                }),
+                6 => Some(NavEvent::MouseScroll {
+                    x,
+                    y,
+                    delta_x: 1,
+                    delta_y: 0,
+                }),
+                7 => Some(NavEvent::MouseScroll {
+                    x,
+                    y,
+                    delta_x: -1,
+                    delta_y: 0,
+                }),
+
+                _ => None,
+            }
         }
         "mouse-button-release" => {
-            let button: i32 = s.get("button").ok()?;
-            let x: f64 = s.get("pointer_x").ok()?;
-            let y: f64 = s.get("pointer_y").ok()?;
-            Some(NavEvent::MouseButtonRelease { button, x, y })
+            let button = s.get::<i32>("button").ok()? as u8;
+            let (x, y) = get_pos(width, height, s)?;
+            match button {
+                1 => Some(NavEvent::MouseButtonRelease { button: 0, x, y }),
+                3 => Some(NavEvent::MouseButtonRelease { button: 1, x, y }),
+                2 => Some(NavEvent::MouseButtonRelease { button: 2, x, y }),
+                8 => Some(NavEvent::MouseButtonRelease { button: 3, x, y }),
+                9 => Some(NavEvent::MouseButtonRelease { button: 4, x, y }),
+                _ => None,
+            }
         }
         "mouse-scroll" => {
+            let (x, y) = get_pos(width, height, s)?;
             let delta_x: f64 = s.get("delta_pointer_x").unwrap_or(0.0);
+            let delta_x = scale_wheel(delta_x, width);
             let delta_y: f64 = s.get("delta_pointer_y").unwrap_or(0.0);
-            Some(NavEvent::MouseScroll { delta_x, delta_y })
+            let delta_y = scale_wheel(delta_y, height);
+            Some(NavEvent::MouseScroll {
+                x,
+                y,
+                delta_x,
+                delta_y,
+            })
         }
         _ => None,
     }
 }
 
-/// Map GStreamer button number (1=left, 2=middle, 3=right) to bitmask bit.
-fn set_mouse_button(buttons: &mut u8, button: i32, pressed: bool) {
-    let bit: u8 = match button {
-        1 => 0,
-        3 => 1,
-        2 => 2,
-        _ => return,
-    };
+/// Map GStreamer button number, based on x11 (1=left, 2=middle, 3=right) to bitmask bit.
+fn set_mouse_button(buttons: &mut u8, button: u8, pressed: bool) {
     if pressed {
-        *buttons |= 1 << bit;
+        *buttons |= 1 << button;
     } else {
-        *buttons &= !(1 << bit);
+        *buttons &= !(1 << button);
     }
 }
 
@@ -330,9 +420,6 @@ pub async fn run_kvm(
 
     std::thread::spawn(move || {
         let mut mouse_buttons: u8 = 0;
-        let mut last_x: f64 = 0.0;
-        let mut last_y: f64 = 0.0;
-        let mut first_mouse = true;
 
         for msg in bus.iter_timed(gstreamer::ClockTime::NONE) {
             match msg.view() {
@@ -350,15 +437,7 @@ pub async fn run_kvm(
                 }
                 _ => {
                     if let Some(nav) = parse_navigation_from_message(&msg) {
-                        handle_nav_event(
-                            nav,
-                            &key_tx_bus,
-                            &mouse_tx_bus,
-                            &mut mouse_buttons,
-                            &mut last_x,
-                            &mut last_y,
-                            &mut first_mouse,
-                        );
+                        handle_nav_event(nav, &key_tx_bus, &mouse_tx_bus, &mut mouse_buttons);
                     }
                 }
             }
@@ -476,9 +555,6 @@ fn handle_nav_event(
     key_tx: &tokio_mpsc::UnboundedSender<HidKeyEvent>,
     mouse_tx: &tokio_mpsc::UnboundedSender<HidMouseEvent>,
     buttons: &mut u8,
-    last_x: &mut f64,
-    last_y: &mut f64,
-    first_mouse: &mut bool,
 ) {
     match event {
         NavEvent::KeyPress(key) => {
@@ -492,50 +568,48 @@ fn handle_nav_event(
             }
         }
         NavEvent::MouseMove { x, y } => {
-            eprintln!("=> {x}x{y}");
-            *last_x = x;
-            *last_y = y;
             let _ = mouse_tx.send(HidMouseEvent {
                 buttons: *buttons,
-                x: (x / 2544.0 * i16::MAX as f64) as i16,
-                y: (y / 1428.0 * i16::MAX as f64) as i16,
+                x,
+                y,
                 wheel: 0,
                 hwheel: 0,
             });
         }
         NavEvent::MouseButtonPress { button, x, y } => {
-            *last_x = x;
-            *last_y = y;
             set_mouse_button(buttons, button, true);
-            let _ = mouse_tx.send(HidMouseEvent {
+            let event = HidMouseEvent {
                 buttons: *buttons,
-                x: (x / 2544.0 * i16::MAX as f64) as i16,
-                y: (y / 1428.0 * i16::MAX as f64) as i16,
+                x,
+                y,
                 wheel: 0,
                 hwheel: 0,
-            });
+            };
+            eprintln!("Press: {event:#?}");
+            let _ = mouse_tx.send(event);
         }
         NavEvent::MouseButtonRelease { button, x, y } => {
-            *last_x = x;
-            *last_y = y;
             set_mouse_button(buttons, button, false);
             let _ = mouse_tx.send(HidMouseEvent {
                 buttons: *buttons,
-                x: (x / 2544.0 * i16::MAX as f64) as i16,
-                y: (y / 1428.0 * i16::MAX as f64) as i16,
+                x,
+                y,
                 wheel: 0,
                 hwheel: 0,
             });
         }
-        NavEvent::MouseScroll { delta_x, delta_y } => {
-            let wheel = delta_y.clamp(i8::MIN as f64, i8::MAX as f64) as i8;
-            let hwheel = delta_x.clamp(i8::MIN as f64, i8::MAX as f64) as i8;
+        NavEvent::MouseScroll {
+            x,
+            y,
+            delta_x,
+            delta_y,
+        } => {
             let _ = mouse_tx.send(HidMouseEvent {
                 buttons: *buttons,
-                x: (*last_x / 2544.0 * i16::MAX as f64) as i16,
-                y: (*last_y / 1428.0 * i16::MAX as f64) as i16,
-                wheel,
-                hwheel,
+                x,
+                y,
+                wheel: delta_y,
+                hwheel: delta_x,
             });
         }
     }
