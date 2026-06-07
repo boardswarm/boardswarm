@@ -15,12 +15,6 @@ extern "C" {
     fn webrtc_set_offer(handle: u32, offer_sdp: &str, on_answer: &Closure<dyn FnMut(String)>);
     fn webrtc_add_ice(handle: u32, candidate: &str, mline_index: u32);
     fn webrtc_dispose(handle: u32);
-    /// Move the video element into a top-level <dialog> modal that covers the
-    /// full viewport. The dialog manages its own close button; Dioxus state is
-    /// not involved so there are no re-render / stacking-context issues.
-    fn webrtc_enter_fill(video_element_id: &str);
-    /// Restore the video element to its original DOM position and close the dialog.
-    fn webrtc_exit_fill(video_element_id: &str);
 }
 
 fn request_fullscreen(element_id: &str) {
@@ -42,6 +36,7 @@ fn request_fullscreen(element_id: &str) {
 pub fn MediaViewer(media_id: u64, token: String) -> Element {
     let mut status = use_signal(|| "Connecting...".to_string());
     let mut connected = use_signal(|| false);
+    let mut fill_mode = use_signal(|| false);
 
     let video_id = format!("media-video-{media_id}");
     let video_id_clone = video_id.clone();
@@ -117,7 +112,6 @@ pub fn MediaViewer(media_id: u64, token: String) -> Element {
         });
     });
 
-    let video_id_fill = video_id.clone();
     let video_id_fullscreen = video_id.clone();
 
     rsx! {
@@ -135,7 +129,7 @@ pub fn MediaViewer(media_id: u64, token: String) -> Element {
                 button {
                     class: "btn",
                     title: "Fill window",
-                    onclick: move |_| webrtc_enter_fill(&video_id_fill),
+                    onclick: move |_| fill_mode.set(true),
                     "⤢ Fill window"
                 }
                 button {
@@ -146,13 +140,33 @@ pub fn MediaViewer(media_id: u64, token: String) -> Element {
                 }
             }
 
-            video {
-                id: "{video_id}",
-                autoplay: "true",
-                playsinline: "true",
-                style: "width: 100%; max-width: 800px; background: #000; border-radius: 4px;",
+            div {
+                style: if fill_mode() {
+                    "position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:1000;background:#000;"
+                } else {
+                    "display:block;"
+                },
+
+                video {
+                    id: "{video_id}",
+                    autoplay: "true",
+                    playsinline: "true",
+                    style: if fill_mode() {
+                        "width:100%;height:100%;object-fit:contain;display:block;background:#000;"
+                    } else {
+                        "width:100%;max-width:800px;background:#000;border-radius:4px;"
+                    },
+                }
+            }
+
+            if fill_mode() {
+                button {
+                    style: "position:fixed;top:1rem;right:1rem;z-index:1001;transform:translateZ(0);background:rgba(0,0,0,0.6);color:#fff;border:none;border-radius:4px;padding:0.4rem 0.8rem;cursor:pointer;font-size:1.2rem;line-height:1;",
+                    title: "Exit fill mode",
+                    onclick: move |_| fill_mode.set(false),
+                    "✕"
+                }
             }
         }
     }
 }
-

@@ -20,8 +20,6 @@ extern "C" {
     fn webrtc_set_offer(handle: u32, offer_sdp: &str, on_answer: &Closure<dyn FnMut(String)>);
     fn webrtc_add_ice(handle: u32, candidate: &str, mline_index: u32);
     fn webrtc_dispose(handle: u32);
-    fn webrtc_enter_fill(video_element_id: &str);
-    fn webrtc_exit_fill(video_element_id: &str);
 }
 
 fn request_fullscreen(element_id: &str) {
@@ -113,6 +111,7 @@ pub fn KvmViewer(
     let mut status = use_signal(|| "Connecting...".to_string());
     let mut connected = use_signal(|| false);
     let mut led_names = use_signal(|| Vec::<String>::new());
+    let mut fill_mode = use_signal(|| false);
 
     let video_id = format!("kvm-video-{media_id}");
     let container_id = format!("kvm-container-{media_id}");
@@ -237,16 +236,21 @@ pub fn KvmViewer(
         });
     });
 
-    let video_id_fill = video_id.clone();
     let video_id_fullscreen = video_id.clone();
     let video_id_mousemove = video_id.clone();
     let video_id_mousedown = video_id.clone();
     let video_id_mouseup = video_id.clone();
     let video_id_wheel = video_id.clone();
     let container_id_click = container_id.clone();
+    let container_id_fill = container_id.clone();
 
     // --- Keyboard handlers ---
     let on_keydown = move |evt: KeyboardEvent| {
+        // Esc exits fill mode; don't send it to the HID device.
+        if fill_mode() && evt.code().to_string() == "Escape" {
+            fill_mode.set(false);
+            return;
+        }
         evt.prevent_default();
         if evt.is_auto_repeating() {
             return;
@@ -367,7 +371,19 @@ pub fn KvmViewer(
                 button {
                     class: "btn",
                     title: "Fill window",
-                    onclick: move |_| webrtc_enter_fill(&video_id_fill),
+                    onclick: move |_| {
+                        fill_mode.set(true);
+                        // Keep keyboard focus on the container so key events still fire.
+                        if let Some(window) = web_sys::window() {
+                            if let Some(document) = window.document() {
+                                if let Some(el) = document.get_element_by_id(&container_id_fill) {
+                                    if let Some(el) = el.dyn_ref::<web_sys::HtmlElement>() {
+                                        let _ = el.focus();
+                                    }
+                                }
+                            }
+                        }
+                    },
                     "⤢ Fill window"
                 }
                 button {
@@ -384,27 +400,53 @@ pub fn KvmViewer(
                 }
             }
 
-            video {
-                id: "{video_id}",
-                autoplay: "true",
-                playsinline: "true",
-                style: "width: 100%; max-width: 800px; background: #000; border-radius: 4px; display: block; cursor: crosshair;",
-                onclick: move |_| {
-                    // Focus the container div to receive keyboard events.
-                    if let Some(window) = web_sys::window() {
-                        if let Some(document) = window.document() {
-                            if let Some(el) = document.get_element_by_id(&container_id_click) {
-                                if let Some(el) = el.dyn_ref::<web_sys::HtmlElement>() {
-                                    let _ = el.focus();
+            // Video wrapper: becomes a full-screen fixed overlay in fill mode.
+            div {
+                style: if fill_mode() {
+                    "position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:1000;background:#000;"
+                } else {
+                    "display:block;"
+                },
+
+                video {
+                    id: "{video_id}",
+                    autoplay: "true",
+                    playsinline: "true",
+                    style: if fill_mode() {
+                        "width:100%;height:100%;object-fit:contain;display:block;cursor:crosshair;background:#000;"
+                    } else {
+                        "width:100%;background:#000;border-radius:4px;display:block;cursor:crosshair;"
+                    },
+                    onclick: move |_| {
+                        // Focus the container div to receive keyboard events.
+                        if let Some(window) = web_sys::window() {
+                            if let Some(document) = window.document() {
+                                if let Some(el) = document.get_element_by_id(&container_id_click) {
+                                    if let Some(el) = el.dyn_ref::<web_sys::HtmlElement>() {
+                                        let _ = el.focus();
+                                    }
                                 }
                             }
                         }
-                    }
-                },
-                onmousemove: on_mousemove,
-                onmousedown: on_mousedown,
-                onmouseup: on_mouseup,
-                onwheel: on_wheel,
+                    },
+                    onmousemove: on_mousemove,
+                    onmousedown: on_mousedown,
+                    onmouseup: on_mouseup,
+                    onwheel: on_wheel,
+                }
+            }
+
+            // Exit button lives OUTSIDE the video wrapper so the video's compositing
+            // layer cannot intercept its pointer events. position:fixed + high z-index +
+            // transform:translateZ(0) forces it into its own compositing layer above
+            // the video plane.
+            if fill_mode() {
+                button {
+                    style: "position:fixed;top:1rem;right:1rem;z-index:1001;transform:translateZ(0);background:rgba(0,0,0,0.6);color:#fff;border:none;border-radius:4px;padding:0.4rem 0.8rem;cursor:pointer;font-size:1.2rem;line-height:1;",
+                    title: "Exit fill mode (Esc)",
+                    onclick: move |_| fill_mode.set(false),
+                    "✕"
+                }
             }
         }
     }
