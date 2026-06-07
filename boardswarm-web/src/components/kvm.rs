@@ -85,9 +85,10 @@ pub fn KvmViewer(
     let video_id = format!("kvm-video-{media_id}");
     let container_id = format!("kvm-container-{media_id}");
 
-    // Keyboard and mouse sessions shared across closures.
-    let keyboard_ws: Rc<RefCell<Option<KeyboardWs>>> = Rc::new(RefCell::new(None));
-    let mouse_ws: Rc<RefCell<Option<MouseWs>>> = Rc::new(RefCell::new(None));
+    // Keyboard and mouse sessions — created once and held for the component lifetime.
+    // use_hook ensures the Rc is not replaced on re-renders.
+    let keyboard_ws = use_hook(|| Rc::new(RefCell::new(None::<KeyboardWs>)));
+    let mouse_ws = use_hook(|| Rc::new(RefCell::new(None::<MouseWs>)));
 
     let keyboard_ws_keydown = keyboard_ws.clone();
     let keyboard_ws_keyup = keyboard_ws.clone();
