@@ -145,7 +145,9 @@ pub fn build_receive_pipeline(stun_server: &str) -> (gstreamer::Pipeline, gstrea
             return;
         }
 
-        let queue = gstreamer::ElementFactory::make("queue").build().expect("queue");
+        let queue = gstreamer::ElementFactory::make("queue")
+            .build()
+            .expect("queue");
         let depay = gstreamer::ElementFactory::make("rtph264depay")
             .build()
             .expect("rtph264depay — install gstreamer1.0-plugins-good");
@@ -176,12 +178,17 @@ pub fn build_receive_pipeline(stun_server: &str) -> (gstreamer::Pipeline, gstrea
             let Some(sink) = sink_weak.upgrade() else {
                 return;
             };
-            let caps = src_pad.current_caps().unwrap_or_else(|| src_pad.query_caps(None));
+            let caps = src_pad
+                .current_caps()
+                .unwrap_or_else(|| src_pad.query_caps(None));
             if caps.iter().any(|s| s.name().starts_with("video/x-raw")) {
                 let convert_sink = convert.static_pad("sink").unwrap();
                 if !convert_sink.is_linked() {
-                    src_pad.link(&convert_sink).expect("decodebin → videoconvert");
-                    gstreamer::Element::link(&convert, &sink).expect("videoconvert → autovideosink");
+                    src_pad
+                        .link(&convert_sink)
+                        .expect("decodebin → videoconvert");
+                    gstreamer::Element::link(&convert, &sink)
+                        .expect("videoconvert → autovideosink");
                     convert.sync_state_with_parent().unwrap();
                     sink.sync_state_with_parent().unwrap();
                 }
@@ -233,6 +240,7 @@ enum NavEvent {
 
 fn parse_navigation_structure(s: &gstreamer::StructureRef) -> Option<NavEvent> {
     let event_type: String = s.get("event").ok()?;
+    eprintln!("=> {s:?}");
     match event_type.as_str() {
         "key-press" => {
             let key: String = s.get("key").ok()?;
@@ -484,25 +492,16 @@ fn handle_nav_event(
             }
         }
         NavEvent::MouseMove { x, y } => {
-            let (dx, dy) = if *first_mouse {
-                *first_mouse = false;
-                (0.0, 0.0)
-            } else {
-                (x - *last_x, y - *last_y)
-            };
+            eprintln!("=> {x}x{y}");
             *last_x = x;
             *last_y = y;
-            let dx = dx.clamp(i16::MIN as f64, i16::MAX as f64) as i16;
-            let dy = dy.clamp(i16::MIN as f64, i16::MAX as f64) as i16;
-            if dx != 0 || dy != 0 {
-                let _ = mouse_tx.send(HidMouseEvent {
-                    buttons: *buttons,
-                    x: dx,
-                    y: dy,
-                    wheel: 0,
-                    hwheel: 0,
-                });
-            }
+            let _ = mouse_tx.send(HidMouseEvent {
+                buttons: *buttons,
+                x: (x / 2544.0 * i16::MAX as f64) as i16,
+                y: (y / 1428.0 * i16::MAX as f64) as i16,
+                wheel: 0,
+                hwheel: 0,
+            });
         }
         NavEvent::MouseButtonPress { button, x, y } => {
             *last_x = x;
@@ -510,8 +509,8 @@ fn handle_nav_event(
             set_mouse_button(buttons, button, true);
             let _ = mouse_tx.send(HidMouseEvent {
                 buttons: *buttons,
-                x: 0,
-                y: 0,
+                x: (x / 2544.0 * i16::MAX as f64) as i16,
+                y: (y / 1428.0 * i16::MAX as f64) as i16,
                 wheel: 0,
                 hwheel: 0,
             });
@@ -522,8 +521,8 @@ fn handle_nav_event(
             set_mouse_button(buttons, button, false);
             let _ = mouse_tx.send(HidMouseEvent {
                 buttons: *buttons,
-                x: 0,
-                y: 0,
+                x: (x / 2544.0 * i16::MAX as f64) as i16,
+                y: (y / 1428.0 * i16::MAX as f64) as i16,
                 wheel: 0,
                 hwheel: 0,
             });
@@ -533,8 +532,8 @@ fn handle_nav_event(
             let hwheel = delta_x.clamp(i8::MIN as f64, i8::MAX as f64) as i8;
             let _ = mouse_tx.send(HidMouseEvent {
                 buttons: *buttons,
-                x: 0,
-                y: 0,
+                x: (*last_x / 2544.0 * i16::MAX as f64) as i16,
+                y: (*last_y / 1428.0 * i16::MAX as f64) as i16,
                 wheel,
                 hwheel,
             });
