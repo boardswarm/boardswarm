@@ -13,7 +13,7 @@ use tracing::instrument;
 use usb_gadget::{Class, Id, Strings, UdcState, function::hid::Hid};
 
 use crate::{
-    KeyboardError, KeyboardEvent, KeyboardState, Server,
+    KeyboardError, KeyboardEvent, KeyboardState, MouseError, MouseInput, Server,
     registry::{self, Properties},
 };
 
@@ -121,9 +121,77 @@ pub fn start_provider(name: String, _parameters: serde_yaml::Value, server: Serv
     tokio::spawn(gadget.run());
 }
 
+async fn get_mouse_event(mice: &mut [mpsc::Receiver<MouseInput>]) -> (usize, Option<MouseInput>) {
+    std::future::poll_fn(|cx| {
+        for (i, m) in mice.iter_mut().enumerate() {
+            if let std::task::Poll::Ready(r) = m.poll_recv(cx) {
+                return Poll::Ready((i, r));
+            }
+        }
+        std::task::Poll::Pending
+    })
+    .await
+}
+
+async fn mouse_process(
+    mut hidg: File,
+    mut new_client_rx: mpsc::Receiver<mpsc::Receiver<MouseInput>>,
+    _udc_state_rx: watch::Receiver<UdcState>,
+) {
+    let mut clients = Vec::new();
+    loop {
+        select! {
+            client = new_client_rx.recv() => {
+                if let Some(client)  = client {
+                    clients.push(client);
+                }
+                continue;
+            },
+            (index, event) = get_mouse_event(&mut clients) => {
+                match event {
+                    Some(event) => {
+                        let mut report = [
+                            event.buttons,
+                            0x0, 0x0, // x
+                            0x0, 0x0, // y
+                            event.wheel.to_ne_bytes()[0],
+                            event.hwheel.to_ne_bytes()[0],
+                        ];
+                        report[1..=2].copy_from_slice(&event.x.to_le_bytes());
+                        report[3..=4].copy_from_slice(&event.y.to_le_bytes());
+                        hidg.write_all(&report).await.unwrap();
+                    },
+                    None => {
+                        clients.swap_remove(index);
+                        continue;
+                }
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
 struct Mouse {
-    hidg: File,
-    udc_state: watch::Receiver<UdcState>,
+    new_client_tx: mpsc::Sender<mpsc::Receiver<MouseInput>>,
+}
+
+impl Mouse {
+    fn new(hidg: File, udc_state: watch::Receiver<UdcState>) -> Self {
+        let (new_client_tx, new_client_rx) = mpsc::channel(1);
+        tokio::spawn(mouse_process(hidg, new_client_rx, udc_state));
+        Self { new_client_tx }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::Mouse for Mouse {
+    async fn open(&self) -> Result<tokio::sync::mpsc::Sender<MouseInput>, MouseError> {
+        let (tx, rx) = mpsc::channel(16);
+        let _ = self.new_client_tx.send(rx).await;
+
+        Ok(tx)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -259,6 +327,7 @@ async fn keyboard_process(
                 if let Some(client)  = client {
                     state.clients.push((client, KeyboardData::new()));
                 }
+                continue;
             },
             (index, event)= state.recv_event() => {
                 // TODO drain later ones?
@@ -399,10 +468,11 @@ impl Gadget {
             .open(m_hid.device_path().unwrap())
             .await
             .unwrap();
-        let mouse = Mouse {
-            hidg,
-            udc_state: tx.clone(),
-        };
+        let mouse = Mouse::new(hidg, tx.clone());
+
+        let mut properties = Properties::new("HID Mouse");
+        properties.extend(provider_properties);
+        self.server.register_mouse(properties, mouse);
 
         loop {
             let state = udc.state().unwrap();
