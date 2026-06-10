@@ -5,6 +5,13 @@ members = [
   "boardswarm-protocol",
   "boardswarm-cli",
   "boardswarm-client",
+  "boardswarm-web",
+]
+default-members = [
+  "boardswarm",
+  "boardswarm-protocol",
+  "boardswarm-cli",
+  "boardswarm-client",
 ]
 
 [workspace.package]

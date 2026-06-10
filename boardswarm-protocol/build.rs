@@ -6,11 +6,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .extern_path(".google.protobuf.Struct", "Parameters");
 
     let empty: &[&str] = &[];
-    tonic_prost_build::configure().compile_with_config(
-        config,
-        &["proto/boardswarm.proto"],
-        empty,
-    )?;
+    let mut builder = tonic_prost_build::configure();
+
+    // Don't generate transport-dependent code when transport feature is off
+    if std::env::var("CARGO_FEATURE_TRANSPORT").is_err() {
+        builder = builder.build_transport(false);
+    }
+
+    builder.compile_with_config(config, &["proto/boardswarm.proto"], empty)?;
 
     Ok(())
 }

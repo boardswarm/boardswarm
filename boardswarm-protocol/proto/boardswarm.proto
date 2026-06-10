@@ -27,6 +27,17 @@ service Boardswarm {
   // Erase all data of target
   rpc VolumeErase(VolumeEraseRequest) returns (google.protobuf.Empty);
 
+  // Set a media stream, can be audio or video
+  rpc MediaSetup(stream MediaRequest) returns (stream SignalMessage);
+
+  rpc MediaScreenShot(MediaScreenshotRequest) returns (MediaScreenshotReply);
+
+  // Set up a stream to a keyboard
+  rpc KeyboardIo(stream KeyboardRequest) returns (stream KeyboardState);
+
+  // Set up a stream to a mouse
+  rpc MouseIo(stream MouseRequest) returns (google.protobuf.Empty);
+
 }
 
 message OidcInfo {
@@ -50,6 +61,12 @@ enum ItemType {
   ITEM_TYPE_CONSOLE = 1;
   ITEM_TYPE_ACTUATOR = 2;
   ITEM_TYPE_VOLUME = 3;
+  // audio/video streaming
+  ITEM_TYPE_MEDIA = 4;
+  // Emulating external keyboard
+  ITEM_TYPE_KEYBOARD = 5;
+  // Emulating external mouse
+  ITEM_TYPE_MOUSE = 6;
 }
 
 message ItemTypeRequest {
@@ -96,6 +113,9 @@ message Device {
   repeated Volume volumes = 2;
   repeated Mode modes = 3;
   optional string current_mode = 4;
+  repeated Media media = 5;
+  repeated Keyboard keyboards = 6;
+  repeated Mouse mice = 7;
 }
 
 message Console {
@@ -104,6 +124,21 @@ message Console {
 }
 
 message Volume {
+  string name = 1;
+  optional uint64 id = 2;
+}
+
+message Media {
+  string name = 1;
+  optional uint64 id = 2;
+}
+
+message Keyboard {
+  string name = 1;
+  optional uint64 id = 2;
+}
+
+message Mouse {
   string name = 1;
   optional uint64 id = 2;
 }
@@ -233,4 +268,94 @@ message VolumeIoReply {
   }
 }
 
+// The first message should be the media item to start negotiation with,
+// everything after that are signal messages 
+message MediaRequest {
+  oneof ItemOrSignal {
+    uint64 item = 1;
+    SignalMessage signal = 2;
+  }
+}
+
+message SignalMessageSdp {
+  string sdp = 1;
+}
+
+message SignalMessageIceCandidate {
+  string candidate = 1;
+  uint32 mline_index = 2;
+}
+
+message SignalMessage {
+  oneof SdpMessage {
+    SignalMessageSdp offer = 1;
+    SignalMessageSdp answer = 2;
+    SignalMessageIceCandidate ice = 3;
+  }
+}
+
+message MediaScreenshotRequest {
+  uint64 media = 1;
+}
+
+message MediaScreenshotReply {
+  // Mime type e.g. image/jpeg or image/png
+  string mime_type = 1;
+  bytes data = 2;
+}
+
+message KeyboardRequest {
+  oneof ItemOrSignal {
+    uint64 item = 1;
+    KeyboardEvent event = 2;
+  }
+}
+
+enum KeyboardEventType{
+  KeyDown = 0;
+  KeyUp = 1;
+}
+
+message KeyboardEvent {
+  KeyboardEventType type = 1;
+  // 8 bit Key value per Keyboard/Keypad  usage id's of the HID
+  // Usage Tables see: https://www.usb.org/document-library/hid-usage-tables-17
+  //
+  // Depending on the provider there may be a limit to the amount of keys that
+  // can be pressed at the same time
+  uint32 key = 2;
+}
+
+enum KeyboardLed {
+  KEYBOARD_LED_NUM_LOCK = 0;
+  KEYBOARD_LED_CAPS_LOCK = 1;
+  KEYBOARD_LED_SCROLL_LOCK = 2;
+  KEYBOARD_LED_COMPOSE = 3;
+  KEYBOARD_LED_KANA = 4;
+}
+
+message KeyboardState  {
+   // List of leds that are *on*
+  repeated KeyboardLed led = 1;
+}
+
+message MouseRequest {
+  oneof ItemOrSignal {
+    uint64 item = 1;
+    MouseInput input = 2;
+  }
+}
+
+message MouseInput {
+  // buttons bitmask, 0 - 7
+  uint32 buttons = 1;
+  // x value 0 - 32767
+  uint32 x = 2;
+  // y value 0 - 32767
+  uint32 y = 3;
+  // vert. wheel, 8 bits signed
+  sint32 wheel = 4;
+  // horiz. wheel, 8 bits signed
+  sint32 hwheel = 5;
+}
 

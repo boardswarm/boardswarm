@@ -1,10 +1,17 @@
 use anyhow::{Context, bail};
+use axum::{
+    http::{Request, StatusCode},
+    routing::get,
+};
 use boardswarm_protocol::item_event::Event;
+use boardswarm_protocol::signal_message::SdpMessage;
 use boardswarm_protocol::{
     ConsoleConfigureRequest, ConsoleInputRequest, ConsoleOutputRequest, ItemEvent, ItemList,
-    ItemPropertiesMsg, ItemPropertiesRequest, ItemTypeRequest, LoginInfoList, Property,
-    VolumeEraseRequest, VolumeInfoMsg, VolumeIoTargetReply, VolumeRequest, console_input_request,
-    volume_io_reply, volume_io_request,
+    ItemPropertiesMsg, ItemPropertiesRequest, ItemTypeRequest, KeyboardRequest, LoginInfoList,
+    MediaRequest, MediaScreenshotReply, MediaScreenshotRequest, MouseRequest, Property,
+    SignalMessage, SignalMessageIceCandidate, SignalMessageSdp, VolumeEraseRequest, VolumeInfoMsg,
+    VolumeIoTargetReply, VolumeRequest, console_input_request, keyboard_request, media_request,
+    mouse_request, volume_io_reply, volume_io_request,
 };
 use bytes::Bytes;
 use clap::Parser;
@@ -23,7 +30,11 @@ use thiserror::Error;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Streaming;
+use tower_http::services::{ServeDir, ServeFile};
 use tower_oauth2_resource_server::auth_resolver::KidAuthorizerResolver;
+use tower_oauth2_resource_server::error::AuthError;
+use tower_oauth2_resource_server::jwt_resolver::BearerTokenResolver;
+use tower_oauth2_resource_server::jwt_unverified::UnverifiedJwt;
 use tower_oauth2_resource_server::server::OAuth2ResourceServer;
 use tower_oauth2_resource_server::tenant::TenantConfiguration;
 use tracing::{info, instrument, warn};
@@ -35,6 +46,7 @@ mod dfu;
 mod eswin_eic7700_storage;
 mod fastboot;
 mod gpio;
+mod hid_gadget;
 mod hifive_p550_mcu;
 mod mediatek_brom;
 mod pdudaemon;
@@ -43,6 +55,11 @@ mod rockusb;
 mod serial;
 mod udev;
 mod utils;
+mod v4l2_provider;
+mod ws_console;
+mod ws_keyboard;
+mod ws_media;
+mod ws_mouse;
 
 #[derive(Error, Debug)]
 #[error("Actuator failed")]
@@ -237,6 +254,217 @@ pub trait Volume: std::fmt::Debug + Send + Sync {
     }
 }
 
+pub enum MediaSignalMsg {
+    Offer(String),
+    Answer(String),
+    Ice(String, u32),
+}
+
+impl From<MediaSignalMsg> for SignalMessage {
+    fn from(value: MediaSignalMsg) -> Self {
+        match value {
+            MediaSignalMsg::Offer(sdp) => SignalMessage {
+                sdp_message: Some(SdpMessage::Offer(SignalMessageSdp { sdp })),
+            },
+            MediaSignalMsg::Answer(sdp) => SignalMessage {
+                sdp_message: Some(SdpMessage::Answer(SignalMessageSdp { sdp })),
+            },
+
+            MediaSignalMsg::Ice(candidate, mline_index) => SignalMessage {
+                sdp_message: Some(SdpMessage::Ice(SignalMessageIceCandidate {
+                    candidate,
+                    mline_index,
+                })),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Error, Debug)]
+pub enum MediaError {
+    #[error("Not supported")]
+    NotSupported,
+    #[error("Internal error: {0}")]
+    Internal(String),
+}
+
+impl From<MediaError> for tonic::Status {
+    fn from(e: MediaError) -> Self {
+        match e {
+            MediaError::NotSupported => {
+                tonic::Status::unimplemented("Media streaming not supported")
+            }
+            MediaError::Internal(msg) => tonic::Status::internal(msg),
+        }
+    }
+}
+
+pub trait MediaSignallingRx: Send {
+    fn offer(&mut self, offer: &str);
+    fn answer(&mut self, offer: &str);
+    fn ice(&mut self, candidate: &str, mline_index: u32);
+}
+
+#[async_trait::async_trait]
+pub trait Media: std::fmt::Debug + Send + Sync {
+    async fn open(
+        &self,
+    ) -> Result<
+        (
+            Box<dyn MediaSignallingRx>,
+            stream::BoxStream<'static, MediaSignalMsg>,
+        ),
+        MediaError,
+    >;
+    async fn screenshot(&self) -> Result<MediaScreenshotReply, MediaError>;
+}
+
+/// Rust-side representation of a keyboard key event.
+#[derive(Copy, Clone)]
+pub enum KeyboardEvent {
+    /// Key press (key down). Contains the HID Keyboard/Keypad usage ID (see HID Usage Tables §10).
+    Down(u8),
+    /// Key release (key up). Contains the HID Keyboard/Keypad usage ID.
+    Up(u8),
+}
+
+impl KeyboardEvent {
+    fn is_key(self) -> bool {
+        match self {
+            Self::Down(k) | Self::Up(k) => k > 0 && k <= 0xdd,
+        }
+    }
+
+    fn is_modifier(self) -> bool {
+        match self {
+            Self::Down(m) | Self::Up(m) => m >= 0xe0 && m <= 0xe7,
+        }
+    }
+}
+
+impl TryFrom<boardswarm_protocol::KeyboardEvent> for KeyboardEvent {
+    type Error = tonic::Status;
+
+    fn try_from(e: boardswarm_protocol::KeyboardEvent) -> Result<Self, Self::Error> {
+        let key = u8::try_from(e.key)
+            .map_err(|_| tonic::Status::invalid_argument("Key value out of range"))?;
+        match e.r#type() {
+            boardswarm_protocol::KeyboardEventType::KeyDown => Ok(KeyboardEvent::Down(key)),
+            boardswarm_protocol::KeyboardEventType::KeyUp => Ok(KeyboardEvent::Up(key)),
+        }
+    }
+}
+
+/// Rust-side representation of keyboard LED state returned by a keyboard device.
+#[derive(Clone, Debug, Default)]
+pub struct KeyboardState {
+    pub leds: Vec<boardswarm_protocol::KeyboardLed>,
+}
+
+impl From<KeyboardState> for boardswarm_protocol::KeyboardState {
+    fn from(s: KeyboardState) -> Self {
+        boardswarm_protocol::KeyboardState {
+            led: s.leds.into_iter().map(|l| l as i32).collect(),
+        }
+    }
+}
+
+/// Rust-side representation of a mouse input report.
+pub struct MouseInput {
+    /// Button bitmask (bits 0–7).
+    pub buttons: u8,
+    /// Absolute X position (signed 16-bit).
+    pub x: i16,
+    /// Absolute Y position (signed 16-bit).
+    pub y: i16,
+    /// Vertical scroll wheel (signed 8-bit range).
+    pub wheel: i8,
+    /// Horizontal scroll wheel (signed 8-bit range).
+    pub hwheel: i8,
+}
+
+impl TryFrom<boardswarm_protocol::MouseInput> for MouseInput {
+    type Error = tonic::Status;
+
+    fn try_from(m: boardswarm_protocol::MouseInput) -> Result<Self, Self::Error> {
+        let buttons = u8::try_from(m.buttons)
+            .map_err(|_| tonic::Status::invalid_argument("Mouse buttons value out of range"))?;
+        let x = i16::try_from(m.x)
+            .map_err(|_| tonic::Status::invalid_argument("Mouse x value out of range"))?;
+        let y = i16::try_from(m.y)
+            .map_err(|_| tonic::Status::invalid_argument("Mouse y value out of range"))?;
+        let wheel = i8::try_from(m.wheel)
+            .map_err(|_| tonic::Status::invalid_argument("Mouse wheel value out of range"))?;
+        let hwheel = i8::try_from(m.hwheel)
+            .map_err(|_| tonic::Status::invalid_argument("Mouse hwheel value out of range"))?;
+        Ok(MouseInput {
+            buttons,
+            x,
+            y,
+            wheel,
+            hwheel,
+        })
+    }
+}
+
+#[derive(Clone, Error, Debug)]
+pub enum KeyboardError {
+    #[error("Keyboard not supported")]
+    NotSupported,
+    #[error("Internal error: {0}")]
+    Internal(String),
+}
+
+impl From<KeyboardError> for tonic::Status {
+    fn from(e: KeyboardError) -> Self {
+        match e {
+            KeyboardError::NotSupported => tonic::Status::unimplemented("Keyboard not supported"),
+            KeyboardError::Internal(msg) => tonic::Status::internal(msg),
+        }
+    }
+}
+
+#[derive(Clone, Error, Debug)]
+pub enum MouseError {
+    #[error("Mouse not supported")]
+    NotSupported,
+    #[error("Internal error: {0}")]
+    Internal(String),
+}
+
+impl From<MouseError> for tonic::Status {
+    fn from(e: MouseError) -> Self {
+        match e {
+            MouseError::NotSupported => tonic::Status::unimplemented("Mouse not supported"),
+            MouseError::Internal(msg) => tonic::Status::internal(msg),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+pub trait Keyboard: std::fmt::Debug + Send + Sync {
+    /// Open a keyboard session.
+    ///
+    /// Returns a sender for key events and a stream of LED state updates.
+    async fn open(
+        &self,
+    ) -> Result<
+        (
+            tokio::sync::mpsc::Sender<KeyboardEvent>,
+            stream::BoxStream<'static, KeyboardState>,
+        ),
+        KeyboardError,
+    >;
+}
+
+#[async_trait::async_trait]
+pub trait Mouse: std::fmt::Debug + Send + Sync {
+    /// Open a mouse session.
+    ///
+    /// Returns a sender for mouse input reports.
+    async fn open(&self) -> Result<tokio::sync::mpsc::Sender<MouseInput>, MouseError>;
+}
+
 pub struct ReadCompletion(oneshot::Sender<Result<Bytes, tonic::Status>>);
 impl ReadCompletion {
     fn new() -> (Self, oneshot::Receiver<Result<Bytes, tonic::Status>>) {
@@ -328,6 +556,36 @@ impl DeviceConfigItem for config::Volume {
     }
 }
 
+impl DeviceConfigItem for config::Media {
+    #[instrument(fields(name = self.name), skip_all, level="error")]
+    fn matches(&self, properties: &Properties) -> bool {
+        if self.match_.is_empty() {
+            warn!("Media matches is empty - will match any media item");
+        }
+        properties.matches(&self.match_)
+    }
+}
+
+impl DeviceConfigItem for config::Keyboard {
+    #[instrument(fields(name = self.name), skip_all, level="error")]
+    fn matches(&self, properties: &Properties) -> bool {
+        if self.match_.is_empty() {
+            warn!("Keyboard matches is empty - will match any keyboard");
+        }
+        properties.matches(&self.match_)
+    }
+}
+
+impl DeviceConfigItem for config::Mouse {
+    #[instrument(fields(name = self.name), skip_all, level="error")]
+    fn matches(&self, properties: &Properties) -> bool {
+        if self.match_.is_empty() {
+            warn!("Mouse matches is empty - will match any mouse");
+        }
+        properties.matches(&self.match_)
+    }
+}
+
 impl DeviceConfigItem for config::ModeStep {
     #[instrument(skip_all, level = "error")]
     fn matches(&self, properties: &Properties) -> bool {
@@ -356,6 +614,30 @@ impl From<&dyn Device> for boardswarm_protocol::Device {
                 id: v.id.map(Into::into),
             })
             .collect();
+        let media = d
+            .media()
+            .into_iter()
+            .map(|m| boardswarm_protocol::Media {
+                name: m.name,
+                id: m.id.map(Into::into),
+            })
+            .collect();
+        let keyboards = d
+            .keyboards()
+            .into_iter()
+            .map(|k| boardswarm_protocol::Keyboard {
+                name: k.name,
+                id: k.id.map(Into::into),
+            })
+            .collect();
+        let mice = d
+            .mice()
+            .into_iter()
+            .map(|m| boardswarm_protocol::Mouse {
+                name: m.name,
+                id: m.id.map(Into::into),
+            })
+            .collect();
         let modes = d
             .modes()
             .into_iter()
@@ -369,6 +651,9 @@ impl From<&dyn Device> for boardswarm_protocol::Device {
         boardswarm_protocol::Device {
             consoles,
             volumes,
+            media,
+            keyboards,
+            mice,
             current_mode,
             modes,
         }
@@ -414,6 +699,21 @@ struct DeviceVolume {
     id: Option<VolumeId>,
 }
 
+struct DeviceMedia {
+    name: String,
+    id: Option<MediaId>,
+}
+
+struct DeviceKeyboard {
+    name: String,
+    id: Option<KeyboardId>,
+}
+
+struct DeviceMouse {
+    name: String,
+    id: Option<MouseId>,
+}
+
 struct DeviceMode {
     name: String,
     depends: Option<String>,
@@ -426,6 +726,9 @@ trait Device: Send + Sync {
     fn updates(&self) -> DeviceMonitor;
     fn consoles(&self) -> Vec<DeviceConsole>;
     fn volumes(&self) -> Vec<DeviceVolume>;
+    fn media(&self) -> Vec<DeviceMedia>;
+    fn keyboards(&self) -> Vec<DeviceKeyboard>;
+    fn mice(&self) -> Vec<DeviceMouse>;
     fn modes(&self) -> Vec<DeviceMode>;
     fn current_mode(&self) -> Option<String>;
 }
@@ -459,6 +762,9 @@ impl_u64_index!(ActuatorId, Actuator);
 impl_u64_index!(ConsoleId, Console);
 impl_u64_index!(DeviceId, Device);
 impl_u64_index!(VolumeId, Volume);
+impl_u64_index!(MediaId, Media);
+impl_u64_index!(KeyboardId, Keyboard);
+impl_u64_index!(MouseId, Mouse);
 
 struct ServerInner {
     config_dir: PathBuf,
@@ -467,6 +773,9 @@ struct ServerInner {
     consoles: Registry<ConsoleId, Arc<dyn Console>>,
     actuators: Registry<ActuatorId, Arc<dyn Actuator>>,
     volumes: Registry<VolumeId, Arc<dyn Volume>>,
+    media: Registry<MediaId, Arc<dyn Media>>,
+    keyboards: Registry<KeyboardId, Arc<dyn Keyboard>>,
+    mice: Registry<MouseId, Arc<dyn Mouse>>,
 }
 
 fn to_item_list<I, T>(registry: &Registry<I, T>) -> ItemList
@@ -501,6 +810,9 @@ impl Server {
                 devices: Registry::new(),
                 actuators: Registry::new(),
                 volumes: Registry::new(),
+                media: Registry::new(),
+                keyboards: Registry::new(),
+                mice: Registry::new(),
             }),
         }
     }
@@ -590,6 +902,69 @@ impl Server {
             .map(registry::Item::into_inner)
     }
 
+    fn register_media<M>(&self, properties: Properties, media: M) -> MediaId
+    where
+        M: Media + 'static,
+    {
+        let (id, item) = self.inner.media.add(properties, Arc::new(media));
+        info!("Registered media: {} - {}", id, item);
+        id
+    }
+
+    fn unregister_media(&self, id: MediaId) {
+        if let Some(item) = self.inner.media.lookup(id) {
+            info!("Unregistering media: {} - {}", id, item.name());
+            self.inner.media.remove(id);
+        }
+    }
+
+    pub fn get_media(&self, id: MediaId) -> Option<Arc<dyn Media>> {
+        self.inner.media.lookup(id).map(registry::Item::into_inner)
+    }
+
+    fn register_keyboard<K>(&self, properties: Properties, keyboard: K) -> KeyboardId
+    where
+        K: Keyboard + 'static,
+    {
+        let (id, item) = self.inner.keyboards.add(properties, Arc::new(keyboard));
+        info!("Registered keyboard: {} - {}", id, item);
+        id
+    }
+
+    fn unregister_keyboard(&self, id: KeyboardId) {
+        if let Some(item) = self.inner.keyboards.lookup(id) {
+            info!("Unregistering keyboard: {} - {}", id, item.name());
+            self.inner.keyboards.remove(id);
+        }
+    }
+
+    pub fn get_keyboard(&self, id: KeyboardId) -> Option<Arc<dyn Keyboard>> {
+        self.inner
+            .keyboards
+            .lookup(id)
+            .map(registry::Item::into_inner)
+    }
+
+    fn register_mouse<M>(&self, properties: Properties, mouse: M) -> MouseId
+    where
+        M: Mouse + 'static,
+    {
+        let (id, item) = self.inner.mice.add(properties, Arc::new(mouse));
+        info!("Registered mouse: {} - {}", id, item);
+        id
+    }
+
+    fn unregister_mouse(&self, id: MouseId) {
+        if let Some(item) = self.inner.mice.lookup(id) {
+            info!("Unregistering mouse: {} - {}", id, item.name());
+            self.inner.mice.remove(id);
+        }
+    }
+
+    pub fn get_mouse(&self, id: MouseId) -> Option<Arc<dyn Mouse>> {
+        self.inner.mice.lookup(id).map(registry::Item::into_inner)
+    }
+
     fn register_device<D>(&self, properties: Properties, device: D) -> DeviceId
     where
         D: Device + 'static,
@@ -619,11 +994,20 @@ impl Server {
             boardswarm_protocol::ItemType::Device => to_item_list(&self.inner.devices),
             boardswarm_protocol::ItemType::Console => to_item_list(&self.inner.consoles),
             boardswarm_protocol::ItemType::Volume => to_item_list(&self.inner.volumes),
+            boardswarm_protocol::ItemType::Media => to_item_list(&self.inner.media),
+            boardswarm_protocol::ItemType::Keyboard => to_item_list(&self.inner.keyboards),
+            boardswarm_protocol::ItemType::Mouse => to_item_list(&self.inner.mice),
         }
     }
 }
 
 type ItemMonitorStream = BoxStream<'static, Result<boardswarm_protocol::ItemEvent, tonic::Status>>;
+
+type MediaSignalStream =
+    stream::BoxStream<'static, Result<boardswarm_protocol::SignalMessage, tonic::Status>>;
+
+type KeyboardStateStream =
+    stream::BoxStream<'static, Result<boardswarm_protocol::KeyboardState, tonic::Status>>;
 
 #[async_trait::async_trait]
 impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
@@ -723,6 +1107,9 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
             boardswarm_protocol::ItemType::Device => to_item_stream(&self.inner.devices),
             boardswarm_protocol::ItemType::Console => to_item_stream(&self.inner.consoles),
             boardswarm_protocol::ItemType::Volume => to_item_stream(&self.inner.volumes),
+            boardswarm_protocol::ItemType::Media => to_item_stream(&self.inner.media),
+            boardswarm_protocol::ItemType::Keyboard => to_item_stream(&self.inner.keyboards),
+            boardswarm_protocol::ItemType::Mouse => to_item_stream(&self.inner.mice),
         };
         Ok(tonic::Response::new(response))
     }
@@ -759,6 +1146,24 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
                 .inner
                 .volumes
                 .lookup(VolumeId(request.item))
+                .ok_or_else(|| tonic::Status::not_found("Item not found"))?
+                .properties(),
+            boardswarm_protocol::ItemType::Media => self
+                .inner
+                .media
+                .lookup(MediaId(request.item))
+                .ok_or_else(|| tonic::Status::not_found("Item not found"))?
+                .properties(),
+            boardswarm_protocol::ItemType::Keyboard => self
+                .inner
+                .keyboards
+                .lookup(KeyboardId(request.item))
+                .ok_or_else(|| tonic::Status::not_found("Item not found"))?
+                .properties(),
+            boardswarm_protocol::ItemType::Mouse => self
+                .inner
+                .mice
+                .lookup(MouseId(request.item))
                 .ok_or_else(|| tonic::Status::not_found("Item not found"))?
                 .properties(),
         };
@@ -1034,6 +1439,182 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
         };
         Ok(tonic::Response::new(info))
     }
+
+    type MediaSetupStream = MediaSignalStream;
+    async fn media_setup(
+        &self,
+        request: tonic::Request<tonic::Streaming<MediaRequest>>,
+    ) -> Result<tonic::Response<Self::MediaSetupStream>, tonic::Status> {
+        let mut request = request.into_inner();
+        let initial_msg = match request.message().await? {
+            Some(msg) => msg,
+            None => {
+                return Err(tonic::Status::invalid_argument("No media id selection"));
+            }
+        };
+
+        let Some(media_request::ItemOrSignal::Item(media)) = initial_msg.item_or_signal else {
+            return Err(tonic::Status::invalid_argument(
+                "First message should be an item",
+            ));
+        };
+
+        let media = MediaId(media);
+        let media = self
+            .get_media(media)
+            .ok_or_else(|| tonic::Status::not_found("Media not found"))?;
+        let (mut rx, tx) = media.open().await?;
+
+        // Handle ongoing incoming stream
+        tokio::spawn(async move {
+            while let Ok(Some(msg)) = request.message().await {
+                match msg.item_or_signal {
+                    Some(media_request::ItemOrSignal::Signal(signal)) => match signal.sdp_message {
+                        Some(SdpMessage::Offer(offer)) => {
+                            rx.offer(&offer.sdp);
+                        }
+                        Some(SdpMessage::Answer(answer)) => {
+                            rx.answer(&answer.sdp);
+                        }
+                        Some(SdpMessage::Ice(ice)) => {
+                            rx.ice(&ice.candidate, ice.mline_index);
+                        }
+                        None => {
+                            warn!("Ignoring empty signalling message (signal)")
+                        }
+                    },
+                    Some(media_request::ItemOrSignal::Item(_)) => {
+                        warn!("Not expecting media item after the first message");
+                    }
+                    None => {
+                        warn!("Ignoring empty signalling message")
+                    }
+                }
+            }
+        });
+
+        let replies = tx.map(|msg| Ok(msg.into()));
+
+        // Handle outgoing stream
+        Ok(tonic::Response::new(replies.boxed()))
+    }
+
+    async fn media_screen_shot(
+        &self,
+        request: tonic::Request<MediaScreenshotRequest>,
+    ) -> Result<tonic::Response<MediaScreenshotReply>, tonic::Status> {
+        let request = request.into_inner();
+        let media = MediaId(request.media);
+        let media = self
+            .get_media(media)
+            .ok_or_else(|| tonic::Status::not_found("Media not found"))?;
+        let shot = media.screenshot().await?;
+        Ok(tonic::Response::new(shot))
+    }
+
+    type KeyboardIoStream = KeyboardStateStream;
+    async fn keyboard_io(
+        &self,
+        request: tonic::Request<tonic::Streaming<KeyboardRequest>>,
+    ) -> Result<tonic::Response<Self::KeyboardIoStream>, tonic::Status> {
+        let mut request = request.into_inner();
+        let initial_msg = match request.message().await? {
+            Some(msg) => msg,
+            None => {
+                return Err(tonic::Status::invalid_argument("No keyboard id selection"));
+            }
+        };
+
+        let Some(keyboard_request::ItemOrSignal::Item(id)) = initial_msg.item_or_signal else {
+            return Err(tonic::Status::invalid_argument(
+                "First message should be a keyboard item id",
+            ));
+        };
+
+        let keyboard = self
+            .get_keyboard(KeyboardId(id))
+            .ok_or_else(|| tonic::Status::not_found("Keyboard not found"))?;
+        let (event_tx, state_stream) = keyboard.open().await?;
+
+        // Forward incoming key events to the keyboard device
+        tokio::spawn(async move {
+            while let Ok(Some(msg)) = request.message().await {
+                match msg.item_or_signal {
+                    Some(keyboard_request::ItemOrSignal::Event(event)) => {
+                        match KeyboardEvent::try_from(event) {
+                            Ok(e) => {
+                                if event_tx.send(e).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Ignoring invalid keyboard event: {e}");
+                            }
+                        }
+                    }
+                    Some(keyboard_request::ItemOrSignal::Item(_)) => {
+                        warn!("Not expecting keyboard item id after the first message");
+                    }
+                    None => {
+                        warn!("Ignoring empty keyboard message");
+                    }
+                }
+            }
+        });
+
+        let replies = state_stream.map(|s| Ok(s.into()));
+        Ok(tonic::Response::new(replies.boxed()))
+    }
+
+    async fn mouse_io(
+        &self,
+        request: tonic::Request<tonic::Streaming<MouseRequest>>,
+    ) -> Result<tonic::Response<()>, tonic::Status> {
+        let mut request = request.into_inner();
+        let initial_msg = match request.message().await? {
+            Some(msg) => msg,
+            None => {
+                return Err(tonic::Status::invalid_argument("No mouse id selection"));
+            }
+        };
+
+        let Some(mouse_request::ItemOrSignal::Item(id)) = initial_msg.item_or_signal else {
+            return Err(tonic::Status::invalid_argument(
+                "First message should be a mouse item id",
+            ));
+        };
+
+        let mouse = self
+            .get_mouse(MouseId(id))
+            .ok_or_else(|| tonic::Status::not_found("Mouse not found"))?;
+        let input_tx = mouse.open().await?;
+
+        // Forward incoming mouse inputs to the mouse device
+        while let Ok(Some(msg)) = request.message().await {
+            match msg.item_or_signal {
+                Some(mouse_request::ItemOrSignal::Input(input)) => {
+                    match MouseInput::try_from(input) {
+                        Ok(i) => {
+                            if input_tx.send(i).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Ignoring invalid mouse input: {e}");
+                        }
+                    }
+                }
+                Some(mouse_request::ItemOrSignal::Item(_)) => {
+                    warn!("Not expecting mouse item id after the first message");
+                }
+                None => {
+                    warn!("Ignoring empty mouse message");
+                }
+            }
+        }
+
+        Ok(tonic::Response::new(()))
+    }
 }
 
 fn parse_listen_address(addr: &str) -> Result<SocketAddr, AddrParseError> {
@@ -1045,11 +1626,39 @@ fn parse_listen_address(addr: &str) -> Result<SocketAddr, AddrParseError> {
     }
 }
 
+struct QueryTokenResolver;
+
+impl BearerTokenResolver for QueryTokenResolver {
+    fn resolve(&self, request: &Request<()>) -> Result<UnverifiedJwt, AuthError> {
+        let token = request
+            .uri()
+            .query()
+            .and_then(|query| {
+                url::form_urlencoded::parse(query.as_bytes())
+                    .find(|(key, _)| key == "token")
+                    .map(|(_, value)| value.into_owned())
+            })
+            .ok_or(AuthError::MissingAuthorizationHeader)?;
+
+        Ok(UnverifiedJwt::new(token))
+    }
+}
+
 async fn setup_auth_layer(
     config: &[config::Authentication],
 ) -> anyhow::Result<OAuth2ResourceServer> {
+    setup_auth_layer_with_resolver(config, None).await
+}
+
+async fn setup_auth_layer_with_resolver(
+    config: &[config::Authentication],
+    bearer_token_resolver: Option<Arc<dyn BearerTokenResolver + Send + Sync>>,
+) -> anyhow::Result<OAuth2ResourceServer> {
     let mut resource =
         OAuth2ResourceServer::builder().auth_resolver(Arc::new(KidAuthorizerResolver {}));
+    if let Some(bearer_token_resolver) = bearer_token_resolver {
+        resource = resource.bearer_token_resolver(bearer_token_resolver);
+    }
     for auth in config {
         let tenant = match auth {
             config::Authentication::Oidc { uri, audience, .. } => {
@@ -1073,6 +1682,9 @@ struct Opts {
     #[clap(short, long)]
     #[arg(value_parser = parse_listen_address)]
     listen: Option<SocketAddr>,
+    /// Path to the web UI static files directory
+    #[clap(long)]
+    web_ui: Option<PathBuf>,
     config: PathBuf,
 }
 
@@ -1192,6 +1804,9 @@ async fn main() -> anyhow::Result<()> {
                     server.clone(),
                 ));
             }
+            hid_gadget::PROVIDER => {
+                hid_gadget::start_provider(p.name, p.parameters.unwrap_or_default(), server.clone())
+            }
             pdudaemon::PROVIDER => pdudaemon::start_provider(
                 p.name,
                 p.parameters
@@ -1204,6 +1819,14 @@ async fn main() -> anyhow::Result<()> {
                     .context("Missing boardswarm provider parameters")?,
                 server.clone(),
             ),
+            v4l2_provider::PROVIDER => {
+                local.spawn_local(v4l2_provider::start_provider(
+                    p.name,
+                    p.parameters.unwrap_or_default(),
+                    server.clone(),
+                ));
+            }
+
             t => warn!("Unknown provider: {t}"),
         }
     }
@@ -1215,16 +1838,70 @@ async fn main() -> anyhow::Result<()> {
         boardswarm_protocol::boardswarm_server::BoardswarmServer::new(server.clone()),
     );
 
-    let auth = setup_auth_layer(&server.inner.auth_info).await?;
+    let grpc_auth = setup_auth_layer(&server.inner.auth_info).await?;
+    let ws_auth =
+        setup_auth_layer_with_resolver(&server.inner.auth_info, Some(Arc::new(QueryTokenResolver)))
+            .await?;
+    let ws_media_auth =
+        setup_auth_layer_with_resolver(&server.inner.auth_info, Some(Arc::new(QueryTokenResolver)))
+            .await?;
+    let ws_keyboard_auth =
+        setup_auth_layer_with_resolver(&server.inner.auth_info, Some(Arc::new(QueryTokenResolver)))
+            .await?;
+    let ws_mouse_auth =
+        setup_auth_layer_with_resolver(&server.inner.auth_info, Some(Arc::new(QueryTokenResolver)))
+            .await?;
+    let login_info_path = format!(
+        "/{}/LoginInfo",
+        <boardswarm_protocol::boardswarm_server::BoardswarmServer<Server> as tonic::server::NamedService>::NAME,
+    );
     let router = boardswarm
         .into_axum_router()
-        .layer(auth.into_layer())
+        .layer(grpc_auth.into_layer())
         .route_service(
-            &format!("/{}/LoginInfo",
-          <boardswarm_protocol::boardswarm_server::BoardswarmServer<Server>
-          as tonic::server::NamedService>::NAME),
+            &login_info_path,
             boardswarm_protocol::boardswarm_server::BoardswarmServer::new(server.clone()),
+        )
+        .layer(tonic_web::GrpcWebLayer::new())
+        .route(
+            "/api/ws/console",
+            get(ws_console::handler)
+                .layer(ws_auth.into_layer())
+                .with_state(server.clone()),
+        )
+        .route(
+            "/api/ws/media",
+            get(ws_media::handler)
+                .layer(ws_media_auth.into_layer())
+                .with_state(server.clone()),
+        )
+        .route(
+            "/api/ws/keyboard",
+            get(ws_keyboard::handler)
+                .layer(ws_keyboard_auth.into_layer())
+                .with_state(server.clone()),
+        )
+        .route(
+            "/api/ws/mouse",
+            get(ws_mouse::handler)
+                .layer(ws_mouse_auth.into_layer())
+                .with_state(server.clone()),
         );
+
+    // Resolve web UI path: CLI flag takes precedence over config file setting.
+    // Config-relative paths are resolved against the config file directory.
+    let web_ui_path = match opts.web_ui {
+        Some(p) => Some(p),
+        None => config.server.web_ui.map(|p| opts.config.with_file_name(p)),
+    };
+
+    // Serve static web UI files if configured
+    let router = if let Some(ref web_ui_path) = web_ui_path {
+        let index = web_ui_path.join("index.html");
+        router.fallback_service(ServeDir::new(web_ui_path).fallback(ServeFile::new(index)))
+    } else {
+        router.fallback(|| async { StatusCode::NOT_FOUND })
+    };
 
     if let Some(cert) = config.server.certificate {
         info!("Server listening on {}", listen_addr);

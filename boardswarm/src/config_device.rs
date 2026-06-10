@@ -5,7 +5,7 @@ use tracing::warn;
 
 use crate::{
     ActuatorError, ActuatorId, Console, ConsoleId, DeviceConfigItem, DeviceMonitor,
-    DeviceSetModeError, Server, VolumeId,
+    DeviceSetModeError, KeyboardId, MediaId, MouseId, Server, VolumeId,
     registry::{self, Properties, RegistryChange},
 };
 
@@ -105,6 +105,9 @@ struct DeviceInner {
     current_mode: std::sync::Mutex<Option<String>>,
     consoles: Vec<DeviceItem<ConsoleId, crate::config::Console>>,
     volumes: Vec<DeviceItem<VolumeId, crate::config::Volume>>,
+    media: Vec<DeviceItem<MediaId, crate::config::Media>>,
+    keyboards: Vec<DeviceItem<KeyboardId, crate::config::Keyboard>>,
+    mice: Vec<DeviceItem<MouseId, crate::config::Mouse>>,
     modes: Vec<DeviceMode>,
     server: Server,
 }
@@ -119,6 +122,9 @@ impl Device {
         let name = config.name;
         let consoles = config.consoles.into_iter().map(DeviceItem::new).collect();
         let volumes = config.volumes.into_iter().map(DeviceItem::new).collect();
+        let media = config.media.into_iter().map(DeviceItem::new).collect();
+        let keyboards = config.keyboards.into_iter().map(DeviceItem::new).collect();
+        let mice = config.mice.into_iter().map(DeviceItem::new).collect();
         let notifier = DeviceNotifier::new();
         let modes = config.modes.into_iter().map(Into::into).collect();
         let device = Device {
@@ -128,6 +134,9 @@ impl Device {
                 current_mode: Mutex::new(None),
                 consoles,
                 volumes,
+                media,
+                keyboards,
+                mice,
                 modes,
                 server,
             }),
@@ -215,6 +224,9 @@ impl Device {
         let mut actuator_monitor = self.inner.server.inner.actuators.monitor();
         let mut console_monitor = self.inner.server.inner.consoles.monitor();
         let mut volume_monitor = self.inner.server.inner.volumes.monitor();
+        let mut media_monitor = self.inner.server.inner.media.monitor();
+        let mut keyboard_monitor = self.inner.server.inner.keyboards.monitor();
+        let mut mouse_monitor = self.inner.server.inner.mice.monitor();
         let mut changed = false;
 
         for (id, item) in self.inner.server.inner.actuators.contents() {
@@ -231,6 +243,18 @@ impl Device {
 
         for (id, item) in self.inner.server.inner.volumes.contents() {
             changed |= add_item(self.inner.volumes.iter(), id, item);
+        }
+
+        for (id, item) in self.inner.server.inner.media.contents() {
+            changed |= add_item(self.inner.media.iter(), id, item);
+        }
+
+        for (id, item) in self.inner.server.inner.keyboards.contents() {
+            changed |= add_item(self.inner.keyboards.iter(), id, item);
+        }
+
+        for (id, item) in self.inner.server.inner.mice.contents() {
+            changed |= add_item(self.inner.mice.iter(), id, item);
         }
 
         if changed {
@@ -260,6 +284,27 @@ impl Device {
                         Ok(c) => change(self.inner.volumes.iter(), c),
                         Err(e) => {
                             warn!("Issue with monitoring volumes: {:?}", e); return },
+                    }
+                }
+                msg = media_monitor.recv() => {
+                    match msg {
+                        Ok(c) => change(self.inner.media.iter(), c),
+                        Err(e) => {
+                            warn!("Issue with monitoring media: {:?}", e); return },
+                    }
+                }
+                msg = keyboard_monitor.recv() => {
+                    match msg {
+                        Ok(c) => change(self.inner.keyboards.iter(), c),
+                        Err(e) => {
+                            warn!("Issue with monitoring keyboards: {:?}", e); return },
+                    }
+                }
+                msg = mouse_monitor.recv() => {
+                    match msg {
+                        Ok(c) => change(self.inner.mice.iter(), c),
+                        Err(e) => {
+                            warn!("Issue with monitoring mice: {:?}", e); return },
                     }
                 }
             };
@@ -338,6 +383,39 @@ impl crate::Device for Device {
             .map(|v| crate::DeviceVolume {
                 name: v.config().name.clone(),
                 id: v.get(),
+            })
+            .collect()
+    }
+
+    fn media(&self) -> Vec<crate::DeviceMedia> {
+        self.inner
+            .media
+            .iter()
+            .map(|m| crate::DeviceMedia {
+                name: m.config().name.clone(),
+                id: m.get(),
+            })
+            .collect()
+    }
+
+    fn keyboards(&self) -> Vec<crate::DeviceKeyboard> {
+        self.inner
+            .keyboards
+            .iter()
+            .map(|k| crate::DeviceKeyboard {
+                name: k.config().name.clone(),
+                id: k.get(),
+            })
+            .collect()
+    }
+
+    fn mice(&self) -> Vec<crate::DeviceMouse> {
+        self.inner
+            .mice
+            .iter()
+            .map(|m| crate::DeviceMouse {
+                name: m.config().name.clone(),
+                id: m.get(),
             })
             .collect()
     }

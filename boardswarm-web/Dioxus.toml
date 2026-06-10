@@ -1,0 +1,18 @@
+[build]
+target = "index.html"
+
+[web.app]
+title = "Boardswarm"
+
+# Development proxy: forwards API requests to the boardswarm server so the
+# browser stays same-origin (no CORS needed). Only used by `dx serve`.
+#
+# Change the host/port here if your boardswarm server runs elsewhere.
+
+# gRPC-Web calls (all boardswarm RPC methods)
+[[web.proxy]]
+backend = "http://localhost:6683/boardswarm.Boardswarm"
+
+# WebSocket console endpoint
+[[web.proxy]]
+backend = "http://localhost:6683/api"

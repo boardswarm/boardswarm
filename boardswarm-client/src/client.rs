@@ -9,9 +9,12 @@ use std::{
 use boardswarm_protocol::{
     ActuatorModeRequest, ConsoleConfigureRequest, ConsoleInputRequest, ConsoleOutputRequest,
     DeviceModeRequest, DeviceRequest, Item, ItemPropertiesRequest, ItemType, ItemTypeRequest,
-    VolumeEraseRequest, VolumeInfoMsg, VolumeIoFlush, VolumeIoRead, VolumeIoReply, VolumeIoRequest,
-    VolumeIoShutdown, VolumeIoTarget, VolumeIoWrite, VolumeRequest, VolumeTarget,
-    boardswarm_client::BoardswarmClient, console_input_request, volume_io_reply, volume_io_request,
+    KeyboardRequest, MediaRequest, MediaScreenshotRequest, MouseRequest, SignalMessage,
+    SignalMessageIceCandidate, SignalMessageSdp, VolumeEraseRequest, VolumeInfoMsg, VolumeIoFlush,
+    VolumeIoRead, VolumeIoReply, VolumeIoRequest, VolumeIoShutdown, VolumeIoTarget, VolumeIoWrite,
+    VolumeRequest, VolumeTarget, boardswarm_client::BoardswarmClient, console_input_request,
+    keyboard_request, media_request, mouse_request, signal_message, volume_io_reply,
+    volume_io_request,
 };
 use bytes::Bytes;
 use futures::{FutureExt, Stream, StreamExt, future::BoxFuture, stream};
@@ -112,6 +115,12 @@ impl From<boardswarm_protocol::login_info::Method> for AuthMethod {
 pub struct LoginInfo {
     pub description: String,
     pub method: AuthMethod,
+}
+
+#[derive(Clone, Debug)]
+pub struct Screenshot {
+    pub mime_type: String,
+    pub data: Bytes,
 }
 
 #[derive(Clone, Debug)]
@@ -362,6 +371,237 @@ impl Boardswarm {
         });
         self.client.volume_erase(request).await?;
         Ok(())
+    }
+
+    /// Start a WebRTC media session with the given media item.
+    ///
+    /// The returned [`MediaSession`] is used to exchange WebRTC signaling messages
+    /// (SDP offer/answer and ICE candidates) with the server over the gRPC stream.
+    pub async fn media_setup(&mut self, media: u64) -> Result<MediaSession, tonic::Status> {
+        let (tx, rx) = mpsc::channel::<MediaRequest>(16);
+
+        // Pre-queue the initial item-selection message before the streaming call.
+        // The channel has ample capacity so this will not block.
+        tx.try_send(MediaRequest {
+            item_or_signal: Some(media_request::ItemOrSignal::Item(media)),
+        })
+        .map_err(|_| tonic::Status::internal("Media channel error"))?;
+
+        let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+        let response = self.client.media_setup(stream).await?;
+
+        Ok(MediaSession {
+            tx,
+            rx: response.into_inner(),
+        })
+    }
+
+    pub async fn media_screenshot(&mut self, media: u64) -> Result<Screenshot, tonic::Status> {
+        let request = MediaScreenshotRequest { media };
+        let shot = self.client.media_screen_shot(request).await?;
+
+        let shot = shot.into_inner();
+
+        Ok(Screenshot {
+            mime_type: shot.mime_type,
+            data: shot.data,
+        })
+    }
+
+    /// Start a keyboard I/O session with the given keyboard item.
+    ///
+    /// The returned [`KeyboardSession`] is used to send key events and receive
+    /// LED state updates from the server.
+    pub async fn keyboard_io(&mut self, keyboard: u64) -> Result<KeyboardSession, tonic::Status> {
+        let (tx, rx) = mpsc::channel::<KeyboardRequest>(16);
+
+        tx.try_send(KeyboardRequest {
+            item_or_signal: Some(keyboard_request::ItemOrSignal::Item(keyboard)),
+        })
+        .map_err(|_| tonic::Status::internal("Keyboard channel error"))?;
+
+        let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+        let response = self.client.keyboard_io(stream).await?;
+
+        Ok(KeyboardSession {
+            tx,
+            rx: response.into_inner(),
+        })
+    }
+
+    /// Start a mouse I/O session with the given mouse item.
+    ///
+    /// The returned [`MouseSession`] is used to send mouse input reports to the server.
+    pub async fn mouse_io(&mut self, mouse: u64) -> Result<MouseSession, tonic::Status> {
+        let (tx, rx) = mpsc::channel::<MouseRequest>(16);
+
+        tx.try_send(MouseRequest {
+            item_or_signal: Some(mouse_request::ItemOrSignal::Item(mouse)),
+        })
+        .map_err(|_| tonic::Status::internal("Mouse channel error"))?;
+
+        let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+        // Spawn the RPC call so it runs concurrently; the response arrives when
+        // the stream closes (MouseSession is dropped).
+        let mut client = self.client.clone();
+        tokio::spawn(async move {
+            let _ = client.mouse_io(stream).await;
+        });
+
+        Ok(MouseSession { tx })
+    }
+}
+
+/// An incoming WebRTC signaling message from the server.
+#[derive(Debug)]
+pub enum SignalMsg {
+    Offer(String),
+    Answer(String),
+    Ice { candidate: String, mline_index: u32 },
+}
+
+/// An active WebRTC media session returned by [`Boardswarm::media_setup`].
+///
+/// Use [`MediaSession::send_answer`] and [`MediaSession::send_ice`] to send
+/// signaling messages to the server, and [`MediaSession::next_signal`] to
+/// receive messages from the server.
+pub struct MediaSession {
+    tx: mpsc::Sender<MediaRequest>,
+    rx: tonic::Streaming<SignalMessage>,
+}
+
+impl MediaSession {
+    pub async fn send_answer(&mut self, sdp: String) -> Result<(), tonic::Status> {
+        self.tx
+            .send(MediaRequest {
+                item_or_signal: Some(media_request::ItemOrSignal::Signal(SignalMessage {
+                    sdp_message: Some(signal_message::SdpMessage::Answer(SignalMessageSdp { sdp })),
+                })),
+            })
+            .await
+            .map_err(|_| tonic::Status::aborted("Media session closed"))
+    }
+
+    pub async fn send_ice(
+        &mut self,
+        candidate: String,
+        mline_index: u32,
+    ) -> Result<(), tonic::Status> {
+        self.tx
+            .send(MediaRequest {
+                item_or_signal: Some(media_request::ItemOrSignal::Signal(SignalMessage {
+                    sdp_message: Some(signal_message::SdpMessage::Ice(SignalMessageIceCandidate {
+                        candidate,
+                        mline_index,
+                    })),
+                })),
+            })
+            .await
+            .map_err(|_| tonic::Status::aborted("Media session closed"))
+    }
+
+    /// Receive the next signal from the server, or `None` if the session ended.
+    pub async fn next_signal(&mut self) -> Option<Result<SignalMsg, tonic::Status>> {
+        match self.rx.message().await {
+            Ok(Some(msg)) => {
+                let signal = match msg.sdp_message? {
+                    signal_message::SdpMessage::Offer(sdp) => SignalMsg::Offer(sdp.sdp),
+                    signal_message::SdpMessage::Answer(sdp) => SignalMsg::Answer(sdp.sdp),
+                    signal_message::SdpMessage::Ice(ice) => SignalMsg::Ice {
+                        candidate: ice.candidate,
+                        mline_index: ice.mline_index,
+                    },
+                };
+                Some(Ok(signal))
+            }
+            Ok(None) => None,
+            Err(e) => Some(Err(e)),
+        }
+    }
+}
+
+/// An active keyboard I/O session returned by [`Boardswarm::keyboard_io`].
+pub struct KeyboardSession {
+    tx: mpsc::Sender<KeyboardRequest>,
+    rx: tonic::Streaming<boardswarm_protocol::KeyboardState>,
+}
+
+impl KeyboardSession {
+    /// Send a key-down event for the given HID usage ID.
+    pub async fn send_key_down(&mut self, key: u8) -> Result<(), tonic::Status> {
+        self.tx
+            .send(KeyboardRequest {
+                item_or_signal: Some(keyboard_request::ItemOrSignal::Event(
+                    boardswarm_protocol::KeyboardEvent {
+                        r#type: boardswarm_protocol::KeyboardEventType::KeyDown as i32,
+                        key: key as u32,
+                    },
+                )),
+            })
+            .await
+            .map_err(|_| tonic::Status::aborted("Keyboard session closed"))
+    }
+
+    /// Send a key-up event for the given HID usage ID.
+    pub async fn send_key_up(&mut self, key: u8) -> Result<(), tonic::Status> {
+        self.tx
+            .send(KeyboardRequest {
+                item_or_signal: Some(keyboard_request::ItemOrSignal::Event(
+                    boardswarm_protocol::KeyboardEvent {
+                        r#type: boardswarm_protocol::KeyboardEventType::KeyUp as i32,
+                        key: key as u32,
+                    },
+                )),
+            })
+            .await
+            .map_err(|_| tonic::Status::aborted("Keyboard session closed"))
+    }
+
+    /// Receive the next LED state update from the server, or `None` if the session ended.
+    pub async fn next_state(
+        &mut self,
+    ) -> Option<Result<boardswarm_protocol::KeyboardState, tonic::Status>> {
+        match self.rx.message().await {
+            Ok(Some(state)) => Some(Ok(state)),
+            Ok(None) => None,
+            Err(e) => Some(Err(e)),
+        }
+    }
+}
+
+/// An active mouse I/O session returned by [`Boardswarm::mouse_io`].
+pub struct MouseSession {
+    tx: mpsc::Sender<MouseRequest>,
+}
+
+impl MouseSession {
+    /// Send a mouse input report.
+    ///
+    /// - `buttons`: bitmask of pressed buttons (bits 0–7)
+    /// - `x`, `y`: absolute position (signed 16-bit)
+    /// - `wheel`, `hwheel`: vertical/horizontal scroll (signed 8-bit)
+    pub async fn send_input(
+        &mut self,
+        buttons: u8,
+        x: i16,
+        y: i16,
+        wheel: i8,
+        hwheel: i8,
+    ) -> Result<(), tonic::Status> {
+        self.tx
+            .send(MouseRequest {
+                item_or_signal: Some(mouse_request::ItemOrSignal::Input(
+                    boardswarm_protocol::MouseInput {
+                        buttons: buttons as u32,
+                        x: x as u32,
+                        y: y as u32,
+                        wheel: wheel as i32,
+                        hwheel: hwheel as i32,
+                    },
+                )),
+            })
+            .await
+            .map_err(|_| tonic::Status::aborted("Mouse session closed"))
     }
 }
 

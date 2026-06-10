@@ -6,6 +6,7 @@ Distributed service to interact with development boards.
 * [boardswarm-protocol](boardswarm-protocol/README.md) - Boardswarm protocol definitions
 * [boardswarm-cli](boardswarm-cli/README.md) - Boardswarm command line client
 * [boardswarm-client](boardswarm-client/README.md) - Boardswarm client library
+* [boardswarm-web](boardswarm-web/README.md) - Boardswarm web UI (Dioxus/WASM)
 
 
 ## Usage (Docker container)

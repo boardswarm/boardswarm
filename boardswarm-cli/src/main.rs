@@ -9,10 +9,12 @@ use std::{
 use anyhow::{Context, anyhow, bail};
 use async_compression::futures::bufread::GzipDecoder;
 use bmap_parser::Bmap;
+#[cfg(feature = "gstreamer")]
+use boardswarm_client::client::MediaSession;
 use boardswarm_client::{
     client::{Boardswarm, BoardswarmBuilder, VolumeIoRW},
     config,
-    device::{Device, DeviceVolume},
+    device::{Device, DeviceMedia, DeviceVolume},
     oidc::{OidcClientBuilder, StdoutAuth},
 };
 use boardswarm_protocol::ItemType;
@@ -36,6 +38,8 @@ use tracing::{debug, info};
 use ui::TerminalSizeSetting;
 use utils::BatchWriter;
 
+#[cfg(feature = "gstreamer")]
+mod kvm;
 mod ui;
 mod ui_term;
 mod utils;
@@ -65,6 +69,9 @@ impl std::fmt::Display for ItemTypes {
                 ItemType::Console => f.write_str("console"),
                 ItemType::Actuator => f.write_str("actuator"),
                 ItemType::Volume => f.write_str("volume"),
+                ItemType::Media => f.write_str("media"),
+                ItemType::Keyboard => f.write_str("keyboard"),
+                ItemType::Mouse => f.write_str("mouse"),
             }
         }
     }
@@ -77,6 +84,9 @@ impl ValueEnum for ItemTypes {
             ItemTypes(ItemType::Console),
             ItemTypes(ItemType::Device),
             ItemTypes(ItemType::Volume),
+            ItemTypes(ItemType::Media),
+            ItemTypes(ItemType::Keyboard),
+            ItemTypes(ItemType::Mouse),
         ]
     }
 
@@ -86,6 +96,9 @@ impl ValueEnum for ItemTypes {
             ItemType::Console => PossibleValue::new("consoles"),
             ItemType::Device => PossibleValue::new("devices"),
             ItemType::Volume => PossibleValue::new("volumes"),
+            ItemType::Media => PossibleValue::new("media"),
+            ItemType::Keyboard => PossibleValue::new("keyboards"),
+            ItemType::Mouse => PossibleValue::new("mice"),
         })
     }
 }
@@ -197,6 +210,10 @@ where
     }
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// GStreamer-based WebRTC receive pipeline for the `media stream` command
+// ---------------------------------------------------------------------------
 
 fn input_stream() -> impl Stream<Item = Bytes> {
     let stdin = tokio::io::stdin();
@@ -537,6 +554,111 @@ impl DeviceCommonVolumeArgs {
 }
 
 #[derive(Debug, Args)]
+struct DeviceScreenshotArgs {
+    /// Media item name on the device
+    media: String,
+    /// Wait for the media item to become available
+    #[arg(short, long)]
+    wait: bool,
+    /// Filename for the screenshot
+    file: PathBuf,
+}
+
+impl DeviceScreenshotArgs {
+    async fn open(&self, device: &Device) -> anyhow::Result<DeviceMedia> {
+        let media = device
+            .media_by_name(&self.media)
+            .ok_or_else(|| anyhow!("Media item not found on device"))?;
+        if !media.available() {
+            if self.wait {
+                println!("Waiting for media item..");
+                media.wait().await;
+            } else {
+                bail!("media item not available");
+            }
+        }
+        Ok(media)
+    }
+}
+
+#[derive(Debug, Args)]
+struct DeviceKvmArgs {
+    /// Media item name on the device (required for video)
+    #[arg(long)]
+    media: String,
+    /// Keyboard item name; defaults to the first keyboard on the device
+    #[arg(long)]
+    keyboard: Option<String>,
+    /// Mouse item name; defaults to the first mouse on the device
+    #[arg(long)]
+    mouse: Option<String>,
+    /// Only stream video, do not open keyboard or mouse
+    #[arg(long)]
+    view_only: bool,
+    /// Wait for items to become available
+    #[arg(short, long)]
+    wait: bool,
+}
+
+#[derive(Debug, Args)]
+struct DeviceKeyboardArgs {
+    /// Keyboard item name on the device
+    keyboard: String,
+    /// Wait for the keyboard item to become available
+    #[arg(short, long)]
+    wait: bool,
+}
+
+impl DeviceKeyboardArgs {
+    async fn open(
+        &self,
+        device: &Device,
+    ) -> anyhow::Result<boardswarm_client::device::DeviceKeyboard> {
+        let keyboard = device
+            .keyboard_by_name(&self.keyboard)
+            .ok_or_else(|| anyhow!("Keyboard item not found on device"))?;
+        if !keyboard.available() {
+            if self.wait {
+                println!("Waiting for keyboard item..");
+                keyboard.wait().await;
+            } else {
+                bail!("keyboard item not available");
+            }
+        }
+        Ok(keyboard)
+    }
+}
+
+#[derive(Debug, Args)]
+struct DeviceMouseArgs {
+    /// Mouse item name on the device
+    mouse: String,
+    /// Wait for the mouse item to become available
+    #[arg(short, long)]
+    wait: bool,
+}
+
+impl DeviceMouseArgs {
+    async fn open(
+        &self,
+        device: &Device,
+    ) -> anyhow::Result<boardswarm_client::device::DeviceMouse> {
+        let mouse = device
+            .mouse_by_name(&self.mouse)
+            .ok_or_else(|| anyhow!("Mouse item not found on device"))?;
+        if !mouse.available() {
+            if self.wait {
+                println!("Waiting for mouse item..");
+                mouse.wait().await;
+            } else {
+                bail!("mouse item not available");
+            }
+        }
+        Ok(mouse)
+    }
+}
+
+#[derive(Debug, Args)]
 struct DeviceCommonVolumeTargetArgs {
     #[clap(flatten)]
     volume: DeviceCommonVolumeArgs,
@@ -654,8 +776,16 @@ enum DeviceCommand {
     Connect(DeviceConsoleArgs),
     /// Tail to the console
     Tail(DeviceConsoleArgs),
+    /// Stream video from a device media item and optionally control with keyboard/mouse
+    Kvm(DeviceKvmArgs),
+    /// Media related commands
+    Screenshot(DeviceScreenshotArgs),
     /// Display device properties
     Properties,
+    /// Interact with a device keyboard
+    Keyboard(DeviceKeyboardArgs),
+    /// Interact with a device mouse
+    Mouse(DeviceMouseArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -668,6 +798,50 @@ enum RockCommand {
         volume: Option<String>,
         path: PathBuf,
     },
+}
+
+fn parse_media(s: &str) -> Result<ItemArg, Infallible> {
+    if let Ok(id) = s.parse() {
+        Ok(ItemArg::Id(id))
+    } else {
+        Ok(ItemArg::Name(s.to_string()))
+    }
+}
+
+#[derive(Debug, Subcommand)]
+enum MediaCommand {
+    /// Stream video from a media device to a display window
+    Stream,
+    /// Display media item properties
+    Properties,
+}
+
+fn parse_keyboard(s: &str) -> Result<ItemArg, Infallible> {
+    if let Ok(id) = s.parse() {
+        Ok(ItemArg::Id(id))
+    } else {
+        Ok(ItemArg::Name(s.to_string()))
+    }
+}
+
+#[derive(Debug, Subcommand)]
+enum KeyboardCommand {
+    /// Display keyboard item properties
+    Properties,
+}
+
+fn parse_mouse(s: &str) -> Result<ItemArg, Infallible> {
+    if let Ok(id) = s.parse() {
+        Ok(ItemArg::Id(id))
+    } else {
+        Ok(ItemArg::Name(s.to_string()))
+    }
+}
+
+#[derive(Debug, Subcommand)]
+enum MouseCommand {
+    /// Display mouse item properties
+    Properties,
 }
 
 #[derive(Debug, Subcommand)]
@@ -750,6 +924,30 @@ enum Command {
         #[clap(long, default_value_t = 5000)]
         /// Number of lines to keep for scrollback
         scrollback_lines: usize,
+    },
+    /// Media item specific commands
+    Media {
+        /// The media item to use
+        #[arg(value_parser = parse_media)]
+        media: ItemArg,
+        #[command(subcommand)]
+        command: MediaCommand,
+    },
+    /// Keyboard item specific commands
+    Keyboard {
+        /// The keyboard item to use
+        #[arg(value_parser = parse_keyboard)]
+        keyboard: ItemArg,
+        #[command(subcommand)]
+        command: KeyboardCommand,
+    },
+    /// Mouse item specific commands
+    Mouse {
+        /// The mouse item to use
+        #[arg(value_parser = parse_mouse)]
+        mouse: ItemArg,
+        #[command(subcommand)]
+        command: MouseCommand,
     },
 }
 
@@ -1408,11 +1606,105 @@ async fn main() -> anyhow::Result<()> {
                     let output = console.stream_output().await?;
                     copy_output_to_stdout(output).await?;
                 }
+                DeviceCommand::Kvm(args) => {
+                    // Open media item
+                    let media_item = device.media_by_name(&args.media).ok_or_else(|| {
+                        anyhow!("Media item '{}' not found on device", args.media)
+                    })?;
+                    if !media_item.available() {
+                        if args.wait {
+                            println!("Waiting for media item '{}'…", args.media);
+                            media_item.wait().await;
+                        } else {
+                            bail!("media item '{}' not available", args.media);
+                        }
+                    }
+
+                    // Resolve keyboard: named > first available > none (view-only)
+                    let keyboard_session = if args.view_only {
+                        None
+                    } else {
+                        let kb = match &args.keyboard {
+                            Some(name) => Some(device.keyboard_by_name(name).ok_or_else(|| {
+                                anyhow!("Keyboard item '{name}' not found on device")
+                            })?),
+                            None => device.keyboards().into_iter().next(),
+                        };
+                        if let Some(kb) = kb {
+                            if !kb.available() {
+                                if args.wait {
+                                    println!("Waiting for keyboard item…");
+                                    kb.wait().await;
+                                } else {
+                                    bail!("keyboard item not available");
+                                }
+                            }
+                            Some(kb.keyboard_io().await?)
+                        } else {
+                            None
+                        }
+                    };
+
+                    // Resolve mouse: named > first available > none (view-only)
+                    let mouse_session = if args.view_only {
+                        None
+                    } else {
+                        let ms = match &args.mouse {
+                            Some(name) => Some(device.mouse_by_name(name).ok_or_else(|| {
+                                anyhow!("Mouse item '{name}' not found on device")
+                            })?),
+                            None => device.mice().into_iter().next(),
+                        };
+                        if let Some(ms) = ms {
+                            if !ms.available() {
+                                if args.wait {
+                                    println!("Waiting for mouse item…");
+                                    ms.wait().await;
+                                } else {
+                                    bail!("mouse item not available");
+                                }
+                            }
+                            Some(ms.mouse_io().await?)
+                        } else {
+                            None
+                        }
+                    };
+
+                    #[cfg(feature = "gstreamer")]
+                    {
+                        let media_session = media_item.media_setup().await?;
+                        kvm::run_kvm(keyboard_session, mouse_session, media_session).await?;
+                    }
+                    #[cfg(not(feature = "gstreamer"))]
+                    {
+                        let _ = (keyboard_session, mouse_session, media_item);
+                        bail!(
+                            "GStreamer support not compiled in. Rebuild with --features gstreamer"
+                        );
+                    }
+                }
+                DeviceCommand::Screenshot(args) => {
+                    let media = args.open(&device).await?;
+                    let shot = media.media_screenshot().await?;
+                    tokio::fs::write(args.file, shot.data).await?;
+                }
                 DeviceCommand::Properties => {
                     let properties = boardswarm.properties(ItemType::Device, device.id()).await?;
                     for key in properties.keys().sorted_unstable() {
                         println!(r#""{}" => "{}""#, key, properties[key]);
                     }
+                }
+                DeviceCommand::Keyboard(args) => {
+                    let keyboard = args.open(&device).await?;
+                    let session = keyboard.keyboard_io().await?;
+                    let _ = session;
+                    println!("Keyboard session opened (no interactive mode implemented yet)");
+                }
+                DeviceCommand::Mouse(args) => {
+                    let mouse = args.open(&device).await?;
+                    let session = mouse.mouse_io().await?;
+                    let _ = session;
+                    println!("Mouse session opened (no interactive mode implemented yet)");
                 }
             }
             Ok(())
@@ -1463,6 +1755,47 @@ async fn main() -> anyhow::Result<()> {
 
             let console = console.open(&device).await?;
             ui::run_ui(device, console, terminal_size, scrollback_lines).await
+        }
+        Command::Media { media, command } => {
+            let media_id = item_lookup(media, ItemType::Media, boardswarm.clone()).await?;
+            match command {
+                MediaCommand::Properties => {
+                    let items = boardswarm.properties(ItemType::Media, media_id).await?;
+                    println!("{:#?}", items);
+                }
+                MediaCommand::Stream => {
+                    #[cfg(feature = "gstreamer")]
+                    {
+                        let session = boardswarm.media_setup(media_id).await?;
+                        kvm::run_kvm(None, None, session).await?;
+                    }
+                    #[cfg(not(feature = "gstreamer"))]
+                    bail!("GStreamer support not compiled in. Rebuild with --features gstreamer");
+                }
+            }
+            Ok(())
+        }
+        Command::Keyboard { keyboard, command } => {
+            let keyboard_id = item_lookup(keyboard, ItemType::Keyboard, boardswarm.clone()).await?;
+            match command {
+                KeyboardCommand::Properties => {
+                    let items = boardswarm
+                        .properties(ItemType::Keyboard, keyboard_id)
+                        .await?;
+                    println!("{:#?}", items);
+                }
+            }
+            Ok(())
+        }
+        Command::Mouse { mouse, command } => {
+            let mouse_id = item_lookup(mouse, ItemType::Mouse, boardswarm.clone()).await?;
+            match command {
+                MouseCommand::Properties => {
+                    let items = boardswarm.properties(ItemType::Mouse, mouse_id).await?;
+                    println!("{:#?}", items);
+                }
+            }
+            Ok(())
         }
     }
 }

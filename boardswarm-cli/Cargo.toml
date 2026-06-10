@@ -39,3 +39,10 @@ ratatui = "0.30.0"
 android-sparse-image = "0.1.2"
 thiserror = "2.0.7"
 rustls = { version = "0.23.37", features = ["aws-lc-rs"] }
+gstreamer = { version = "0.23", optional = true }
+gstreamer-webrtc = { version = "0.23", optional = true }
+gstreamer-sdp = { version = "0.23", optional = true }
+gstreamer-video = { version = "0.23", optional = true }
+
+[features]
+gstreamer = ["dep:gstreamer", "dep:gstreamer-webrtc", "dep:gstreamer-sdp", "dep:gstreamer-video"]

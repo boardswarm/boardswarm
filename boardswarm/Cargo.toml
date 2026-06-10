@@ -34,12 +34,16 @@ tokio-stream = { version = "0.1.16", features = ["sync"] }
 boardswarm-client = { version = "0.0.1", path = "../boardswarm-client" }
 tokio-gpiod = "0.3.0"
 rockusb = { version = "0.3.0", features = [ "nusb" ] }
+axum = { version = "0.8", features = ["ws"] }
 axum-server = { version = "0.8.0", features = ["tls-rustls"] }
 nusb = "0.1.14"
 dfu-nusb = "0.1.0"
 mediatek-brom = { version = "0.2.0", features = ["tokio"] }
 fastboot-protocol = "0.3.1"
 android-sparse-image = "0.1.2"
+prost = "0.14"
+tonic-web = "0.14"
+tower-http = { version = "0.6", features = ["fs"] }
 tower-oauth2-resource-server = { version = "0.12.0" }
 reqwest = { version = "0.13" }
 strum = { version = "0.28.0", features = ["derive"] }
@@ -47,3 +51,11 @@ strum_macros = "0.28.0"
 regex = "1.11.1"
 proc-mounts = "0.3.0"
 rustls = { version = "0.23.37", features = ["aws-lc-rs"] }
+gstreamer = { version = "0.23", optional = true }
+gstreamer-webrtc = { version = "0.23", optional = true }
+gstreamer-sdp = { version = "0.23", optional = true }
+usb-gadget = { version = "1.2.0", features = ["tokio"] }
+
+[features]
+default = ["gstreamer"]
+gstreamer = ["dep:gstreamer", "dep:gstreamer-webrtc", "dep:gstreamer-sdp"]

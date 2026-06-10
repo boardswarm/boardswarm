@@ -16,6 +16,34 @@ can be used.
 To run as a systemd service, the [example systemd service](share/boardswarm.service)
 can be used.
 
+## Web UI
+
+The boardswarm server can optionally serve the [boardswarm-web](../boardswarm-web/README.md)
+browser interface as static files. Configure the path to the built web assets
+in the server configuration:
+
+```yaml
+server:
+  web_ui: /usr/share/boardswarm/web/
+```
+
+Relative paths are resolved relative to the configuration file. The path can
+also be supplied at runtime via the `--web-ui` command line flag, which takes
+precedence over the configuration file.
+
+When the dist tarballs are used, the web assets are included in the
+`boardswarm-web/` directory alongside the binaries. A typical configuration
+would set:
+
+```yaml
+server:
+  web_ui: boardswarm-web/
+```
+
+During development (after `dx build --release` from the `boardswarm-web/`
+directory), the built assets are at
+`target/dx/boardswarm-web/release/web/public/`.
+
 ## Authentication
 
 Boardswarm always validates authentication against [JWT] bearer tokens; The

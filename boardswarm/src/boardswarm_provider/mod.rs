@@ -18,17 +18,26 @@ use tracing::warn;
 use crate::ActuatorId;
 use crate::ConsoleId;
 use crate::DeviceId;
+use crate::KeyboardId;
+use crate::MediaId;
+use crate::MouseId;
 use crate::VolumeId;
 use crate::{Server, registry::Properties};
 
 use self::actuator::BoardswarmActuator;
 use self::console::BoardswarmConsole;
 use self::device::BoardswarmDevice;
+use self::keyboard::BoardswarmKeyboard;
+use self::media::BoardswarmMedia;
+use self::mouse::BoardswarmMouse;
 use self::volume::BoardswarmVolume;
 
 mod actuator;
 mod console;
 mod device;
+mod keyboard;
+mod media;
+mod mouse;
 mod volume;
 
 pub const PROVIDER: &str = "boardswarm";
@@ -45,6 +54,9 @@ pub struct Provider {
     consoles: Mutex<HashMap<u64, ConsoleId>>,
     devices: Mutex<HashMap<u64, DeviceId>>,
     volumes: Mutex<HashMap<u64, VolumeId>>,
+    media: Mutex<HashMap<u64, MediaId>>,
+    keyboards: Mutex<HashMap<u64, KeyboardId>>,
+    mice: Mutex<HashMap<u64, MouseId>>,
     notifier: broadcast::Sender<()>,
 }
 
@@ -54,11 +66,17 @@ impl Provider {
         let consoles = Mutex::new(HashMap::new());
         let volumes = Mutex::new(HashMap::new());
         let devices = Mutex::new(HashMap::new());
+        let media = Mutex::new(HashMap::new());
+        let keyboards = Mutex::new(HashMap::new());
+        let mice = Mutex::new(HashMap::new());
         Self {
             actuators,
             consoles,
             volumes,
             devices,
+            media,
+            keyboards,
+            mice,
             notifier: broadcast::channel(1).0,
         }
     }
@@ -74,6 +92,18 @@ impl Provider {
 
     pub fn volume_id(&self, remote: u64) -> Option<VolumeId> {
         self.volumes.lock().unwrap().get(&remote).copied()
+    }
+
+    pub fn media_id(&self, remote: u64) -> Option<MediaId> {
+        self.media.lock().unwrap().get(&remote).copied()
+    }
+
+    pub fn keyboard_id(&self, remote: u64) -> Option<KeyboardId> {
+        self.keyboards.lock().unwrap().get(&remote).copied()
+    }
+
+    pub fn mouse_id(&self, remote: u64) -> Option<MouseId> {
+        self.mice.lock().unwrap().get(&remote).copied()
     }
 
     pub fn watch(&self) -> broadcast::Receiver<()> {
@@ -116,6 +146,18 @@ async fn add_item(
             }
             Err(e) => warn!("Failed to setup remote volume: {e}"),
         },
+        ItemType::Media => {
+            let local = server.register_media(properties, BoardswarmMedia::new(id, remote));
+            provider.media.lock().unwrap().insert(id, local);
+        }
+        ItemType::Keyboard => {
+            let local = server.register_keyboard(properties, BoardswarmKeyboard::new(id, remote));
+            provider.keyboards.lock().unwrap().insert(id, local);
+        }
+        ItemType::Mouse => {
+            let local = server.register_mouse(properties, BoardswarmMouse::new(id, remote));
+            provider.mice.lock().unwrap().insert(id, local);
+        }
     }
     let _ = provider.notifier.send(());
 }
@@ -146,6 +188,24 @@ fn remove_item(provider: &Provider, type_: ItemType, server: &Server, id: u64) {
                 server.unregister_volume(local)
             }
         }
+        ItemType::Media => {
+            let mut media = provider.media.lock().unwrap();
+            if let Some(local) = media.remove(&id) {
+                server.unregister_media(local)
+            }
+        }
+        ItemType::Keyboard => {
+            let mut keyboards = provider.keyboards.lock().unwrap();
+            if let Some(local) = keyboards.remove(&id) {
+                server.unregister_keyboard(local)
+            }
+        }
+        ItemType::Mouse => {
+            let mut mice = provider.mice.lock().unwrap();
+            if let Some(local) = mice.remove(&id) {
+                server.unregister_mouse(local)
+            }
+        }
     }
     let _ = provider.notifier.send(());
 }
@@ -157,7 +217,15 @@ async fn monitor_items(
     server: Server,
     instance: &str,
 ) {
-    let monitor = remote.monitor(type_).await.unwrap();
+    let monitor = match remote.monitor(type_).await {
+        Ok(m) => m,
+        Err(e) => {
+            // Older servers may not support all item types (e.g. Media).
+            // Treat this as "no items of this type" rather than a fatal error.
+            warn!("Remote {instance} does not support monitoring {type_:?}: {e}");
+            return;
+        }
+    };
     pin_mut!(monitor);
     while let Ok(Some(event)) = monitor.try_next().await {
         match event {
@@ -200,6 +268,21 @@ async fn monitor_items(
         ItemType::Volume => {
             for (_remote, local) in provider.volumes.lock().unwrap().drain() {
                 server.unregister_volume(local);
+            }
+        }
+        ItemType::Media => {
+            for (_remote, local) in provider.media.lock().unwrap().drain() {
+                server.unregister_media(local);
+            }
+        }
+        ItemType::Keyboard => {
+            for (_remote, local) in provider.keyboards.lock().unwrap().drain() {
+                server.unregister_keyboard(local);
+            }
+        }
+        ItemType::Mouse => {
+            for (_remote, local) in provider.mice.lock().unwrap().drain() {
+                server.unregister_mouse(local);
             }
         }
     }
@@ -249,12 +332,35 @@ pub fn start_provider(name: String, parameters: serde_yaml::Value, server: Serve
                 let volumes = monitor_items(
                     provider.clone(),
                     ItemType::Volume,
+                    remote.clone(),
+                    server.clone(),
+                    &name,
+                );
+                let media = monitor_items(
+                    provider.clone(),
+                    ItemType::Media,
+                    remote.clone(),
+                    server.clone(),
+                    &name,
+                );
+                let keyboards = monitor_items(
+                    provider.clone(),
+                    ItemType::Keyboard,
+                    remote.clone(),
+                    server.clone(),
+                    &name,
+                );
+                let mice = monitor_items(
+                    provider.clone(),
+                    ItemType::Mouse,
                     remote,
                     server.clone(),
                     &name,
                 );
 
-                join!(consoles, actuators, devices, volumes);
+                join!(
+                    consoles, actuators, devices, volumes, media, keyboards, mice
+                );
                 info!("Connection to {} failed", name);
             }
             // TODO move to exponential backoff
