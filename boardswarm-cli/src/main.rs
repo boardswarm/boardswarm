@@ -9,14 +9,14 @@ use std::{
 use anyhow::{Context, anyhow, bail};
 use async_compression::futures::bufread::GzipDecoder;
 use bmap_parser::Bmap;
+#[cfg(feature = "gstreamer")]
+use boardswarm_client::client::MediaSession;
 use boardswarm_client::{
     client::{Boardswarm, BoardswarmBuilder, VolumeIoRW},
     config,
     device::{Device, DeviceMedia, DeviceVolume},
     oidc::{OidcClientBuilder, StdoutAuth},
 };
-#[cfg(feature = "gstreamer")]
-use boardswarm_client::client::MediaSession;
 use boardswarm_protocol::ItemType;
 use bytes::{Bytes, BytesMut};
 use clap::{Args, Parser, Subcommand, ValueEnum, builder::PossibleValue};
@@ -38,11 +38,11 @@ use tracing::{debug, info};
 use ui::TerminalSizeSetting;
 use utils::BatchWriter;
 
+#[cfg(feature = "gstreamer")]
+mod kvm;
 mod ui;
 mod ui_term;
 mod utils;
-#[cfg(feature = "gstreamer")]
-mod kvm;
 
 #[derive(Clone, Copy, Debug)]
 struct ItemTypes(pub ItemType);
@@ -610,7 +610,10 @@ struct DeviceKeyboardArgs {
 }
 
 impl DeviceKeyboardArgs {
-    async fn open(&self, device: &Device) -> anyhow::Result<boardswarm_client::device::DeviceKeyboard> {
+    async fn open(
+        &self,
+        device: &Device,
+    ) -> anyhow::Result<boardswarm_client::device::DeviceKeyboard> {
         let keyboard = device
             .keyboard_by_name(&self.keyboard)
             .ok_or_else(|| anyhow!("Keyboard item not found on device"))?;
@@ -636,7 +639,10 @@ struct DeviceMouseArgs {
 }
 
 impl DeviceMouseArgs {
-    async fn open(&self, device: &Device) -> anyhow::Result<boardswarm_client::device::DeviceMouse> {
+    async fn open(
+        &self,
+        device: &Device,
+    ) -> anyhow::Result<boardswarm_client::device::DeviceMouse> {
         let mouse = device
             .mouse_by_name(&self.mouse)
             .ok_or_else(|| anyhow!("Mouse item not found on device"))?;
@@ -1602,9 +1608,9 @@ async fn main() -> anyhow::Result<()> {
                 }
                 DeviceCommand::Kvm(args) => {
                     // Open media item
-                    let media_item = device
-                        .media_by_name(&args.media)
-                        .ok_or_else(|| anyhow!("Media item '{}' not found on device", args.media))?;
+                    let media_item = device.media_by_name(&args.media).ok_or_else(|| {
+                        anyhow!("Media item '{}' not found on device", args.media)
+                    })?;
                     if !media_item.available() {
                         if args.wait {
                             println!("Waiting for media item '{}'…", args.media);
@@ -1619,11 +1625,9 @@ async fn main() -> anyhow::Result<()> {
                         None
                     } else {
                         let kb = match &args.keyboard {
-                            Some(name) => Some(
-                                device
-                                    .keyboard_by_name(name)
-                                    .ok_or_else(|| anyhow!("Keyboard item '{name}' not found on device"))?,
-                            ),
+                            Some(name) => Some(device.keyboard_by_name(name).ok_or_else(|| {
+                                anyhow!("Keyboard item '{name}' not found on device")
+                            })?),
                             None => device.keyboards().into_iter().next(),
                         };
                         if let Some(kb) = kb {
@@ -1646,11 +1650,9 @@ async fn main() -> anyhow::Result<()> {
                         None
                     } else {
                         let ms = match &args.mouse {
-                            Some(name) => Some(
-                                device
-                                    .mouse_by_name(name)
-                                    .ok_or_else(|| anyhow!("Mouse item '{name}' not found on device"))?,
-                            ),
+                            Some(name) => Some(device.mouse_by_name(name).ok_or_else(|| {
+                                anyhow!("Mouse item '{name}' not found on device")
+                            })?),
                             None => device.mice().into_iter().next(),
                         };
                         if let Some(ms) = ms {
@@ -1676,7 +1678,9 @@ async fn main() -> anyhow::Result<()> {
                     #[cfg(not(feature = "gstreamer"))]
                     {
                         let _ = (keyboard_session, mouse_session, media_item);
-                        bail!("GStreamer support not compiled in. Rebuild with --features gstreamer");
+                        bail!(
+                            "GStreamer support not compiled in. Rebuild with --features gstreamer"
+                        );
                     }
                 }
                 DeviceCommand::Screenshot(args) => {
@@ -1772,8 +1776,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Keyboard { keyboard, command } => {
-            let keyboard_id =
-                item_lookup(keyboard, ItemType::Keyboard, boardswarm.clone()).await?;
+            let keyboard_id = item_lookup(keyboard, ItemType::Keyboard, boardswarm.clone()).await?;
             match command {
                 KeyboardCommand::Properties => {
                     let items = boardswarm

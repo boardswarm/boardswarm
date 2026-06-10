@@ -9,10 +9,24 @@ use crate::components::media::MediaViewer;
 #[derive(Clone, Debug, PartialEq)]
 enum Page {
     Devices,
-    DeviceDetail { id: u64, name: String },
-    Console { id: u64, name: String },
-    Media { id: u64, name: String },
-    Kvm { media_id: u64, keyboard_id: Option<u64>, mouse_id: Option<u64>, name: String },
+    DeviceDetail {
+        id: u64,
+        name: String,
+    },
+    Console {
+        id: u64,
+        name: String,
+    },
+    Media {
+        id: u64,
+        name: String,
+    },
+    Kvm {
+        media_id: u64,
+        keyboard_id: Option<u64>,
+        mouse_id: Option<u64>,
+        name: String,
+    },
 }
 
 #[component]

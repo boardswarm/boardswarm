@@ -9,11 +9,12 @@ use std::{
 use boardswarm_protocol::{
     ActuatorModeRequest, ConsoleConfigureRequest, ConsoleInputRequest, ConsoleOutputRequest,
     DeviceModeRequest, DeviceRequest, Item, ItemPropertiesRequest, ItemType, ItemTypeRequest,
-    KeyboardRequest, MediaRequest, MouseRequest, SignalMessage, SignalMessageIceCandidate,
-    SignalMessageSdp, VolumeEraseRequest, VolumeInfoMsg, VolumeIoFlush, VolumeIoRead, VolumeIoReply,
-    VolumeIoRequest, VolumeIoShutdown, VolumeIoTarget, VolumeIoWrite, VolumeRequest, VolumeTarget,
-    boardswarm_client::BoardswarmClient, console_input_request, keyboard_request, media_request,
-    mouse_request, signal_message, volume_io_reply, volume_io_request,
+    KeyboardRequest, MediaRequest, MediaScreenshotRequest, MouseRequest, SignalMessage,
+    SignalMessageIceCandidate, SignalMessageSdp, VolumeEraseRequest, VolumeInfoMsg, VolumeIoFlush,
+    VolumeIoRead, VolumeIoReply, VolumeIoRequest, VolumeIoShutdown, VolumeIoTarget, VolumeIoWrite,
+    VolumeRequest, VolumeTarget, boardswarm_client::BoardswarmClient, console_input_request,
+    keyboard_request, media_request, mouse_request, signal_message, volume_io_reply,
+    volume_io_request,
 };
 use bytes::Bytes;
 use futures::{FutureExt, Stream, StreamExt, future::BoxFuture, stream};
@@ -474,9 +475,7 @@ impl MediaSession {
         self.tx
             .send(MediaRequest {
                 item_or_signal: Some(media_request::ItemOrSignal::Signal(SignalMessage {
-                    sdp_message: Some(signal_message::SdpMessage::Answer(SignalMessageSdp {
-                        sdp,
-                    })),
+                    sdp_message: Some(signal_message::SdpMessage::Answer(SignalMessageSdp { sdp })),
                 })),
             })
             .await
@@ -491,12 +490,10 @@ impl MediaSession {
         self.tx
             .send(MediaRequest {
                 item_or_signal: Some(media_request::ItemOrSignal::Signal(SignalMessage {
-                    sdp_message: Some(signal_message::SdpMessage::Ice(
-                        SignalMessageIceCandidate {
-                            candidate,
-                            mline_index,
-                        },
-                    )),
+                    sdp_message: Some(signal_message::SdpMessage::Ice(SignalMessageIceCandidate {
+                        candidate,
+                        mline_index,
+                    })),
                 })),
             })
             .await

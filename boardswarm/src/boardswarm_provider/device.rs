@@ -8,7 +8,10 @@ use futures::{Stream, StreamExt, pin_mut};
 use tokio::sync::broadcast;
 use tracing::{trace, warn};
 
-use crate::{ConsoleId, DeviceMedia, DeviceMonitor, DeviceSetModeError, KeyboardId, MediaId, MouseId, VolumeId};
+use crate::{
+    ConsoleId, DeviceMedia, DeviceMonitor, DeviceSetModeError, KeyboardId, MediaId, MouseId,
+    VolumeId,
+};
 
 use super::Provider;
 

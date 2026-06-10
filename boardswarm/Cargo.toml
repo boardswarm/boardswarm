@@ -57,4 +57,5 @@ gstreamer-sdp = { version = "0.23", optional = true }
 usb-gadget = { version = "1.2.0", features = ["tokio"] }
 
 [features]
+default = ["gstreamer"]
 gstreamer = ["dep:gstreamer", "dep:gstreamer-webrtc", "dep:gstreamer-sdp"]

@@ -151,8 +151,7 @@ async fn add_item(
             provider.media.lock().unwrap().insert(id, local);
         }
         ItemType::Keyboard => {
-            let local =
-                server.register_keyboard(properties, BoardswarmKeyboard::new(id, remote));
+            let local = server.register_keyboard(properties, BoardswarmKeyboard::new(id, remote));
             provider.keyboards.lock().unwrap().insert(id, local);
         }
         ItemType::Mouse => {
@@ -359,7 +358,9 @@ pub fn start_provider(name: String, parameters: serde_yaml::Value, server: Serve
                     &name,
                 );
 
-                join!(consoles, actuators, devices, volumes, media, keyboards, mice);
+                join!(
+                    consoles, actuators, devices, volumes, media, keyboards, mice
+                );
                 info!("Connection to {} failed", name);
             }
             // TODO move to exponential backoff

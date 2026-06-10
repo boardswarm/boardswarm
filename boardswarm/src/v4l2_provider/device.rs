@@ -438,11 +438,18 @@ impl V4l2DeviceInner {
         let _ = viewer.tee_src_pad.unlink(&viewer.queue_sink_pad);
         self.tee.release_request_pad(&viewer.tee_src_pad);
 
-        let branch_elements: Vec<gstreamer::Element> =
-            ["queue", "convert", "enc", "parse", "pay", "capsfilter", "webrtc"]
-                .iter()
-                .filter_map(|prefix| self.pipeline.by_name(&format!("{prefix}-{id}")))
-                .collect();
+        let branch_elements: Vec<gstreamer::Element> = [
+            "queue",
+            "convert",
+            "enc",
+            "parse",
+            "pay",
+            "capsfilter",
+            "webrtc",
+        ]
+        .iter()
+        .filter_map(|prefix| self.pipeline.by_name(&format!("{prefix}-{id}")))
+        .collect();
         for el in &branch_elements {
             el.set_state(gstreamer::State::Null).unwrap();
             self.pipeline.remove(el).unwrap();

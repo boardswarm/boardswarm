@@ -6,7 +6,9 @@ use futures::{Stream, StreamExt, pin_mut};
 use tokio::{select, sync::broadcast};
 use tracing::info;
 
-use crate::client::{Boardswarm, KeyboardSession, MediaSession, MouseSession, VolumeIo, VolumeIoRW};
+use crate::client::{
+    Boardswarm, KeyboardSession, MediaSession, MouseSession, Screenshot, VolumeIo, VolumeIoRW,
+};
 
 #[derive(Debug, Clone)]
 pub struct DeviceBuilder {

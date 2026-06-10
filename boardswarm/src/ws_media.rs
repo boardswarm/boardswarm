@@ -31,7 +31,8 @@ async fn handle_socket(server: Server, socket: WebSocket) -> anyhow::Result<()> 
 
     let media_id = match first_message {
         Message::Binary(data) => {
-            let req = MediaRequest::decode(data).context("failed to decode initial MediaRequest")?;
+            let req =
+                MediaRequest::decode(data).context("failed to decode initial MediaRequest")?;
             match req.item_or_signal {
                 Some(media_request::ItemOrSignal::Item(id)) => id,
                 _ => bail!("first websocket frame must select a media item"),
@@ -51,14 +52,12 @@ async fn handle_socket(server: Server, socket: WebSocket) -> anyhow::Result<()> 
         while let Some(message) = receiver.next().await {
             match message.context("failed to read websocket frame")? {
                 Message::Binary(data) => {
-                    let req = MediaRequest::decode(data)
-                        .context("failed to decode MediaRequest")?;
+                    let req =
+                        MediaRequest::decode(data).context("failed to decode MediaRequest")?;
                     match req.item_or_signal {
                         Some(media_request::ItemOrSignal::Signal(signal)) => {
                             match signal.sdp_message {
-                                Some(signal_message::SdpMessage::Offer(sdp)) => {
-                                    rx.offer(&sdp.sdp)
-                                }
+                                Some(signal_message::SdpMessage::Offer(sdp)) => rx.offer(&sdp.sdp),
                                 Some(signal_message::SdpMessage::Answer(sdp)) => {
                                     rx.answer(&sdp.sdp)
                                 }

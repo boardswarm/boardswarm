@@ -50,8 +50,7 @@ async fn handle_socket(server: Server, socket: WebSocket) -> anyhow::Result<()> 
     while let Some(message) = receiver.next().await {
         match message.context("failed to read websocket frame")? {
             Message::Binary(data) => {
-                let req =
-                    MouseRequest::decode(data).context("failed to decode MouseRequest")?;
+                let req = MouseRequest::decode(data).context("failed to decode MouseRequest")?;
                 match req.item_or_signal {
                     Some(mouse_request::ItemOrSignal::Input(input)) => {
                         match MouseInput::try_from(input) {

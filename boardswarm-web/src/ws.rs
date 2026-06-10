@@ -2,9 +2,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use boardswarm_protocol::{
-    ConsoleInputRequest, ConsoleOutput, KeyboardRequest, KeyboardState, MediaRequest,
-    MouseRequest, SignalMessage, SignalMessageIceCandidate, SignalMessageSdp,
-    console_input_request, keyboard_request, media_request, mouse_request, signal_message,
+    ConsoleInputRequest, ConsoleOutput, KeyboardRequest, KeyboardState, MediaRequest, MouseRequest,
+    SignalMessage, SignalMessageIceCandidate, SignalMessageSdp, console_input_request,
+    keyboard_request, media_request, mouse_request, signal_message,
 };
 use prost::Message;
 use wasm_bindgen::JsCast;
@@ -197,9 +197,7 @@ impl MediaWs {
     pub fn send_answer(&self, sdp: String) -> Result<(), String> {
         let msg = MediaRequest {
             item_or_signal: Some(media_request::ItemOrSignal::Signal(SignalMessage {
-                sdp_message: Some(signal_message::SdpMessage::Answer(SignalMessageSdp {
-                    sdp,
-                })),
+                sdp_message: Some(signal_message::SdpMessage::Answer(SignalMessageSdp { sdp })),
             })),
         };
         self.ws
@@ -211,12 +209,10 @@ impl MediaWs {
     pub fn send_ice(&self, candidate: String, mline_index: u32) -> Result<(), String> {
         let msg = MediaRequest {
             item_or_signal: Some(media_request::ItemOrSignal::Signal(SignalMessage {
-                sdp_message: Some(signal_message::SdpMessage::Ice(
-                    SignalMessageIceCandidate {
-                        candidate,
-                        mline_index,
-                    },
-                )),
+                sdp_message: Some(signal_message::SdpMessage::Ice(SignalMessageIceCandidate {
+                    candidate,
+                    mline_index,
+                })),
             })),
         };
         self.ws
