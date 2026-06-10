@@ -1,3 +1,7 @@
+use boardswarm_protocol::{MediaScreenshotReply, MediaScreenshotRequest};
+use gstreamer::{PadProbeReturn, PadProbeType};
+use tokio::sync::oneshot;
+
 use crate::{Media, MediaError, MediaSignalMsg, MediaSignallingRx};
 
 #[cfg(feature = "gstreamer")]
@@ -119,11 +123,12 @@ fn device_supports_mjpeg(device: &str) -> bool {
 }
 
 #[cfg(feature = "gstreamer")]
-fn build_jpeg_decoder_bin(decoder_factory: &str) -> gstreamer::Bin {
+fn build_jpeg_decoder_bin(decoder_factory: &str) -> (gstreamer::Bin, gstreamer::Pad) {
     let bin = gstreamer::Bin::new();
     let parse = gstreamer::ElementFactory::make("jpegparse")
         .build()
         .expect("jpegparse");
+    let jpeg_pad = parse.static_pad("src").unwrap();
     let decode = gstreamer::ElementFactory::make(decoder_factory)
         .build()
         .unwrap_or_else(|_| panic!("Failed to create JPEG decoder '{decoder_factory}'"));
@@ -135,7 +140,7 @@ fn build_jpeg_decoder_bin(decoder_factory: &str) -> gstreamer::Bin {
     let src_pad = decode.static_pad("src").unwrap();
     bin.add_pad(&gstreamer::GhostPad::with_target(&src_pad).unwrap())
         .unwrap();
-    bin
+    (bin, jpeg_pad)
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +162,7 @@ struct ViewerState {
 struct V4l2DeviceInner {
     pipeline: gstreamer::Pipeline,
     tee: gstreamer::Element,
+    jpeg_src_pad: Option<gstreamer::Pad>,
     encoder_factory: String,
     next_id: ViewerId,
     viewers: HashMap<ViewerId, ViewerState>,
@@ -183,7 +189,7 @@ impl V4l2DeviceInner {
 
         let pipeline = gstreamer::Pipeline::new();
 
-        let tee = if use_mjpeg {
+        let (tee, jpeg_src_pad) = if use_mjpeg {
             let src = gstreamer::ElementFactory::make("v4l2src")
                 .property("device", device_path)
                 .build()
@@ -195,7 +201,7 @@ impl V4l2DeviceInner {
                 .build()
                 .expect("capsfilter (jpeg)");
             let jpeg_decoder_factory = select_jpeg_decoder();
-            let decoder_bin = build_jpeg_decoder_bin(&jpeg_decoder_factory);
+            let (decoder_bin, jpeg_src_pad) = build_jpeg_decoder_bin(&jpeg_decoder_factory);
             let videoconvert = gstreamer::ElementFactory::make("videoconvert")
                 .build()
                 .expect("videoconvert");
@@ -220,7 +226,7 @@ impl V4l2DeviceInner {
                 &tee,
             ])
             .expect("link MJPEG pipeline elements");
-            tee
+            (tee, Some(jpeg_src_pad))
         } else {
             // Raw video path — let v4l2src negotiate its preferred format freely
             let src = gstreamer::ElementFactory::make("v4l2src")
@@ -239,7 +245,7 @@ impl V4l2DeviceInner {
                 .expect("add raw pipeline elements");
             gstreamer::Element::link_many([&src, &videoconvert, &tee])
                 .expect("link raw pipeline elements");
-            tee
+            (tee, None)
         };
 
         // Spawn a thread to monitor the pipeline bus for errors / EOS
@@ -275,6 +281,7 @@ impl V4l2DeviceInner {
         V4l2DeviceInner {
             pipeline,
             tee,
+            jpeg_src_pad,
             encoder_factory,
             next_id: 0,
             viewers: HashMap::new(),
@@ -341,7 +348,13 @@ impl V4l2DeviceInner {
 
         self.pipeline
             .add_many([
-                &queue, &convert, &encoder, &h264parse, &pay, &capsfilter, &webrtcbin,
+                &queue,
+                &convert,
+                &encoder,
+                &h264parse,
+                &pay,
+                &capsfilter,
+                &webrtcbin,
             ])
             .unwrap();
         gstreamer::Element::link_many([&queue, &convert, &encoder, &h264parse, &pay, &capsfilter])
@@ -361,7 +374,13 @@ impl V4l2DeviceInner {
         tee_src_pad.link(&queue_sink_pad).expect("tee → queue");
 
         for el in [
-            &queue, &convert, &encoder, &h264parse, &pay, &capsfilter, &webrtcbin,
+            &queue,
+            &convert,
+            &encoder,
+            &h264parse,
+            &pay,
+            &capsfilter,
+            &webrtcbin,
         ] {
             el.sync_state_with_parent().unwrap();
         }
@@ -405,7 +424,10 @@ impl V4l2DeviceInner {
                 queue_sink_pad,
             },
         );
-        info!("V4L2: added viewer {id} (encoder: {})", self.encoder_factory);
+        info!(
+            "V4L2: added viewer {id} (encoder: {})",
+            self.encoder_factory
+        );
         id
     }
 
@@ -563,6 +585,42 @@ impl Media for V4l2Device {
 
         Ok((signal_rx, Box::pin(viewer_stream)))
     }
+
+    // TODO handle non-jpeg sources
+    async fn screenshot(&self) -> Result<MediaScreenshotReply, MediaError> {
+        gstreamer::init().map_err(|e| MediaError::Internal(e.to_string()))?;
+
+        let pad = {
+            let mut lock = self.inner.lock().unwrap();
+            let inner = lock.get_or_insert_with(|| V4l2DeviceInner::build(&self.device_path));
+            inner.jpeg_src_pad.clone()
+        };
+        if let Some(pad) = pad {
+            let (tx, rx) = oneshot::channel();
+            let tx = Arc::new(Mutex::new(Some(tx)));
+
+            pad.add_probe(PadProbeType::BUFFER, move |_pad, info| {
+                if let Some(gstreamer::PadProbeData::Buffer(buf)) = &info.data
+                    && let Ok(map) = buf.map_readable()
+                    && let Some(tx) = tx.lock().unwrap().take()
+                {
+                    let _ = tx.send(bytes::Bytes::copy_from_slice(map.as_slice()));
+                }
+                PadProbeReturn::Remove
+            });
+
+            // TODO proper error handling
+            let data = rx
+                .await
+                .map_err(|_e| MediaError::Internal("Failed to grap screenshot".into()))?;
+            Ok(MediaScreenshotReply {
+                mime_type: String::from("image/jpeg"),
+                data,
+            })
+        } else {
+            Err(MediaError::NotSupported)
+        }
+    }
 }
 
 #[cfg(not(feature = "gstreamer"))]
@@ -577,6 +635,10 @@ impl Media for V4l2Device {
         ),
         MediaError,
     > {
+        Err(MediaError::NotSupported)
+    }
+
+    async fn screenshot(&self) -> Result<MediaScreenshotReply, MediaError> {
         Err(MediaError::NotSupported)
     }
 }

@@ -554,15 +554,17 @@ impl DeviceCommonVolumeArgs {
 }
 
 #[derive(Debug, Args)]
-struct DeviceMediaArgs {
+struct DeviceScreenshotArgs {
     /// Media item name on the device
     media: String,
     /// Wait for the media item to become available
     #[arg(short, long)]
     wait: bool,
+    /// Filename for the screenshot
+    file: PathBuf,
 }
 
-impl DeviceMediaArgs {
+impl DeviceScreenshotArgs {
     async fn open(&self, device: &Device) -> anyhow::Result<DeviceMedia> {
         let media = device
             .media_by_name(&self.media)
@@ -770,6 +772,8 @@ enum DeviceCommand {
     Tail(DeviceConsoleArgs),
     /// Stream video from a device media item and optionally control with keyboard/mouse
     Kvm(DeviceKvmArgs),
+    /// Media related commands
+    Screenshot(DeviceScreenshotArgs),
     /// Display device properties
     Properties,
     /// Interact with a device keyboard
@@ -1674,6 +1678,11 @@ async fn main() -> anyhow::Result<()> {
                         let _ = (keyboard_session, mouse_session, media_item);
                         bail!("GStreamer support not compiled in. Rebuild with --features gstreamer");
                     }
+                }
+                DeviceCommand::Screenshot(args) => {
+                    let media = args.open(&device).await?;
+                    let shot = media.media_screenshot().await?;
+                    tokio::fs::write(args.file, shot.data).await?;
                 }
                 DeviceCommand::Properties => {
                     let properties = boardswarm.properties(ItemType::Device, device.id()).await?;

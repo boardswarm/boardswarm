@@ -8,10 +8,10 @@ use boardswarm_protocol::signal_message::SdpMessage;
 use boardswarm_protocol::{
     ConsoleConfigureRequest, ConsoleInputRequest, ConsoleOutputRequest, ItemEvent, ItemList,
     ItemPropertiesMsg, ItemPropertiesRequest, ItemTypeRequest, KeyboardRequest, LoginInfoList,
-    MediaRequest, MouseRequest, Property, SignalMessage, SignalMessageIceCandidate,
-    SignalMessageSdp, VolumeEraseRequest, VolumeInfoMsg, VolumeIoTargetReply, VolumeRequest,
-    console_input_request, keyboard_request, media_request, mouse_request, volume_io_reply,
-    volume_io_request,
+    MediaRequest, MediaScreenshotReply, MediaScreenshotRequest, MouseRequest, Property,
+    SignalMessage, SignalMessageIceCandidate, SignalMessageSdp, VolumeEraseRequest, VolumeInfoMsg,
+    VolumeIoTargetReply, VolumeRequest, console_input_request, keyboard_request, media_request,
+    mouse_request, volume_io_reply, volume_io_request,
 };
 use bytes::Bytes;
 use clap::Parser;
@@ -316,6 +316,7 @@ pub trait Media: std::fmt::Debug + Send + Sync {
         ),
         MediaError,
     >;
+    async fn screenshot(&self) -> Result<MediaScreenshotReply, MediaError>;
 }
 
 /// Rust-side representation of a keyboard key event.
@@ -1496,6 +1497,19 @@ impl boardswarm_protocol::boardswarm_server::Boardswarm for Server {
 
         // Handle outgoing stream
         Ok(tonic::Response::new(replies.boxed()))
+    }
+
+    async fn media_screen_shot(
+        &self,
+        request: tonic::Request<MediaScreenshotRequest>,
+    ) -> Result<tonic::Response<MediaScreenshotReply>, tonic::Status> {
+        let request = request.into_inner();
+        let media = MediaId(request.media);
+        let media = self
+            .get_media(media)
+            .ok_or_else(|| tonic::Status::not_found("Media not found"))?;
+        let shot = media.screenshot().await?;
+        Ok(tonic::Response::new(shot))
     }
 
     type KeyboardIoStream = KeyboardStateStream;

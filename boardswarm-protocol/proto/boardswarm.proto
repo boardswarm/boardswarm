@@ -30,6 +30,8 @@ service Boardswarm {
   // Set a media stream, can be audio or video
   rpc MediaSetup(stream MediaRequest) returns (stream SignalMessage);
 
+  rpc MediaScreenShot(MediaScreenshotRequest) returns (MediaScreenshotReply);
+
   // Set up a stream to a keyboard
   rpc KeyboardIo(stream KeyboardRequest) returns (stream KeyboardState);
 
@@ -290,6 +292,16 @@ message SignalMessage {
     SignalMessageSdp answer = 2;
     SignalMessageIceCandidate ice = 3;
   }
+}
+
+message MediaScreenshotRequest {
+  uint64 media = 1;
+}
+
+message MediaScreenshotReply {
+  // Mime type e.g. image/jpeg or image/png
+  string mime_type = 1;
+  bytes data = 2;
 }
 
 message KeyboardRequest {

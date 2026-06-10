@@ -1,4 +1,5 @@
 use boardswarm_client::client::{Boardswarm, SignalMsg};
+use boardswarm_protocol::MediaScreenshotReply;
 use futures::StreamExt;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -125,5 +126,21 @@ impl Media for BoardswarmMedia {
         let rx = Box::new(BoardswarmMediaSignalRx { tx: inbound_tx });
         let stream = UnboundedReceiverStream::new(outbound_rx).boxed();
         Ok((rx, stream))
+    }
+
+    async fn screenshot(&self) -> Result<MediaScreenshotReply, MediaError> {
+        let mut remote = self.remote.clone();
+        let shot = remote
+            .media_screenshot(self.id)
+            .await
+            .map_err(|e| match e.code() {
+                tonic::Code::Unimplemented => MediaError::NotSupported,
+                tonic::Code::Internal => MediaError::Internal(e.message().to_owned()),
+                _ => MediaError::Internal(e.to_string()),
+            })?;
+        Ok(MediaScreenshotReply {
+            mime_type: shot.mime_type,
+            data: shot.data,
+        })
     }
 }

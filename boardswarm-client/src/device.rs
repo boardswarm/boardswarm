@@ -239,6 +239,13 @@ impl DeviceMedia {
             .ok_or_else(|| tonic::Status::unavailable("Media item currently not available"))?;
         self.device.client.clone().media_setup(id).await
     }
+
+    pub async fn media_screenshot(&self) -> Result<Screenshot, tonic::Status> {
+        let id = self
+            .get_id()
+            .ok_or_else(|| tonic::Status::unavailable("Media item currently not available"))?;
+        self.device.client.clone().media_screenshot(id).await
+    }
 }
 
 /// A named keyboard item associated with a device.

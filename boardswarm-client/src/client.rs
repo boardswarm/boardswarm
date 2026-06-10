@@ -117,6 +117,12 @@ pub struct LoginInfo {
 }
 
 #[derive(Clone, Debug)]
+pub struct Screenshot {
+    pub mime_type: String,
+    pub data: Bytes,
+}
+
+#[derive(Clone, Debug)]
 pub struct Boardswarm {
     client: BoardswarmClient<AuthenticatorService<tonic::transport::Channel>>,
 }
@@ -386,6 +392,18 @@ impl Boardswarm {
         Ok(MediaSession {
             tx,
             rx: response.into_inner(),
+        })
+    }
+
+    pub async fn media_screenshot(&mut self, media: u64) -> Result<Screenshot, tonic::Status> {
+        let request = MediaScreenshotRequest { media };
+        let shot = self.client.media_screen_shot(request).await?;
+
+        let shot = shot.into_inner();
+
+        Ok(Screenshot {
+            mime_type: shot.mime_type,
+            data: shot.data,
         })
     }
 
