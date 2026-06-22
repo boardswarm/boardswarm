@@ -23,7 +23,7 @@ tokio-util = { version = "0.7.4", features = ["compat"] }
 serde_json.workspace = true
 tracing = "0.1.41"
 indicatif = { version = "0.18.2", features = ["improved_unicode", "tokio"] }
-itertools = "0.14.0"
+itertools = "0.15.0"
 bmap-parser = "0.2.0"
 async-compression = { version = "0.4.5", features = ["futures-io", "gzip"] }
 rockfile = "0.1.0"
