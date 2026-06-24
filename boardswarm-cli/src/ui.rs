@@ -7,7 +7,6 @@ use ratatui::{
     Terminal as TuiTerminal,
     backend::CrosstermBackend,
     layout::{Rect, Size},
-    widgets::{Block, Borders},
 };
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -20,6 +19,7 @@ struct Terminal {
     parser: vt100::Parser,
     tui: TuiTerminal<CrosstermBackend<std::io::Stdout>>,
     size_setting: TerminalSizeSetting,
+    painted_cols: Vec<u16>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -92,6 +92,7 @@ impl Terminal {
             parser,
             tui,
             size_setting,
+            painted_cols: Vec::new(),
         };
         this.update().await;
         this
@@ -144,7 +145,7 @@ impl Terminal {
             .set_size(term_size.height, term_size.width);
 
         let screen = self.parser.screen();
-        let term = ui_term::UiTerm::new(screen);
+        let term = ui_term::UiTerm::new(screen, &mut self.painted_cols);
         self.tui
             .draw(|f| {
                 let area = f.area();
@@ -246,11 +247,10 @@ pub async fn run_ui(
 ) -> anyhow::Result<()> {
     let mut terminal = ratatui::init();
 
-    terminal.draw(|f| {
-        let area = f.area();
-        let block = Block::default().title("Block").borders(Borders::ALL);
-        f.render_widget(block, area);
-    })?;
+    // Start from a blank screen. The console widget only paints cells that have
+    // content and leaves trailing cells untouched, so anything left here would
+    // otherwise linger on the terminal.
+    terminal.clear()?;
 
     let stdin = tokio::io::stdin();
     let stdin_termios = nix::sys::termios::tcgetattr(&stdin).unwrap();
