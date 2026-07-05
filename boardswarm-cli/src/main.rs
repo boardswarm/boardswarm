@@ -1,6 +1,7 @@
 use std::{
     cmp::Ordering,
     convert::Infallible,
+    ffi::OsStr,
     io::SeekFrom,
     path::{Path, PathBuf},
     time::Duration,
@@ -17,7 +18,11 @@ use boardswarm_client::{
 };
 use boardswarm_protocol::ItemType;
 use bytes::{Bytes, BytesMut};
-use clap::{Args, Parser, Subcommand, ValueEnum, builder::PossibleValue};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum, builder::PossibleValue};
+use clap_complete::{
+    CompleteEnv,
+    engine::{ArgValueCompleter, CompletionCandidate},
+};
 use futures::{FutureExt, Stream, StreamExt, TryStreamExt, pin_mut};
 use http::Uri;
 use indicatif::ProgressBar;
@@ -468,6 +473,87 @@ fn parse_device(device: &str) -> Result<DeviceArg, Infallible> {
     }
 }
 
+/// Peek at a `-x <value>`, `--long <value>` or `--long=<value>` global option
+/// straight from argv.
+fn completion_global_arg(short: &str, long: &str) -> Option<String> {
+    let mut args = std::env::args();
+    while let Some(arg) = args.next() {
+        if arg == short || arg == long {
+            return args.next();
+        }
+        if let Some(value) = arg.strip_prefix(&format!("{long}=")) {
+            return Some(value.to_owned());
+        }
+    }
+    None
+}
+
+/// Resolve the config path with `-c/--config`.
+fn completion_config_path() -> Option<PathBuf> {
+    if let Some(path) = completion_global_arg("-c", "--config") {
+        return Some(PathBuf::from(path));
+    }
+    let mut c = dirs::config_dir()?;
+    c.push("boardswarm");
+    c.push("config.yaml");
+    Some(c)
+}
+
+/// Query the server for devices and turn the list into completion candidates.
+/// Any failure (no config, unreachable server, auth required) fails quietly.
+async fn list_device_candidates() -> Vec<CompletionCandidate> {
+    let Some(config_path) = completion_config_path() else {
+        return Vec::new();
+    };
+    let Ok(config) = config::Config::from_file(&config_path).await else {
+        return Vec::new();
+    };
+    let server = match completion_global_arg("-i", "--instance") {
+        Some(name) => config.find_server(&name),
+        None => config.default_server(),
+    };
+    let Some(server) = server else {
+        return Vec::new();
+    };
+    // Deliberately no login provider: completion must never prompt or write to
+    // stdout. If the cached credentials are missing or stale, `list` simply
+    // fails and returns nothing.
+    let Ok(mut client) = server.to_boardswarm_builder().connect().await else {
+        return Vec::new();
+    };
+    let Ok(items) = client.list(ItemType::Device).await else {
+        return Vec::new();
+    };
+    items
+        .into_iter()
+        .map(|item| {
+            CompletionCandidate::new(item.name).help(Some(format!("id {}", item.id).into()))
+        })
+        .collect()
+}
+
+/// Dynamic completer for a device argument: lists devices from the server at
+/// tab-completion time. Runs outside the async runtime with a short timeout
+/// such that tab completion never hangs on an unreachable server.
+fn complete_device(current: &OsStr) -> Vec<CompletionCandidate> {
+    let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    else {
+        return Vec::new();
+    };
+    let mut candidates = rt.block_on(async {
+        tokio::time::timeout(Duration::from_secs(2), list_device_candidates())
+            .await
+            .unwrap_or_default()
+    });
+    // The ArgValueCompleter path doesn't prefix-filter for us, so keep only the
+    // candidates matching what the user has typed so far.
+    let prefix = current.to_string_lossy();
+    candidates.retain(|c| c.get_value().to_string_lossy().starts_with(prefix.as_ref()));
+    candidates
+}
+
 #[derive(Clone, Debug, Args)]
 struct DeviceConsoleArgs {
     /// Console to open instead of the default
@@ -737,7 +823,7 @@ enum Command {
     },
     /// Open the UI for a given device
     Ui {
-        #[arg(value_parser = parse_device)]
+        #[arg(value_parser = parse_device, add = ArgValueCompleter::new(complete_device))]
         /// The device to use
         device: DeviceArg,
         #[command(flatten)]
@@ -1021,12 +1107,25 @@ async fn print_device(
     Ok(())
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     // Temporarily set the default rustls crypto provider to aws-lc-rs until
     // reqwest allows this by default via a feature
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
+    // Handle shell completion requests before starting the async runtime: when
+    // the completion env var is set this resolves candidates (including live
+    // device names, see `complete_device`) and exits. Running it outside the
+    // runtime lets `complete_device` spin up its own runtime to query the
+    // server.
+    CompleteEnv::with_factory(Opts::command).complete();
+
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(async_main())
+}
+
+async fn async_main() -> anyhow::Result<()> {
     let opt = Opts::parse();
     if !matches!(opt.command, Command::Ui { .. }) {
         tracing_subscriber::fmt::init();
