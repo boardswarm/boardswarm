@@ -187,7 +187,11 @@ impl Device {
             match change {
                 registry::RegistryChange::Added { id, item } => add_item_with(items, id, item, f),
                 registry::RegistryChange::Removed(id) => {
-                    items.fold(false, |changed, c| c.unset_if_matches(id) || changed)
+                    let mut changed = false;
+                    for c in items {
+                        changed |= c.unset_if_matches(id);
+                    }
+                    changed
                 }
             }
         }

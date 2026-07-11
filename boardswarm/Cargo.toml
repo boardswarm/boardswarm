@@ -20,7 +20,7 @@ pdudaemon-client = { version = "0.1.2", default-features=false }
 boardswarm-protocol = { version = "0.0.1", path = "../boardswarm-protocol" }
 serde = { workspace = true }
 serde_yaml = "0.9.25"
-thiserror = "2.0.7"
+thiserror = "2.0.17"
 tokio.workspace = true
 tokio-serial = "5.4.4"
 tokio-udev = "0.10"
