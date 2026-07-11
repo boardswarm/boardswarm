@@ -24,7 +24,9 @@ serde_json.workspace = true
 tracing = "0.1.41"
 indicatif = { version = "0.18.2", features = ["improved_unicode", "tokio"] }
 itertools = "0.14.0"
-bmap-parser = "0.2.0"
+# Pending release with quick-xml >= 0.41.0 (RUSTSEC-2026-0194, RUSTSEC-2026-0195);
+# see https://github.com/collabora/bmap-rs/pull/125
+bmap-parser = { git = "https://github.com/collabora/bmap-rs", branch = "dependabot/cargo/quick-xml-0.41.0" }
 async-compression = { version = "0.4.5", features = ["futures-io", "gzip"] }
 rockfile = "0.1.0"
 http.workspace = true
