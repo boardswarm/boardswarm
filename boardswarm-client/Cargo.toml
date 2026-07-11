@@ -17,7 +17,7 @@ boardswarm-protocol = { version = "0.0.1", path = "../boardswarm-protocol" }
 tokio.workspace = true
 tonic = { version = "0.14", features = ["tls-native-roots", "tls-aws-lc"] }
 tracing = "0.1.41"
-thiserror = "2.0.7"
+thiserror = "2.0.17"
 tower = "0.5.2"
 http.workspace = true
 serde = { workspace = true }
