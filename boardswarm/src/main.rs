@@ -1069,6 +1069,7 @@ async fn setup_auth_layer(
 }
 
 #[derive(Debug, clap::Parser)]
+#[command(version = env!("BOARDSWARM_VERSION"))]
 struct Opts {
     #[clap(short, long)]
     #[arg(value_parser = parse_listen_address)]

@@ -41,7 +41,11 @@ jobs:
             ${{matrix.architecture.packages}} ""
       - run: rustup target add ${{matrix.architecture.rust}}
       - env: ${{matrix.architecture.env}}
-        run: cargo build --release --target ${{matrix.architecture.rust}}
+        shell: bash
+        run: |
+          crate_version=$(grep -m1 '^version' boardswarm/Cargo.toml | cut -d'"' -f2)
+          export BOARDSWARM_VERSION="${crate_version} (${GITHUB_SHA:0:7})"
+          cargo build --release --target ${{matrix.architecture.rust}}
       - name: Prepare tarball
         run: |
           mkdir -v ${OUTDIR}

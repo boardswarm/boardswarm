@@ -914,6 +914,7 @@ async fn run_auth_modify(
 }
 
 #[derive(clap::Parser)]
+#[command(version = env!("BOARDSWARM_VERSION"))]
 struct Opts {
     #[clap(short, long)]
     config: Option<PathBuf>,
