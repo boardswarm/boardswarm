@@ -1,6 +1,5 @@
 ## stage 1: builder
 FROM rust:slim-trixie AS builder
-ARG BINARY
 ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && \
@@ -19,7 +18,6 @@ RUN cargo build \
 
 ## stage 2: runner
 FROM debian:trixie-slim
-ARG BINARY
 ARG DEBIAN_FRONTEND=noninteractive
 ENV RUST_LOG=info
 
