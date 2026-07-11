@@ -1,5 +1,6 @@
 ## stage 1: builder
 FROM rust:slim-trixie AS builder
+ARG BOARDSWARM_VERSION
 ARG BINARY
 ARG DEBIAN_FRONTEND=noninteractive
 
